@@ -1,0 +1,177 @@
+{% extends "base.html" %}
+{% block title %}Surgeon Call Statistics{% endblock %}
+{% block head %}
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.7.1/chart.min.css" integrity="sha512-/IUus8nlnTp2Rgh1F6PGEY8IhkIj+sD7vjJnFmjOoDaNeagKBItlEVcUB4fFYo0EpwN/mNKRZP5eL55N8PRvZA==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.7.1/chart.min.js" integrity="sha512-/IOU2pcehWmqGa2nhPnMo+U4HBnMb5cl61IY8OrVj6IblHKR5/s8v9fcZGIq5geNz6c4uUKgRu+4sS8M52f2WA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <style>
+    /* Table styling with group-specific shading */
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      margin-top: 20px;
+    }
+    th, td {
+      border: 1px solid #ccc;
+      padding: 8px;
+      text-align: center;
+    }
+    th {
+      background-color: #f2f2f2;
+    }
+    /* Define background colors per group rank */
+    .group-1 { background-color: #c6f5d6; } /* light green */
+    .group-2 { background-color: #d6eaf8; } /* light blue */
+    .group-3 { background-color: #f9e79f; } /* light yellow */
+    .group-4 { background-color: #fadbd8; } /* light orange/pink */
+    .group-5 { background-color: #f5b7b1; } /* light red/pink */
+  </style>
+{% endblock %}
+{% block content %}
+  <h1 style="text-align: center;">Surgeon Call Statistics</h1>
+  
+  <!-- Date Range Selection Form -->
+  <form method="get" action="{{ url_for('stats') }}" style="text-align: center; margin-bottom: 20px;">
+    <div>
+      <label for="start_year">Start Year:</label>
+      <select name="start_year" id="start_year">
+        {% for y in range(2020, 2031) %}
+          <option value="{{ y }}" {% if y == start_year %}selected{% endif %}>{{ y }}</option>
+        {% endfor %}
+      </select>
+      <label for="start_month">Start Month:</label>
+      <select name="start_month" id="start_month">
+        {% for m in range(1, 13) %}
+          <option value="{{ m }}" {% if m == start_month %}selected{% endif %}>{{ m }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <br>
+    <div>
+      <label for="end_year">End Year:</label>
+      <select name="end_year" id="end_year">
+        {% for y in range(2020, 2031) %}
+          <option value="{{ y }}" {% if y == end_year %}selected{% endif %}>{{ y }}</option>
+        {% endfor %}
+      </select>
+      <label for="end_month">End Month:</label>
+      <select name="end_month" id="end_month">
+        {% for m in range(1, 13) %}
+          <option value="{{ m }}" {% if m == end_month %}selected{% endif %}>{{ m }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <br>
+    <button type="submit">Load Statistics</button>
+  </form>
+  
+  <!-- Bar Chart -->
+  <div style="max-width: 900px; margin: auto;">
+    <canvas id="statsChart"></canvas>
+  </div>
+  
+  <script>
+    // Prepare data for the chart based on the 'stats' variable passed from Flask.
+    var stats = {{ stats|tojson }};
+    // Create arrays for labels, total_calls, and colors (based on min_level_rank).
+    var labels = [];
+    var totalCalls = [];
+    var colors = [];
+    
+    // Define a mapping from min_level_rank to color.
+    var rankColors = {
+      1: 'rgba(76, 175, 80, 0.7)',    // green for group 1
+      2: 'rgba(33, 150, 243, 0.7)',   // blue for group 2
+      3: 'rgba(255, 235, 59, 0.7)',   // yellow for group 3
+      4: 'rgba(255, 152, 0, 0.7)',    // orange for group 4
+      5: 'rgba(244, 67, 54, 0.7)'     // red for group 5
+    };
+    
+    stats.forEach(function(item) {
+      labels.push(item.surgeon);
+      totalCalls.push(item.total_calls);
+      colors.push(rankColors[item.min_level_rank] || 'rgba(0,0,0,0.7)');
+    });
+    
+    // Draw the bar chart using Chart.js.
+    var ctx = document.getElementById('statsChart').getContext('2d');
+    var statsChart = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: labels,
+        datasets: [{
+          label: 'Total Calls',
+          data: totalCalls,
+          backgroundColor: colors,
+          borderColor: colors.map(function(c) { return c.replace('0.7', '1'); }),
+          borderWidth: 1
+        }]
+      },
+      options: {
+        scales: {
+          y: {
+            beginAtZero: true,
+            title: { display: true, text: 'Number of Calls' }
+          }
+        },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: function(context) {
+                return context.parsed.y;
+              }
+            }
+          }
+        }
+      }
+    });
+  </script>
+  
+  <!-- Statistics Table -->
+  <table>
+    <thead>
+      <tr>
+        <th>Surgeon</th>
+        <th>Highest Assigned Call Level</th>
+        <th>Total Calls</th>
+        <th>Weekend Calls</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for stat in stats %}
+      {% set group_class = "" %}
+      {% if stat.min_level_rank == 1 %}
+        {% set group_class = "group-1" %}
+      {% elif stat.min_level_rank == 2 %}
+        {% set group_class = "group-2" %}
+      {% elif stat.min_level_rank == 3 %}
+        {% set group_class = "group-3" %}
+      {% elif stat.min_level_rank == 4 %}
+        {% set group_class = "group-4" %}
+      {% elif stat.min_level_rank == 5 %}
+        {% set group_class = "group-5" %}
+      {% endif %}
+      <tr class="{{ group_class }}">
+        <td>{{ stat.surgeon }}</td>
+        <td>
+          {% if stat.min_level_rank == 1 %}
+            1A / 1B
+          {% elif stat.min_level_rank == 2 %}
+            2A
+          {% elif stat.min_level_rank == 3 %}
+            2B
+          {% elif stat.min_level_rank == 4 %}
+            3
+          {% elif stat.min_level_rank == 5 %}
+            4
+          {% else %}
+            Unknown
+          {% endif %}
+        </td>
+        <td>{{ stat.total_calls }}</td>
+        <td>{{ stat.weekend_calls }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% endblock %}

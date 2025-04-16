@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}{{ action }} Surgeon{% endblock %}
+{% block content %}
+  <h1 style="text-align: center;">{{ action }} Surgeon</h1>
+  <form method="post" action="" style="text-align: center; margin-top:20px;">
+    <div>
+      <label for="name">Name:</label>
+      <input type="text" name="name" id="name" value="{{ surgeon.name if surgeon.name else '' }}" required>
+    </div>
+    <br>
+    <div>
+      <label>Select Call Levels:</label>
+      <br>
+      {% set levels = ['1A','1B','2A','2B','3','4'] %}
+      {% for level in levels %}
+        <input type="checkbox" name="call_levels" value="{{ level }}"
+          {% if surgeon.call_levels and level in surgeon.call_levels %}checked{% endif %}>
+        {{ level }}
+      {% endfor %}
+    </div>
+    <br>
+    <button type="submit">{{ action }} Surgeon</button>
+  </form>
+{% endblock %}

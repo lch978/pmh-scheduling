@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Global Configuration{% endblock %}
+{% block content %}
+  <h1 style="text-align: center;">Update Global Constraint Weights</h1>
+  <form method="post" action="{{ url_for('global_config_page') }}" style="max-width: 600px; margin: auto; text-align: center;">
+    <div style="margin: 15px 0;">
+      <label for="no_call_hard" style="margin-right: 10px;">No Call Requests:</label>
+      <select name="no_call_hard" id="no_call_hard" style="padding: 5px; font-size: 14px;">
+        <option value="1" {% if config.get('no_call_hard', '1') == '1' %}selected{% endif %}>Hard Constraint</option>
+        <option value="0" {% if config.get('no_call_hard', '1') == '0' %}selected{% endif %}>Soft Constraint</option>
+      </select>
+    </div>
+    <div style="margin: 15px 0;">
+      <label for="fairness_weight">Fairness Weight (diff_all multiplier):</label>
+      <br>
+      <input type="range" id="fairness_weight" name="fairness_weight" min="0" max="20000" value="{{ config.get('fairness_weight', '1000') }}" style="width: 80%;">
+      <span id="fw_display">{{ config.get('fairness_weight', '1000') }}</span>
+    </div>
+    <div style="margin: 15px 0;">
+      <label for="gamma_no_call">Gamma (No Call Penalty):</label>
+      <br>
+      <input type="range" id="gamma_no_call" name="gamma_no_call" min="0" max="500" value="{{ config.get('gamma_no_call', '10') }}" style="width: 80%;">
+      <span id="gnc_display">{{ config.get('gamma_no_call', '10') }}</span>
+    </div>
+    <div style="margin: 15px 0;">
+      <label for="gamma_unavail_prev">Gamma (Unavailable Prev-Day Penalty):</label>
+      <br>
+      <input type="range" id="gamma_unavail_prev" name="gamma_unavail_prev" min="0" max="500" value="{{ config.get('gamma_unavail_prev', '5') }}" style="width: 80%;">
+      <span id="gup_display">{{ config.get('gamma_unavail_prev', '5') }}</span>
+    </div>
+    <div style="margin: 15px 0;">
+      <label for="gamma_1B">Gamma (Level 1B Incentive):</label>
+      <br>
+      <!-- Increased max value from 100 to 500 here -->
+      <input type="range" id="gamma_1B" name="gamma_1B" min="0" max="500" value="{{ config.get('gamma_1B', '1') }}" style="width: 80%;">
+      <span id="g1b_display">{{ config.get('gamma_1B', '1') }}</span>
+    </div>
+    <br>
+    <button type="submit" style="padding: 10px 20px; font-size: 16px; cursor: pointer;">Update Global Configuration</button>
+  </form>
+
+  <script>
+    document.getElementById('fairness_weight').addEventListener('input', function() {
+      document.getElementById('fw_display').innerText = this.value;
+    });
+    document.getElementById('gamma_no_call').addEventListener('input', function() {
+      document.getElementById('gnc_display').innerText = this.value;
+    });
+    document.getElementById('gamma_unavail_prev').addEventListener('input', function() {
+      document.getElementById('gup_display').innerText = this.value;
+    });
+    document.getElementById('gamma_1B').addEventListener('input', function() {
+      document.getElementById('g1b_display').innerText = this.value;
+    });
+  </script>
+{% endblock %}

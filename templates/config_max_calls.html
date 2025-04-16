@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Configure Maximum Calls{% endblock %}
+{% block content %}
+  <h1 style="text-align: center;">Configure Maximum Calls per Level Group</h1>
+  <form method="post" action="{{ url_for('config_max_calls') }}" style="text-align: center; margin-top: 20px;">
+    <div>
+      <label for="group_1">Level Group 1 (1A &amp; 1B):</label>
+      <input type="number" name="group_1" id="group_1" value="{{ config['1'] }}" required>
+    </div>
+    <br>
+    <div>
+      <label for="group_2">Level Group 2 (2A &amp; 2B):</label>
+      <input type="number" name="group_2" id="group_2" value="{{ config['2'] }}" required>
+    </div>
+    <br>
+    <div>
+      <label for="group_3">Level Group 3 (3):</label>
+      <input type="number" name="group_3" id="group_3" value="{{ config['3'] }}" required>
+    </div>
+    <br>
+    <div>
+      <label for="group_4">Level Group 4 (4):</label>
+      <input type="number" name="group_4" id="group_4" value="{{ config['4'] }}" required>
+    </div>
+    <br>
+    <button type="submit">Save Configuration</button>
+  </form>
+{% endblock %}

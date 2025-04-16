@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Constraint Weights{% endblock %}
+{% block content %}
+  <h1 style="text-align: center;">Update Constraint Weights</h1>
+  <form method="post" action="{{ url_for('constraint_weights') }}" style="text-align: center; margin-top: 20px;">
+    <div>
+      <label for="fairness_weight">Fairness Weight (diff_all multiplier):</label>
+      <input type="range" id="fairness_weight" name="fairness_weight" min="0" max="5000" value="{{ config.fairness_weight or '1000' }}">
+      <span id="fw_display">{{ config.fairness_weight or '1000' }}</span>
+    </div>
+    <br>
+    <div>
+      <label for="gamma_no_call">Gamma (No Call Penalty):</label>
+      <input type="range" id="gamma_no_call" name="gamma_no_call" min="0" max="100" value="{{ config.gamma_no_call or '10' }}">
+      <span id="gnc_display">{{ config.gamma_no_call or '10' }}</span>
+    </div>
+    <br>
+    <div>
+      <label for="gamma_unavail_prev">Gamma (Unavailable Prev-Day Penalty):</label>
+      <input type="range" id="gamma_unavail_prev" name="gamma_unavail_prev" min="0" max="100" value="{{ config.gamma_unavail_prev or '5' }}">
+      <span id="gup_display">{{ config.gamma_unavail_prev or '5' }}</span>
+    </div>
+    <br>
+    <div>
+      <label for="gamma_1B">Gamma (Level 1B Incentive):</label>
+      <input type="range" id="gamma_1B" name="gamma_1B" min="0" max="100" value="{{ config.gamma_1B or '1' }}">
+      <span id="g1b_display">{{ config.gamma_1B or '1' }}</span>
+    </div>
+    <br>
+    <button type="submit" style="padding: 10px 20px; font-size: 14px;">Update Constraint Weights</button>
+  </form>
+  
+  <script>
+    document.getElementById('fairness_weight').addEventListener('input', function() {
+       document.getElementById('fw_display').innerText = this.value;
+    });
+    document.getElementById('gamma_no_call').addEventListener('input', function() {
+       document.getElementById('gnc_display').innerText = this.value;
+    });
+    document.getElementById('gamma_unavail_prev').addEventListener('input', function() {
+       document.getElementById('gup_display').innerText = this.value;
+    });
+    document.getElementById('gamma_1B').addEventListener('input', function() {
+       document.getElementById('g1b_display').innerText = this.value;
+    });
+  </script>
+{% endblock %}

@@ -1,0 +1,155 @@
+{% extends "base.html" %}
+{% block title %}Surgeon Availability & No Call Requests{% endblock %}
+{% block head %}
+  <!-- FullCalendar Global Bundle CSS and JS -->
+  <link href='https://cdn.jsdelivr.net/npm/fullcalendar@6.1.5/main.min.css' rel='stylesheet' />
+  <script src='https://cdn.jsdelivr.net/npm/fullcalendar@6.1.5/index.global.min.js'></script>
+  
+  <!-- jQuery and Moment.js -->
+  <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/moment@2.29.1/min/moment.min.js"></script>
+  
+  <style>
+    /* Ensure calendar container has a defined height */
+    .calendar-container {
+      max-width: 900px;
+      margin: 20px auto;
+    }
+    #calendar {
+      height: 500px;  /* Adjust as needed */
+      border: 1px solid #ccc;
+    }
+    /* Basic table styling for existing requests */
+    table {
+      border-collapse: collapse;
+      width: 90%;
+      margin: 20px auto;
+    }
+    th, td {
+      border: 1px solid #333;
+      padding: 8px;
+      text-align: center;
+    }
+    th {
+      background-color: #f2f2f2;
+    }
+  </style>
+{% endblock %}
+{% block content %}
+  <h1 style="text-align: center;">Surgeon Availability & No Call Requests</h1>
+  
+  <!-- Section 1: Form to view existing requests for a surgeon -->
+  <form method="get" action="{{ url_for('availability') }}" style="text-align: center; margin-bottom: 20px;">
+    <label for="surgeon_id_get">Select Surgeon to View Requests:</label>
+    <select name="surgeon_id" id="surgeon_id_get" required>
+      {% for surgeon in surgeons %}
+        <option value="{{ surgeon.id }}"
+          {% if selected_surgeon_id and surgeon.id == selected_surgeon_id %}selected{% endif %}>
+          {{ surgeon.name }}
+        </option>
+      {% endfor %}
+    </select>
+    <button type="submit">Show My Requests</button>
+  </form>
+  
+  <!-- Section 2: Form for submitting new availability/no call request -->
+  <form method="post" action="{{ url_for('availability') }}" id="availabilityForm" style="text-align: center; margin-bottom: 20px;">
+    <label for="surgeon_id_post">Apply for Surgeon:</label>
+    <select name="surgeon_id" id="surgeon_id_post" required>
+      {% for surgeon in surgeons %}
+        <option value="{{ surgeon.id }}"
+          {% if selected_surgeon_id and surgeon.id == selected_surgeon_id %}selected{% endif %}>
+          {{ surgeon.name }}
+        </option>
+      {% endfor %}
+    </select>
+    <br><br>
+    <label for="request_type">Request Type:</label>
+    <select name="request_type" id="request_type" required>
+      <option value="unavailable">Unavailable</option>
+      <option value="no_call">No Call Request</option>
+    </select>
+    <br><br>
+    <!-- The calendar for date-range selection -->
+    <div class="calendar-container">
+      <div id="calendar"></div>
+    </div>
+    <!-- Hidden fields to capture selected date range -->
+    <input type="hidden" id="start_date" name="start_date">
+    <input type="hidden" id="end_date" name="end_date">
+    <br>
+    <button type="submit">Submit Request</button>
+  </form>
+  
+  <!-- Section 3: Display existing grouped requests for the selected surgeon -->
+  {% if selected_surgeon_id %}
+    <h2 style="text-align: center;">Existing Requests for {{ surgeon_name }}</h2>
+    {% if events %}
+      <table>
+        <thead>
+          <tr>
+            <th>Request Type</th>
+            <th>Date Range</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for req_type, ranges in events.items() %}
+            {% for range in ranges %}
+              <tr>
+                <td>{{ req_type }}</td>
+                <td>
+                  {% if range.start == range.end %}
+                    {{ range.start }}
+                  {% else %}
+                    {{ range.start }} to {{ range.end }}
+                  {% endif %}
+                </td>
+                <td>
+                  <!-- Delete button for this group -->
+                  <form method="post" action="{{ url_for('delete_availability') }}" onsubmit="return confirm('Are you sure you want to delete this request group?');">
+                    <input type="hidden" name="surgeon_id" value="{{ selected_surgeon_id }}">
+                    <input type="hidden" name="request_type" value="{{ req_type }}">
+                    <input type="hidden" name="start_date" value="{{ range.start }}">
+                    <input type="hidden" name="end_date" value="{{ range.end }}">
+                    <button type="submit">Delete</button>
+                  </form>
+                </td>
+              </tr>
+            {% endfor %}
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p style="text-align: center;">No requests found for the selected surgeon.</p>
+    {% endif %}
+  {% else %}
+    <p style="text-align: center;">Please select a surgeon to view their requests.</p>
+  {% endif %}
+  
+  <script>
+    // Initialize FullCalendar with selectable enabled.
+    document.addEventListener('DOMContentLoaded', function() {
+      var calendarEl = document.getElementById('calendar');
+      var calendar = new FullCalendar.Calendar(calendarEl, {
+        initialView: 'dayGridMonth',
+        selectable: true,
+        selectMirror: true,
+        headerToolbar: {
+          left: 'prev,next today',
+          center: 'title',
+          right: ''
+        },
+        select: function(info) {
+          // FullCalendar returns an exclusive end date; adjust to be inclusive.
+          var start = moment(info.start).format('YYYY-MM-DD');
+          var end = moment(info.end).subtract(1, 'days').format('YYYY-MM-DD');
+          document.getElementById('start_date').value = start;
+          document.getElementById('end_date').value = end;
+          // Removed the alert pop-up.
+        }
+      });
+      calendar.render();
+    });
+  </script>
+{% endblock %}

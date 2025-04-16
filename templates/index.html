@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Surgeon Call Schedule for {{ year }}-{{ '%02d'|format(month) }}</title>
+  <style>
+    body { font-family: Arial, sans-serif; }
+    .container { width: 90%; margin: auto; }
+    table { border-collapse: collapse; width: 100%; margin: 20px 0; }
+    th, td { border: 1px solid #333; padding: 8px; text-align: center; }
+    th { background-color: #f2f2f2; }
+    h1, h2 { text-align: center; }
+    a { text-decoration: none; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Surgeon Call Schedule for {{ year }}-{{ '%02d'|format(month) }}</h1>
+    <p style="text-align: center;">Total Penalty Cost: {{ cost }}</p>
+    <table>
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>1A</th>
+          <th>2A</th>
+          <th>3</th>
+          <th>4</th>
+          <th>1B</th>
+          <th>2B</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for day, day_schedule in schedule %}
+        <tr>
+          <td>{{ day }}</td>
+          <td>{{ day_schedule["1A"] }}</td>
+          <td>{{ day_schedule["2A"] }}</td>
+          <td>{{ day_schedule["3"] }}</td>
+          <td>{{ day_schedule["4"] }}</td>
+          <td>{{ day_schedule["1B"] }}</td>
+          <td>{{ day_schedule["2B"] }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <h2>Call Counts Summary (Mandatory Slots)</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Surgeon</th>
+          <th>Total Calls</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for name, count in call_counts.items() %}
+        <tr>
+          <td>{{ name }}</td>
+          <td>{{ count }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <p style="text-align: center;"><a href="{{ url_for('list_surgeons') }}">Manage Surgeons</a></p>
+  </div>
+</body>
+</html>

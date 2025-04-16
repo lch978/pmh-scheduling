@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Surgeon Management{% endblock %}
+{% block content %}
+  <h1 style="text-align: center;">Surgeon Management</h1>
+
+  <!-- Sorting Controls -->
+  <div style="text-align: center; margin-bottom: 20px;">
+    <form method="get" action="{{ url_for('list_surgeons') }}" style="display:inline;">
+      <input type="hidden" name="sort" value="1">
+      <button type="submit">Sort Surgeons</button>
+    </form>
+  </div>
+
+  <!-- Bulk Update Form -->
+  <form method="post" action="{{ url_for('update_all_surgeons') }}">
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Name</th>
+          <th>Call Levels</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for surgeon in surgeons %}
+        <tr>
+          <td>
+            {{ surgeon.id }}
+            <input type="hidden" name="surgeon_id_{{ surgeon.id }}" value="{{ surgeon.id }}">
+          </td>
+          <td>
+            <input type="text" name="name_{{ surgeon.id }}" value="{{ surgeon.name }}" required>
+          </td>
+          <td>
+            {% set levels = ['1A','1B','2A','2B','3','4'] %}
+            {% for level in levels %}
+              <label style="margin-right:5px;">
+                <input type="checkbox" name="call_levels_{{ surgeon.id }}" value="{{ level }}"
+                  {% if surgeon.call_levels and level in surgeon.call_levels %}checked{% endif %}>
+                {{ level }}
+              </label>
+            {% endfor %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <div style="text-align: center; margin-top:20px;">
+      <button type="submit">Update All Surgeons</button>
+    </div>
+  </form>
+  <div style="text-align: center; margin-top: 20px;">
+    <a href="{{ url_for('add_surgeon') }}">Add New Surgeon</a>
+  </div>
+{% endblock %}

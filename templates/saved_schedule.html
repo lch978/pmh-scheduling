@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+{% block title %}Saved Schedule for {{ year }}-{{ '%02d'|format(month) }}{% endblock %}
+{% block head %}
+  <style>
+    .schedule-container {
+      max-width: 1000px;
+      margin: auto;
+      background-color: #fff;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .schedule-header {
+      text-align: center;
+      margin-bottom: 20px;
+    }
+    .schedule-form {
+      text-align: center;
+      margin-bottom: 20px;
+    }
+    .schedule-form select,
+    .schedule-form button {
+      padding: 8px 12px;
+      margin: 4px;
+      font-size: 14px;
+    }
+    .schedule-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 20px;
+    }
+    .schedule-table th,
+    .schedule-table td {
+      border: 1px solid #ccc;
+      padding: 10px;
+      text-align: center;
+    }
+    .schedule-table th {
+      background-color: #f2f2f2;
+    }
+    .weekend {
+      background-color: #d3d3d3;
+    }
+    .button-group {
+      text-align: center;
+      margin-top: 20px;
+    }
+    .button-group form {
+      display: inline-block;
+      margin: 4px;
+    }
+    .button-group button {
+      padding: 10px 15px;
+      font-size: 14px;
+      cursor: pointer;
+      border: none;
+      border-radius: 4px;
+      background-color: #337ab7;
+      color: #fff;
+      transition: background-color 0.3s;
+    }
+    .button-group button:hover {
+      background-color: #286090;
+    }
+  </style>
+{% endblock %}
+{% block content %}
+  <div class="schedule-container">
+    <div class="schedule-header">
+      <h1>Saved Schedule for {{ year }}-{{ '%02d'|format(month) }}</h1>
+    </div>
+    
+    <!-- Year/Month Selection Form -->
+    <div class="schedule-form">
+      <form method="get" action="{{ url_for('saved_schedule') }}">
+        <label for="year">Year:</label>
+        <select name="year" id="year">
+          {% for y in range(2020, 2031) %}
+            <option value="{{ y }}" {% if y == year %}selected{% endif %}>{{ y }}</option>
+          {% endfor %}
+        </select>
+        <label for="month">Month:</label>
+        <select name="month" id="month">
+          {% for m in range(1, 13) %}
+            <option value="{{ m }}" {% if m == month %}selected{% endif %}>{{ m }}</option>
+          {% endfor %}
+        </select>
+        <button type="submit">Load Schedule</button>
+      </form>
+    </div>
+    
+    <!-- Schedule Table -->
+    <table class="schedule-table">
+      <thead>
+        <tr>
+          <th>Date</th>
+          {% for level in ['1A','1B','2A','2B','3','4'] %}
+            <th>{{ level }}</th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for day, assignments in schedule.items() %}
+        <tr class="{{ 'weekend' if day in weekend_set else '' }}">
+          <td>{{ day }}</td>
+          {% for level in ['1A','1B','2A','2B','3','4'] %}
+            <td>{{ assignments[level] if assignments[level] else '' }}</td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    
+    <!-- Button Group -->
+    <div class="button-group">
+      <form method="get" action="{{ url_for('new_schedule') }}" style="display:inline;">
+        <button type="submit">Generate New Schedule</button>
+      </form>
+      <form method="get" action="{{ url_for('config_max_calls') }}" style="display:inline;">
+        <button type="submit">Configure Max Calls</button>
+      </form>
+      <form method="get" action="{{ url_for('list_surgeons') }}" style="display:inline;">
+        <button type="submit">Manage Surgeons</button>
+      </form>
+    </div>
+  </div>
+{% endblock %}
