@@ -1,96 +1,147 @@
 {% extends "base.html" %}
 {% block title %}New Schedule for {{ year }}-{{ '%02d'|format(month) }}{% endblock %}
 {% block head %}
-  <style>
-    .schedule-container {
-      max-width: 1000px;
-      margin: auto;
-      background-color: #fff;
-      padding: 20px;
-      border-radius: 8px;
-      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    }
-    .schedule-header {
-      text-align: center;
-      margin-bottom: 20px;
-    }
-    .schedule-form {
-      text-align: center;
-      margin-bottom: 20px;
-    }
-    .schedule-form select,
-    .schedule-form button {
-      padding: 8px 12px;
-      margin: 4px;
-      font-size: 14px;
-    }
-    .schedule-table {
-      width: 100%;
-      border-collapse: collapse;
-      margin-bottom: 20px;
-    }
-    .schedule-table th,
-    .schedule-table td {
-      border: 1px solid #ccc;
-      padding: 10px;
-      text-align: center;
-    }
-    .schedule-table th {
-      background-color: #f2f2f2;
-    }
-    .weekend {
-      background-color: #d3d3d3;
-    }
-    .button-group {
-      text-align: center;
-      margin-top: 20px;
-    }
-    .button-group form {
-      display: inline-block;
-      margin: 4px;
-    }
-    .button-group button {
-      padding: 10px 15px;
-      font-size: 14px;
-      cursor: pointer;
-      border: none;
-      border-radius: 4px;
-      background-color: #337ab7;
-      color: #fff;
-      transition: background-color 0.3s;
-    }
-    .button-group button:hover {
-      background-color: #286090;
-    }
-  </style>
+<style>
+  .schedule-container {
+    max-width: 1000px;
+    margin: auto;
+    background-color: #fff;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  }
+  .schedule-header {
+    text-align: center;
+    margin-bottom: 20px;
+  }
+  .schedule-form {
+    text-align: center;
+    margin-bottom: 20px;
+  }
+  .schedule-form select,
+  .schedule-form button {
+    padding: 8px 12px;
+    margin: 4px;
+    font-size: 14px;
+  }
+  .schedule-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 20px;
+  }
+  .schedule-table th,
+  .schedule-table td {
+    border: 1px solid #ccc;
+    padding: 10px;
+    text-align: center;
+  }
+  .schedule-table th {
+    background-color: #f2f2f2;
+  }
+  .weekend {
+    background-color: #d3d3d3;
+  }
+  .button-group {
+    text-align: center;
+    margin-top: 20px;
+  }
+  .button-group form {
+    display: inline-block;
+    margin: 4px;
+  }
+  .button-group button {
+    padding: 10px 15px;
+    font-size: 14px;
+    cursor: pointer;
+    border: none;
+    border-radius: 4px;
+    background-color: #337ab7;
+    color: #fff;
+    transition: background-color 0.3s;
+  }
+  .button-group button:hover {
+    background-color: #286090;
+  }
+  /* Modal Styles */
+  .modal {
+    display: none; /* Hidden by default */
+    position: fixed;
+    z-index: 10000;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    overflow: auto;
+    background-color: rgba(0,0,0,0.5);
+  }
+  .modal-content {
+    background-color: #fff;
+    margin: 20% auto;
+    padding: 20px;
+    border: 1px solid #888;
+    width: 300px;
+    text-align: center;
+    border-radius: 8px;
+  }
+  .progress-container {
+    width: 100%;
+    background-color: #ddd;
+    border-radius: 4px;
+    margin: 15px 0;
+  }
+  .progress-bar {
+    width: 0%;
+    height: 20px;
+    background-color: #337ab7;
+    border-radius: 4px;
+    transition: width 0.3s;
+  }
+</style>
 {% endblock %}
 {% block content %}
-  <div class="schedule-container">
-    <div class="schedule-header">
-      <h1>New Schedule for {{ year }}-{{ '%02d'|format(month) }}</h1>
+<div class="schedule-container">
+  <div class="schedule-header">
+    <h1>Schedule for {{ year }}-{{ '%02d'|format(month) }}</h1>
+    {% if cost %}
       <p>Objective (max-min calls): {{ cost }}</p>
-    </div>
-  
-    <!-- Year/Month Selection Form -->
-    <div class="schedule-form">
-      <form method="get" action="{{ url_for('new_schedule') }}">
-        <label for="year">Year:</label>
-        <select name="year" id="year">
-          {% for y in range(2020, 2031) %}
-            <option value="{{ y }}" {% if y == year %}selected{% endif %}>{{ y }}</option>
-          {% endfor %}
-        </select>
-        <label for="month">Month:</label>
-        <select name="month" id="month">
-          {% for m in range(1, 13) %}
-            <option value="{{ m }}" {% if m == month %}selected{% endif %}>{{ m }}</option>
-          {% endfor %}
-        </select>
-        <button type="submit">Load Schedule</button>
-      </form>
-    </div>
-  
-    <!-- Schedule Table -->
+    {% endif %}
+  </div>
+
+  <!-- Year/Month Selection Form -->
+  <div class="schedule-form">
+    <!-- Form to load saved schedule (without generate flag) -->
+    <form method="get" action="{{ url_for('new_schedule') }}" style="display: inline-block;">
+      <label for="year">Year:</label>
+      <select name="year" id="year">
+        {% for y in range(2020, 2031) %}
+          <option value="{{ y }}" {% if y == year %}selected{% endif %}>{{ y }}</option>
+        {% endfor %}
+      </select>
+      <label for="month">Month:</label>
+      <select name="month" id="month">
+        {% for m in range(1, 13) %}
+          <option value="{{ m }}" {% if m == month %}selected{% endif %}>{{ m }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit">Load Saved Schedule</button>
+    </form>
+    
+    <!-- Form to generate a new schedule -->
+    <form method="get" action="{{ url_for('new_schedule') }}" style="display: inline-block;">
+      <input type="hidden" name="generate" value="1">
+      <input type="hidden" name="year" value="{{ year }}">
+      <input type="hidden" name="month" value="{{ month }}">
+      <button type="submit" id="generateButton">Generate New Schedule</button>
+    </form>
+    
+    <!-- Form to save the current generated schedule -->
+    <form method="post" action="{{ url_for('save_schedule') }}" style="display: inline-block;">
+      <button type="submit" id="saveButton">Save Schedule</button>
+    </form>
+  </div>
+
+  <!-- Display saved schedule if it exists; otherwise show a message -->
+  {% if schedule %}
     <table class="schedule-table">
       <thead>
         <tr>
@@ -111,18 +162,49 @@
         {% endfor %}
       </tbody>
     </table>
-  
-    <!-- Button Group -->
-    <div class="button-group">
-      <form method="get" action="{{ url_for('new_schedule') }}">
-        <button type="submit">Generate New Schedule</button>
-      </form>
-      <form method="post" action="{{ url_for('save_schedule') }}" onsubmit="return confirm('Are you sure you want to overwrite the existing saved schedule for this period?');">
-        <button type="submit">Save Schedule</button>
-      </form>
-      <form method="get" action="{{ url_for('saved_schedule', year=year, month=month) }}">
-        <button type="submit">View Saved Schedule</button>
-      </form>
-    </div>
+  {% else %}
+    <p style="text-align: center;">No saved schedule yet.</p>
+  {% endif %}
+
+  <!-- Additional Navigation Buttons -->
+  <div class="button-group">
+    <form method="get" action="{{ url_for('saved_schedule', year=year, month=month) }}" style="display:inline;">
+      <button type="submit">View Saved Schedule</button>
+    </form>
+    <form method="get" action="{{ url_for('config_max_calls') }}" style="display:inline;">
+      <button type="submit">Configure Max Calls</button>
+    </form>
+    <form method="get" action="{{ url_for('list_surgeons') }}" style="display:inline;">
+      <button type="submit">Manage Surgeons</button>
+    </form>
   </div>
+</div>
+
+<!-- Loading Modal -->
+<div id="loadingModal" class="modal">
+  <div class="modal-content">
+    <p>Optimization in progress... Please wait.</p>
+    <div class="progress-container">
+      <div class="progress-bar" id="progressBar"></div>
+    </div>
+    <p>Estimated time: 30 seconds</p>
+  </div>
+</div>
+
+<script>
+  // When "Generate New Schedule" button is clicked, show the loading modal with simulated progress.
+  document.getElementById('generateButton').addEventListener('click', function(e) {
+    document.getElementById('loadingModal').style.display = 'block';
+    var progressBar = document.getElementById('progressBar');
+    var width = 0;
+    var interval = setInterval(function() {
+      if (width >= 100) {
+        clearInterval(interval);
+      } else {
+        width += 1;
+        progressBar.style.width = width + '%';
+      }
+    }, 300);
+  });
+</script>
 {% endblock %}

@@ -379,11 +379,14 @@ def solve_schedule_or_tools(days, surgeons):
         domain_1A = [-1]
     domain_1B = [s["id"] for s in surgeons if "1B" in parse_call_levels(s.get("call_levels", ""))]
     domain_1B = (domain_1B + [-1]) if domain_1B else [-1]
-    domain_2A = [s["id"] for s in surgeons if ("2A" in parse_call_levels(s.get("call_levels", "")) or "2B" in parse_call_levels(s.get("call_levels", "")))]
+    domain_2A = [s["id"] for s in surgeons if "2A" in parse_call_levels(s.get("call_levels", ""))]
     if not domain_2A:
         domain_2A = [-1]
-    domain_2B = [s["id"] for s in surgeons if "2B" in parse_call_levels(s.get("call_levels", ""))]
-    domain_2B = (domain_2B + [-1]) if domain_2B else [-1]
+    domain_2B = [s["id"] for s in surgeons if "2B" in parse_call_levels(s.get("call_levels", "")) and get_level2_group(s) == 3]
+    if domain_2B:
+        domain_2B = domain_2B + [-1]
+    else:
+        domain_2B = [-1]
     domain_3 = [s["id"] for s in surgeons if "3" in parse_call_levels(s.get("call_levels", ""))]
     if not domain_3:
         domain_3 = [-1]
@@ -611,21 +614,64 @@ def constraint_weights():
 
 @app.route('/new_schedule', methods=['GET'])
 def new_schedule():
+    import datetime, calendar, json
+    # Get year and month from query parameters (or default to today's values).
     year_sel, month_sel = get_year_month()
-    days_sel = [datetime.date(year_sel, month_sel, d).isoformat() 
+    print("DEBUG: year_sel =", year_sel, "month_sel =", month_sel, "Query:", request.args)
+
+    # Generate a list of ISO-formatted day strings for the selected month.
+    days_sel = [datetime.date(year_sel, month_sel, d).isoformat()
                 for d in range(1, calendar.monthrange(year_sel, month_sel)[1] + 1)]
-    global num_days
-    num_days = len(days_sel)
     
-    sched, cost = solve_schedule_or_tools(days_sel, get_all_surgeons())
-    if sched is None:
-        flash("No feasible schedule was found. Check configuration and surgeon eligibility.")
-        return render_template('no_schedule.html')
-    session['last_generated_schedule'] = json.dumps(sched)
-    session['last_generated_cost'] = cost
-    session['generated_year'] = year_sel
-    session['generated_month'] = month_sel
+    db = get_db()
+    # Check if 'generate' flag is in query parameters.
+    generate_flag = request.args.get('generate')
+    print("DEBUG: generate_flag =", generate_flag)
+
+    # Look up any saved schedule for the selected year and month.
+    row = db.execute(
+        "SELECT * FROM saved_schedule WHERE year = ? AND month = ?",
+        (year_sel, month_sel)
+    ).fetchone()
+    
+    if row is not None and not generate_flag:
+        # Found a saved schedule and the generate flag is not set.
+        sched = json.loads(row['schedule_data'])
+        cost = None  # (Optional: load cost if saved.)
+        print("DEBUG: Loading saved schedule for", year_sel, month_sel)
+    elif generate_flag:
+        # Generate a new schedule if the generate flag is set.
+        sched, cost = solve_schedule_or_tools(days_sel, get_all_surgeons())
+        if sched is None:
+            flash("No feasible schedule was found. Check configuration and surgeon eligibility.")
+            return render_template('no_schedule.html')
+        # If a record exists, update it; otherwise, insert a new record.
+        if row is not None:
+            db.execute(
+                "UPDATE saved_schedule SET schedule_data = ?, date_saved = datetime('now') WHERE year = ? AND month = ?",
+                (json.dumps(sched), year_sel, month_sel)
+            )
+            print("DEBUG: Updated schedule record for", year_sel, month_sel)
+        else:
+            db.execute(
+                "INSERT INTO saved_schedule (year, month, schedule_data, date_saved) VALUES (?, ?, ?, datetime('now'))",
+                (year_sel, month_sel, json.dumps(sched))
+            )
+            print("DEBUG: Inserted new schedule record for", year_sel, month_sel)
+        db.commit()
+        # Force a redirect to remove the generate flag.
+        redirect_url = f"/new_schedule?year={year_sel}&month={month_sel}"
+        print("DEBUG: Redirecting to", redirect_url)
+        return redirect(redirect_url)
+    else:
+        # If no saved schedule exists and no generate flag is provided.
+        sched = None
+        cost = None
+        print("DEBUG: No saved schedule found for", year_sel, month_sel)
+    
+    # Compute the set of weekend days.
     weekend_set = {d for d in days_sel if datetime.date.fromisoformat(d).weekday() >= 5}
+    
     return render_template('new_schedule.html', schedule=sched, cost=cost,
                            weekend_set=weekend_set, year=year_sel, month=month_sel)
 
@@ -859,7 +905,7 @@ def stats():
 if __name__ == '__main__':
     import os
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
-    
+
 if __name__ == '__main__':
     app.run(debug=True)
 
