@@ -1,46 +1,45 @@
 # cloudbuild.yaml
 
-# 1) Logging options go under options
+#–– your own substitutions ––
+substitutions:
+  _SERVICE_NAME: "pmh-scheduler"   # the Cloud Run service name
+  _REGION:       "us-central1"     # change if you want a different region
+
+#–– force Cloud Build to send logs only to Cloud Logging ––
 options:
   logging: CLOUD_LOGGING_ONLY
 
-# 2) Timeout is a top‐level field, not under options
-timeout: "1200s"
-
-substitutions:
-    # <-- your Cloud Run region
-  _SERVICE: pmh-scheduling  # <-- your Cloud Run service name
-
 steps:
-  # Build the container image
+  # 1) Build the container image
   - name: gcr.io/cloud-builders/docker
     args:
       [
         "build",
-        "-t", "gcr.io/$PROJECT_ID/${_SERVICE}:$SHORT_SHA",
+        "-t", "gcr.io/$PROJECT_ID/${_SERVICE_NAME}:$SHORT_SHA",
+        "-f", "surgeon_scheduler_mvp/Dockerfile",
         "."
       ]
 
-  # Push it
+  # 2) Push it to Container Registry
   - name: gcr.io/cloud-builders/docker
     args:
       [
         "push",
-        "gcr.io/$PROJECT_ID/${_SERVICE}:$SHORT_SHA"
+        "gcr.io/$PROJECT_ID/${_SERVICE_NAME}:$SHORT_SHA"
       ]
 
-  # Deploy to Cloud Run
-  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+  # 3) Deploy to Cloud Run (managed)
+  - name: gcr.io/cloud-builders/gcloud
     entrypoint: gcloud
     args:
       [
-        "run", "deploy", "${_SERVICE}",
-        "--image", "gcr.io/$PROJECT_ID/${_SERVICE}:$SHORT_SHA",
+        "run", "deploy", "${_SERVICE_NAME}",
+        "--image", "gcr.io/$PROJECT_ID/${_SERVICE_NAME}:$SHORT_SHA",
         "--region", "${_REGION}",
         "--platform", "managed",
-        "--quiet",
         "--allow-unauthenticated"
       ]
 
+#–– let Cloud Build know which image(s) you’re producing ––
 images:
-  - "gcr.io/$PROJECT_ID/${_SERVICE}:$SHORT_SHA"
+  - "gcr.io/$PROJECT_ID/${_SERVICE_NAME}:$SHORT_SHA"
