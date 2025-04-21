@@ -1,0 +1,44 @@
+# cloudbuild.yaml
+options:
+  # Send logs only to Cloud Logging (satisfies the service_account→logs_bucket requirement)
+  logging: CLOUD_LOGGING_ONLY
+  # Cancel builds older than 20 minutes
+  timeout: "1200s"
+
+substitutions:
+  _REGION: us-central1      # <-- your Cloud Run region
+  _SERVICE: pmh-scheduling  # <-- your Cloud Run service name
+
+steps:
+  # 1) Build the container image
+  - name: gcr.io/cloud-builders/docker
+    args:
+      [
+        "build",
+        "-t", "gcr.io/$PROJECT_ID/${_SERVICE}:$SHORT_SHA",
+        "."
+      ]
+
+  # 2) Push it to Container Registry
+  - name: gcr.io/cloud-builders/docker
+    args:
+      [
+        "push",
+        "gcr.io/$PROJECT_ID/${_SERVICE}:$SHORT_SHA"
+      ]
+
+  # 3) Deploy to Cloud Run
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      [
+        "run", "deploy", "${_SERVICE}",
+        "--image", "gcr.io/$PROJECT_ID/${_SERVICE}:$SHORT_SHA",
+        "--region", "${_REGION}",
+        "--platform", "managed",
+        "--quiet",
+        "--allow-unauthenticated"
+      ]
+
+images:
+  - "gcr.io/$PROJECT_ID/${_SERVICE}:$SHORT_SHA"
