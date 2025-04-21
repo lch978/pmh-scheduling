@@ -1,11 +1,11 @@
 {% extends "base.html" %}
-{% block title %}New Schedule for {{ year }}-{{ '%02d'|format(month) }}{% endblock %}
+{% block title %}Schedule for {{ year }}-{{ '%02d'|format(month) }}{% endblock %}
 {% block head %}
 <style>
   .schedule-container {
     max-width: 1000px;
     margin: auto;
-    background-color: #fff;
+    background: #fff;
     padding: 20px;
     border-radius: 8px;
     box-shadow: 0 2px 4px rgba(0,0,0,0.1);
@@ -16,18 +16,18 @@
   }
   .schedule-form {
     text-align: center;
-    margin-bottom: 20px;
+    margin-bottom: 10px;
   }
   .schedule-form select,
   .schedule-form button {
     padding: 8px 12px;
-    margin: 4px;
+    margin: 0 4px;
     font-size: 14px;
   }
   .schedule-table {
     width: 100%;
     border-collapse: collapse;
-    margin-bottom: 20px;
+    margin-top: 20px;
   }
   .schedule-table th,
   .schedule-table td {
@@ -38,173 +38,180 @@
   .schedule-table th {
     background-color: #f2f2f2;
   }
-  .weekend {
-    background-color: #d3d3d3;
+  .weekend { background-color: #f9f2f4; }
+  .holiday { background-color: #eef9ff; }
+  #progress {
+    text-align: center;
+    margin-top: 10px;
   }
   .button-group {
     text-align: center;
     margin-top: 20px;
   }
-  .button-group form {
-    display: inline-block;
-    margin: 4px;
-  }
   .button-group button {
     padding: 10px 15px;
     font-size: 14px;
-    cursor: pointer;
+    margin: 0 4px;
     border: none;
     border-radius: 4px;
     background-color: #337ab7;
     color: #fff;
+    cursor: pointer;
     transition: background-color 0.3s;
   }
   .button-group button:hover {
     background-color: #286090;
   }
-  /* Modal Styles */
-  .modal {
-    display: none; /* Hidden by default */
-    position: fixed;
-    z-index: 10000;
-    left: 0;
-    top: 0;
-    width: 100%;
-    height: 100%;
-    overflow: auto;
-    background-color: rgba(0,0,0,0.5);
-  }
-  .modal-content {
-    background-color: #fff;
-    margin: 20% auto;
-    padding: 20px;
-    border: 1px solid #888;
-    width: 300px;
-    text-align: center;
-    border-radius: 8px;
-  }
-  .progress-container {
-    width: 100%;
-    background-color: #ddd;
-    border-radius: 4px;
-    margin: 15px 0;
-  }
-  .progress-bar {
-    width: 0%;
-    height: 20px;
-    background-color: #337ab7;
-    border-radius: 4px;
-    transition: width 0.3s;
-  }
 </style>
 {% endblock %}
+
 {% block content %}
 <div class="schedule-container">
   <div class="schedule-header">
     <h1>Schedule for {{ year }}-{{ '%02d'|format(month) }}</h1>
-    {% if cost %}
-      <p>Objective (max-min calls): {{ cost }}</p>
+  </div>
+
+  <div class="schedule-form">
+    <label for="year">Year:</label>
+    <select id="year">
+      {% for y in range(2020, 2031) %}
+        <option value="{{ y }}" {% if y==year %}selected{% endif %}>{{ y }}</option>
+      {% endfor %}
+    </select>
+    <label for="month">Month:</label>
+    <select id="month">
+      {% for m in range(1,13) %}
+        <option value="{{ m }}" {% if m==month %}selected{% endif %}>{{ m }}</option>
+      {% endfor %}
+    </select>
+    <button type="button" id="btnLoad">Load Saved Schedule</button>
+    <button type="button" id="btnGen">Generate New Schedule</button>
+    <button type="button" id="btnStop" disabled>Stop</button>
+  </div>
+
+  <div id="progress">
+    <p>Status: <span id="status">idle</span></p>
+    <p>Best Objective So Far: <span id="best">n/a</span></p>
+  </div>
+
+  <div id="scheduleContainer">
+    {% if schedule %}
+      <table class="schedule-table">
+        <thead>
+          <tr>
+            <th>Date</th>
+            {% for lev in ['1A','1B','2A','2B','3','4'] %}
+              <th>{{ lev }}</th>
+            {% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for day, assigns in schedule.items() %}
+            {% set classes = [] %}
+            {% if day in weekend_set %}{% set _=classes.append('weekend') %}{% endif %}
+            {% if day in public_holidays %}{% set _=classes.append('holiday') %}{% endif %}
+            <tr class="{{ classes|join(' ') }}">
+              <td>{{ day }}</td>
+              {% for lev in ['1A','1B','2A','2B','3','4'] %}
+                <td>{{ assigns[lev] or '' }}</td>
+              {% endfor %}
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p style="text-align:center; margin-top:20px;">No saved schedule yet.</p>
     {% endif %}
   </div>
 
-  <!-- Year/Month Selection Form -->
-  <div class="schedule-form">
-    <!-- Form to load saved schedule (without generate flag) -->
-    <form method="get" action="{{ url_for('new_schedule') }}" style="display: inline-block;">
-      <label for="year">Year:</label>
-      <select name="year" id="year">
-        {% for y in range(2020, 2031) %}
-          <option value="{{ y }}" {% if y == year %}selected{% endif %}>{{ y }}</option>
-        {% endfor %}
-      </select>
-      <label for="month">Month:</label>
-      <select name="month" id="month">
-        {% for m in range(1, 13) %}
-          <option value="{{ m }}" {% if m == month %}selected{% endif %}>{{ m }}</option>
-        {% endfor %}
-      </select>
-      <button type="submit">Load Saved Schedule</button>
-    </form>
-    
-    <!-- Form to generate a new schedule -->
-    <form method="get" action="{{ url_for('new_schedule') }}" style="display: inline-block;">
-      <input type="hidden" name="generate" value="1">
+  <div class="button-group">
+    <form method="post" action="{{ url_for('save_schedule') }}">
       <input type="hidden" name="year" value="{{ year }}">
       <input type="hidden" name="month" value="{{ month }}">
-      <button type="submit" id="generateButton">Generate New Schedule</button>
+      <input type="hidden" name="schedule_json" id="schedule_json">
+      <button type="submit" id="btnSave">Save Schedule</button>
     </form>
-    
-    <!-- Form to save the current generated schedule -->
-    <form method="post" action="{{ url_for('save_schedule') }}" style="display: inline-block;">
-      <button type="submit" id="saveButton">Save Schedule</button>
-    </form>
-  </div>
-
-  <!-- Display saved schedule if it exists; otherwise show a message -->
-  {% if schedule %}
-    <table class="schedule-table">
-      <thead>
-        <tr>
-          <th>Date</th>
-          {% for level in ['1A','1B','2A','2B','3','4'] %}
-            <th>{{ level }}</th>
-          {% endfor %}
-        </tr>
-      </thead>
-      <tbody>
-        {% for day, assignments in schedule.items() %}
-          <tr class="{{ 'weekend' if day in weekend_set else '' }}">
-            <td>{{ day }}</td>
-            {% for level in ['1A','1B','2A','2B','3','4'] %}
-              <td>{{ assignments[level] if assignments[level] else '' }}</td>
-            {% endfor %}
-          </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  {% else %}
-    <p style="text-align: center;">No saved schedule yet.</p>
-  {% endif %}
-
-  <!-- Additional Navigation Buttons -->
-  <div class="button-group">
-    <form method="get" action="{{ url_for('saved_schedule', year=year, month=month) }}" style="display:inline;">
-      <button type="submit">View Saved Schedule</button>
-    </form>
-    <form method="get" action="{{ url_for('config_max_calls') }}" style="display:inline;">
-      <button type="submit">Configure Max Calls</button>
-    </form>
-    <form method="get" action="{{ url_for('list_surgeons') }}" style="display:inline;">
-      <button type="submit">Manage Surgeons</button>
-    </form>
-  </div>
-</div>
-
-<!-- Loading Modal -->
-<div id="loadingModal" class="modal">
-  <div class="modal-content">
-    <p>Optimization in progress... Please wait.</p>
-    <div class="progress-container">
-      <div class="progress-bar" id="progressBar"></div>
-    </div>
-    <p>Estimated time: 30 seconds</p>
   </div>
 </div>
 
 <script>
-  // When "Generate New Schedule" button is clicked, show the loading modal with simulated progress.
-  document.getElementById('generateButton').addEventListener('click', function(e) {
-    document.getElementById('loadingModal').style.display = 'block';
-    var progressBar = document.getElementById('progressBar');
-    var width = 0;
-    var interval = setInterval(function() {
-      if (width >= 100) {
-        clearInterval(interval);
-      } else {
-        width += 1;
-        progressBar.style.width = width + '%';
-      }
-    }, 300);
+  // Expose initial schedule & sets for JS
+  const initialSchedule   = {{ schedule|default({})|tojson }};
+  const weekendSet        = new Set({{ weekend_set|list|tojson }});
+  const publicHolidaysSet = new Set({{ public_holidays|list|tojson }});
+  let currentSolution     = initialSchedule;
+
+  document.addEventListener('DOMContentLoaded', () => {
+    // initialize save-payload with whatever is loaded
+    document.getElementById('schedule_json').value = JSON.stringify(currentSolution);
   });
+
+  // Load saved schedule by reloading with year/month in query
+  document.getElementById('btnLoad').onclick = () => {
+    const y = document.getElementById('year').value;
+    const m = document.getElementById('month').value;
+    window.location = `?year=${y}&month=${m}`;
+  };
+
+  // Kick off an async solve job
+  document.getElementById('btnGen').onclick = async () => {
+    const y = document.getElementById('year').value;
+    const m = document.getElementById('month').value;
+    const res = await fetch('/start_solve', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ year: y, month: m })
+    });
+    const { job_id } = await res.json();
+    window.currentJob = job_id;
+    document.getElementById('status').innerText = 'running';
+    document.getElementById('btnStop').disabled = false;
+    pollStatus();
+  };
+
+  // Cancel an in-flight job
+  document.getElementById('btnStop').onclick = () => {
+    if (!window.currentJob) return;
+    fetch(`/cancel_solve/${window.currentJob}`, { method: 'POST' });
+    document.getElementById('status').innerText = 'cancelling';
+  };
+
+  // Poll until done or cancelled
+  async function pollStatus() {
+    if (!window.currentJob) return;
+    const res  = await fetch(`/solve_status/${window.currentJob}`);
+    const data = await res.json();
+    document.getElementById('status').innerText = data.status;
+    document.getElementById('best').innerText   = data.best ?? 'n/a';
+    if (data.status === 'running') {
+      setTimeout(pollStatus, 1000);
+    } else if (data.status === 'done') {
+      renderSchedule(data.solution);
+      document.getElementById('btnStop').disabled = true;
+      // update save payload
+      document.getElementById('schedule_json').value = JSON.stringify(currentSolution);
+    }
+  }
+
+  // Replace the HTML table with the new solution
+  function renderSchedule(sol) {
+    currentSolution = sol;
+    const container = document.getElementById('scheduleContainer');
+    let html = '<table class="schedule-table"><thead><tr><th>Date</th>'
+             + ['1A','1B','2A','2B','3','4'].map(l=>`<th>${l}</th>`).join('')
+             + '</tr></thead><tbody>';
+    for (const day of Object.keys(sol)) {
+      const classes = [];
+      if (weekendSet.has(day))        classes.push('weekend');
+      if (publicHolidaysSet.has(day)) classes.push('holiday');
+      html += `<tr class="${classes.join(' ')}"><td>${day}</td>`;
+      for (const lvl of ['1A','1B','2A','2B','3','4']) {
+        html += `<td>${sol[day][lvl] || ''}</td>`;
+      }
+      html += '</tr>';
+    }
+    html += '</tbody></table>';
+    container.innerHTML = html;
+  }
 </script>
 {% endblock %}

@@ -1,55 +1,92 @@
-{% extends "base.html" %}
-{% block title %}Surgeon Management{% endblock %}
-{% block content %}
-  <h1 style="text-align: center;">Surgeon Management</h1>
+{% extends 'base.html' %}
 
-  <!-- Sorting Controls -->
-  <div style="text-align: center; margin-bottom: 20px;">
-    <form method="get" action="{{ url_for('list_surgeons') }}" style="display:inline;">
-      <input type="hidden" name="sort" value="1">
-      <button type="submit">Sort Surgeons</button>
-    </form>
+{% block title %}Surgeon Management{% endblock %}
+
+{% block content %}
+  <div class="flex items-center justify-between mb-6">
+    <h1 class="text-2xl font-bold">Surgeon Management</h1>
+    <div class="space-x-2">
+      <!-- Add New Surgeon Button -->
+      <a href="{{ url_for('add_surgeon') }}" 
+         class="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700">
+        Add New Surgeon
+      </a>
+      <!-- Sort Surgeon Button -->
+      <a href="{{ url_for('list_surgeons', sort=1) }}" 
+         class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">
+        Sort Surgeons
+      </a>
+    </div>
   </div>
 
-  <!-- Bulk Update Form -->
   <form method="post" action="{{ url_for('update_all_surgeons') }}">
-    <table>
+    <table class="w-full table-auto border-collapse">
       <thead>
-        <tr>
-          <th>ID</th>
-          <th>Name</th>
-          <th>Call Levels</th>
+        <tr class="bg-gray-200">
+          <th class="border px-4 py-2">Name</th>
+          <th class="border px-4 py-2">Call Levels</th>
+          <th class="border px-4 py-2">NLTH</th>
+          <th class="border px-4 py-2">Actions</th>
         </tr>
       </thead>
       <tbody>
         {% for surgeon in surgeons %}
-        <tr>
-          <td>
-            {{ surgeon.id }}
-            <input type="hidden" name="surgeon_id_{{ surgeon.id }}" value="{{ surgeon.id }}">
-          </td>
-          <td>
-            <input type="text" name="name_{{ surgeon.id }}" value="{{ surgeon.name }}" required>
-          </td>
-          <td>
-            {% set levels = ['1A','1B','2A','2B','3','4'] %}
-            {% for level in levels %}
-              <label style="margin-right:5px;">
-                <input type="checkbox" name="call_levels_{{ surgeon.id }}" value="{{ level }}"
-                  {% if surgeon.call_levels and level in surgeon.call_levels %}checked{% endif %}>
-                {{ level }}
+          <tr>
+            <td class="border px-4 py-2">
+              <input
+                type="text"
+                name="name_{{ surgeon.id }}"
+                value="{{ surgeon.name }}"
+                class="w-full p-1 border rounded"
+              />
+            </td>
+            <td class="border px-4 py-2">
+              <div class="flex flex-wrap gap-2">
+                {% for level in ['1A','1B','2A','2B','3','4'] %}
+                  <label class="inline-flex items-center">
+                    <input
+                      type="checkbox"
+                      name="call_levels_{{ surgeon.id }}"
+                      value="{{ level }}"
+                      {% if level in parse_call_levels(surgeon.call_levels) %}checked{% endif %}
+                      class="mr-1"
+                    />
+                    {{ level }}
+                  </label>
+                {% endfor %}
+              </div>
+            </td>
+            <td class="border px-4 py-2 text-center">
+              <label class="inline-flex items-center">
+                <input
+                  type="checkbox"
+                  name="nlth_{{ surgeon.id }}"
+                  {% if surgeon.nlth %}checked{% endif %}
+                  class="mr-1"
+                />
+                NLTH
               </label>
-            {% endfor %}
-          </td>
-        </tr>
+            </td>
+            <td class="border px-4 py-2 text-center">
+              <!-- Delete Surgeon Button -->
+              <form method="post" action="{{ url_for('delete_surgeon', surgeon_id=surgeon.id) }}" onsubmit="return confirm('Delete {{ surgeon.name }}?');">
+                <button type="submit" class="px-2 py-1 bg-red-600 text-white rounded hover:bg-red-700">
+                  Delete
+                </button>
+              </form>
+            </td>
+          </tr>
         {% endfor %}
       </tbody>
     </table>
-    <div style="text-align: center; margin-top:20px;">
-      <button type="submit">Update All Surgeons</button>
+
+    <div class="mt-4 text-right">
+      <button
+        type="submit"
+        class="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700"
+      >
+        Update All
+      </button>
     </div>
   </form>
-  <div style="text-align: center; margin-top: 20px;">
-    <a href="{{ url_for('add_surgeon') }}">Add New Surgeon</a>
-  </div>
 {% endblock %}

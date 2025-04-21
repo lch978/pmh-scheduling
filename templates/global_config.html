@@ -35,6 +35,18 @@
       <input type="range" id="gamma_1B" name="gamma_1B" min="0" max="500" value="{{ config.get('gamma_1B', '1') }}" style="width: 80%;">
       <span id="g1b_display">{{ config.get('gamma_1B', '1') }}</span>
     </div>
+    <div style="margin: 15px 0;">
+  	<label for="gamma_spacing">Gamma (Close‑Call Penalty):</label><br>
+  	<input type="range" id="gamma_spacing" name="gamma_spacing" min="0" max="100" 
+         value="{{ config.get('gamma_spacing','10') }}" style="width:80%;">
+  	<span id="gs_display">{{ config.get('gamma_spacing','10') }}</span>
+    </div>
+    <div style="margin: 15px 0;">
+  	<label for="spacing_threshold">Spacing Threshold (days):</label><br>
+  	<input type="range" id="spacing_threshold" name="spacing_threshold" min="1" max="14" 
+         value="{{ config.get('spacing_threshold','7') }}" style="width:80%;">
+  	<span id="st_display">{{ config.get('spacing_threshold','7') }}</span>
+    </div>
     <br>
     <button type="submit" style="padding: 10px 20px; font-size: 16px; cursor: pointer;">Update Global Configuration</button>
   </form>
@@ -51,6 +63,12 @@
     });
     document.getElementById('gamma_1B').addEventListener('input', function() {
       document.getElementById('g1b_display').innerText = this.value;
+    });
+    document.getElementById('gamma_spacing').addEventListener('input', e => 
+      document.getElementById('gs_display').innerText = e.target.value);
+    });
+    document.getElementById('spacing_threshold').addEventListener('input', e => 
+      document.getElementById('st_display').innerText = e.target.value);
     });
   </script>
 {% endblock %}

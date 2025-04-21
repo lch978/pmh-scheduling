@@ -4,230 +4,33 @@ import datetime
 import calendar
 import sqlite3
 import json
+import holidays
+import threading, uuid
+from dateutil.parser import parse
+import os
 
+from helper import *
+from scheduler import solve_schedule_or_tools
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, g, session
-from ortools.sat.python import cp_model
 
 app = Flask(__name__)
 app.secret_key = "your_secure_key"  # Replace with your secure key
 
-#############################################
-# Helper Functions
-#############################################
+solve_jobs = {}
 
-def group_dates(date_list):
-    """
-    Given a sorted list of ISO date strings, group consecutive dates into ranges.
-    Returns a list of dictionaries with keys 'start' and 'end'.
-    """
-    if not date_list:
-        return []
-    # Convert the date strings to date objects.
-    date_objs = sorted([datetime.datetime.strptime(d, "%Y-%m-%d").date() for d in date_list])
-    groups = []
-    start = date_objs[0]
-    end = date_objs[0]
-    for d in date_objs[1:]:
-        if d == end + datetime.timedelta(days=1):
-            end = d
-        else:
-            groups.append({"start": start.isoformat(), "end": end.isoformat()})
-            start = d
-            end = d
-    groups.append({"start": start.isoformat(), "end": end.isoformat()})
-    return groups
-
-def parse_call_levels(call_levels_str):
-    """
-    Converts a comma-separated string of call levels (e.g. "1A,2A,2B,3")
-    into a list of trimmed call-level codes.
-    Returns an empty list if call_levels_str is empty or None.
-    """
-    if not call_levels_str:
-        return []
-    return [level.strip() for level in call_levels_str.split(',') if level.strip()]
-
-def get_level2_group(surgeon):
-    """
-    Determines a surgeon’s level-2 group based on their call_levels string.
-    Conventions:
-      - If the string includes "2A" but NOT "2B", return 1 (Group 1: Needs supervision).
-      - If the string includes both "2A" and "2B", return 2 (Group 2: Does not need supervision).
-      - If the string includes "2B" but NOT "2A", return 3 (Group 3: Supervisors only).
-      - Otherwise, returns None.
-    """
-    cl = parse_call_levels(surgeon.get("call_levels", ""))
-    has_2A = "2A" in cl
-    has_2B = "2B" in cl
-    if has_2A and not has_2B:
-        return 1
-    elif has_2A and has_2B:
-        return 2
-    elif has_2B and not has_2A:
-        return 3
-    else:
-        return None
-
-def get_year_month():
-    """
-    Reads 'year' and 'month' from query parameters.
-    Defaults to today's year and month if not provided.
-    """
-    try:
-        year_val = int(request.args.get('year', datetime.date.today().year))
-        month_val = int(request.args.get('month', datetime.date.today().month))
-    except ValueError:
-        year_val = datetime.date.today().year
-        month_val = datetime.date.today().month
-    return year_val, month_val
-
-#############################################
-# Global Config for No Call Request Handling
-#############################################
-
-def get_global_config():
-    db = get_db()
-    rows = db.execute("SELECT key, value FROM global_config").fetchall()
-    config = {row["key"]: row["value"] for row in rows}
-    return config
-
-def update_global_config(new_config):
-    db = get_db()
-    cursor = db.cursor()
-    for key, value in new_config.items():
-        cursor.execute("UPDATE global_config SET value = ? WHERE key = ?", (value, key))
-    db.commit()
-
-#############################################
-# Database Setup and Utility Functions
-#############################################
-
-DATABASE = 'surgeon_scheduler.db'
-
-def get_db():
-    db = getattr(g, '_database', None)
-    if db is None:
-        db = g._database = sqlite3.connect(DATABASE)
-        db.row_factory = sqlite3.Row  # Enables dict-like access.
-    return db
+@app.context_processor
+def utility_processor():
+    return {
+        'parse_call_levels': parse_call_levels
+    }
 
 @app.teardown_appcontext
 def close_connection(exception):
     db = getattr(g, '_database', None)
     if db is not None:
         db.close()
+        
 
-def init_db():
-    with app.app_context():
-        db = get_db()
-        cursor = db.cursor()
-        # Create table for surgeons.
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS surgeons (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                call_levels TEXT NOT NULL
-            )
-        ''')
-        # Create table for saved_schedule with year and month.
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS saved_schedule (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                year INTEGER,
-                month INTEGER,
-                schedule_data TEXT,
-                date_saved TEXT,
-                UNIQUE (year, month)
-            )
-        ''')
-        # Create table for maximum calls configuration.
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS max_calls_config (
-                level_group TEXT PRIMARY KEY,
-                max_calls INTEGER
-            )
-        ''')
-        # Create table for surgeon_availability to record unavailability/no_call requests.
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS surgeon_availability (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                surgeon_id INTEGER,
-                request_type TEXT,   -- "unavailable" or "no_call"
-                date TEXT,
-                FOREIGN KEY(surgeon_id) REFERENCES surgeons(id)
-            )
-        ''')
-        # Create global_config table.
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS global_config (
-                key TEXT PRIMARY KEY,
-                value TEXT
-            )
-        ''')
-        # Global configuration table and default values.
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS global_config (
-                key TEXT PRIMARY KEY,
-                value TEXT
-            )
-        ''')
-        # Insert default values if not present:
-        cursor.execute("INSERT OR IGNORE INTO global_config (key, value) VALUES ('no_call_hard', '1')")
-        cursor.execute("INSERT OR IGNORE INTO global_config (key, value) VALUES ('fairness_weight', '1000')")
-        cursor.execute("INSERT OR IGNORE INTO global_config (key, value) VALUES ('gamma_no_call', '10')")
-        cursor.execute("INSERT OR IGNORE INTO global_config (key, value) VALUES ('gamma_unavail_prev', '5')")
-        cursor.execute("INSERT OR IGNORE INTO global_config (key, value) VALUES ('gamma_1B', '1')")
-        cursor.execute("INSERT OR IGNORE INTO global_config (key, value) VALUES ('gamma_balance', '100')")
-
-        # Insert default configuration if not present.
-        default_config = {"1": 10, "2": 10, "3": 10, "4": 10}
-        for group, max_val in default_config.items():
-            cursor.execute("INSERT OR IGNORE INTO max_calls_config (level_group, max_calls) VALUES (?, ?)", (group, max_val))
-        # Insert default global config for no_call (1 = hard, 0 = soft)
-        cursor.execute("INSERT OR IGNORE INTO global_config (key, value) VALUES ('no_call_hard', '1')")
-        db.commit()
-
-init_db()
-
-def get_all_surgeons():
-    db = get_db()
-    rows = db.execute("SELECT * FROM surgeons").fetchall()
-    return [dict(row) for row in rows]
-
-def get_max_calls_config():
-    db = get_db()
-    rows = db.execute("SELECT level_group, max_calls FROM max_calls_config").fetchall()
-    config = {}
-    for row in rows:
-        config[row["level_group"]] = row["max_calls"]
-    return config
-
-def update_max_calls_config(new_config):
-    db = get_db()
-    cursor = db.cursor()
-    for group, max_val in new_config.items():
-        cursor.execute("UPDATE max_calls_config SET max_calls = ? WHERE level_group = ?", (max_val, group))
-    db.commit()
-
-def get_availability_requests():
-    db = get_db()
-    rows = db.execute("SELECT surgeon_id, request_type, date FROM surgeon_availability").fetchall()
-    requests = {}
-    for row in rows:
-        # Convert surgeon_id from the row to integer.
-        sid = int(row["surgeon_id"])
-        if sid not in requests:
-            requests[sid] = []
-        requests[sid].append({
-            "date": row["date"],
-            "request_type": row["request_type"]
-        })
-    return requests
-
-#############################################
-# Scheduling: Month, Days, Global Variables
-#############################################
-# Days are generated dynamically in /new_schedule based on the selected year and month.
 
 #############################################
 # Surgeon Management Endpoints
@@ -296,11 +99,20 @@ def update_all_surgeons():
     for surgeon in surgeons:
         sid = surgeon['id']
         name_field = f"name_{sid}"
-        call_levels_field = f"call_levels_{sid}"
-        new_name = request.form.get(name_field)
-        new_levels = request.form.getlist(call_levels_field)
+        levels_field = f"call_levels_{sid}"
+        nlth_field = f"nlth_{sid}"
+
+        new_name   = request.form.get(name_field, surgeon['name'])
+        new_levels = request.form.getlist(levels_field)
         new_levels_str = ",".join(new_levels)
-        db.execute("UPDATE surgeons SET name = ?, call_levels = ? WHERE id = ?", (new_name, new_levels_str, sid))
+
+        # Checkbox: if the field is present in form data, checkbox was checked
+        new_nlth = 1 if request.form.get(nlth_field) == 'on' else 0
+
+        db.execute(
+            "UPDATE surgeons SET name = ?, call_levels = ?, nlth = ? WHERE id = ?",
+            (new_name, new_levels_str, new_nlth, sid)
+        )
     db.commit()
     flash("Surgeon updates applied successfully!")
     return redirect(url_for('list_surgeons'))
@@ -337,7 +149,9 @@ def global_config_page():
             "fairness_weight": request.form.get("fairness_weight", "1000"),
             "gamma_no_call": request.form.get("gamma_no_call", "10"),
             "gamma_unavail_prev": request.form.get("gamma_unavail_prev", "5"),
-            "gamma_1B": request.form.get("gamma_1B", "1")
+            "gamma_1B": request.form.get("gamma_1B", "1"),
+            "gamma_spacing": request.form.get("gamma_spacing", "10"),
+            "spacing_threshold": request.form.get("spacing_threshold", "7")
         })
         flash("Global configuration updated successfully!")
         return redirect(url_for('global_config_page'))
@@ -345,242 +159,6 @@ def global_config_page():
         config = get_global_config()
         return render_template('global_config.html', config=config)
 
-
-
-#############################################
-# OR‑Tools Scheduling Function (with Availability Constraints)
-#############################################
-
-def solve_schedule_or_tools(days, surgeons):
-    from ortools.sat.python import cp_model
-    import datetime
-    model = cp_model.CpModel()
-    num_days = len(days)
-
-    # Load global configuration weights.
-    global_config = get_global_config()
-    fairness_weight = int(global_config.get("fairness_weight", "1000"))
-    gamma_no_call = int(global_config.get("gamma_no_call", "10"))
-    gamma_unavail_prev = int(global_config.get("gamma_unavail_prev", "5"))
-    gamma_1B = int(global_config.get("gamma_1B", "1"))
-    gamma_balance = int(global_config.get("gamma_balance", "100"))
-    no_call_hard = global_config.get("no_call_hard", "1") == "1"
-    
-    # Get maximum calls configuration.
-    max_config = get_max_calls_config()  # e.g., {"1":10, "2":10, "3":10, "4":10}
-    
-    # Use actual surgeon IDs from the database.
-    id_to_surgeon = {s["id"]: s for s in surgeons}
-    all_surgeon_ids = [s["id"] for s in surgeons]
-    
-    # --- Build Domains (using actual IDs) ---
-    domain_1A = [s["id"] for s in surgeons if "1A" in parse_call_levels(s.get("call_levels", ""))]
-    if not domain_1A:
-        domain_1A = [-1]
-    domain_1B = [s["id"] for s in surgeons if "1B" in parse_call_levels(s.get("call_levels", ""))]
-    domain_1B = (domain_1B + [-1]) if domain_1B else [-1]
-    domain_2A = [s["id"] for s in surgeons if "2A" in parse_call_levels(s.get("call_levels", ""))]
-    if not domain_2A:
-        domain_2A = [-1]
-    domain_2B = [s["id"] for s in surgeons if "2B" in parse_call_levels(s.get("call_levels", "")) and get_level2_group(s) == 3]
-    if domain_2B:
-        domain_2B = domain_2B + [-1]
-    else:
-        domain_2B = [-1]
-    domain_3 = [s["id"] for s in surgeons if "3" in parse_call_levels(s.get("call_levels", ""))]
-    if not domain_3:
-        domain_3 = [-1]
-    domain_4 = [s["id"] for s in surgeons if "4" in parse_call_levels(s.get("call_levels", ""))]
-    if not domain_4:
-        domain_4 = [-1]
-    
-    all_levels = ["1A", "1B", "2A", "2B", "3", "4"]
-    
-    # --- Decision Variables ---
-    X = {}
-    for d in range(num_days):
-        X[(d, "1A")] = model.NewIntVarFromDomain(cp_model.Domain.FromValues(domain_1A), f'X_{d}_1A')
-        X[(d, "1B")] = model.NewIntVarFromDomain(cp_model.Domain.FromValues(domain_1B), f'X_{d}_1B')
-        X[(d, "2A")] = model.NewIntVarFromDomain(cp_model.Domain.FromValues(domain_2A), f'X_{d}_2A')
-        X[(d, "2B")] = model.NewIntVarFromDomain(cp_model.Domain.FromValues(domain_2B), f'X_{d}_2B')
-        X[(d, "3")]  = model.NewIntVarFromDomain(cp_model.Domain.FromValues(domain_3),  f'X_{d}_3')
-        X[(d, "4")]  = model.NewIntVarFromDomain(cp_model.Domain.FromValues(domain_4),  f'X_{d}_4')
-    
-    # --- Constraint Set 1: Within-Day Uniqueness for Forced Slots (levels 1A, 2A, 3, 4) ---
-    for d in range(num_days):
-        forced_vars = []
-        for level, dom in zip(["1A", "2A", "3", "4"], [domain_1A, domain_2A, domain_3, domain_4]):
-            if dom != [-1]:
-                forced_vars.append(X[(d, level)])
-        if len(forced_vars) > 1:
-            model.AddAllDifferent(forced_vars)
-    
-    # --- Constraint Set 2: 3-Day Gap ---
-    for d in range(num_days):
-        for d2 in range(d + 1, min(num_days, d + 3)):
-            for lev1 in all_levels:
-                for lev2 in all_levels:
-                    b1 = model.NewBoolVar(f'nonempty_{d}_{lev1}')
-                    b2 = model.NewBoolVar(f'nonempty_{d2}_{lev2}')
-                    model.Add(X[(d, lev1)] != -1).OnlyEnforceIf(b1)
-                    model.Add(X[(d, lev1)] == -1).OnlyEnforceIf(b1.Not())
-                    model.Add(X[(d2, lev2)] != -1).OnlyEnforceIf(b2)
-                    model.Add(X[(d2, lev2)] == -1).OnlyEnforceIf(b2.Not())
-                    model.Add(X[(d, lev1)] != X[(d2, lev2)]).OnlyEnforceIf([b1, b2])
-    
-    # --- New Constraint: Level 1 Pairing (1A and 1B must differ if 1B is assigned) ---
-    for d in range(num_days):
-        b1B = model.NewBoolVar(f'nonempty_1B_day_{d}')
-        model.Add(X[(d, "1B")] != -1).OnlyEnforceIf(b1B)
-        model.Add(X[(d, "1B")] == -1).OnlyEnforceIf(b1B.Not())
-        model.Add(X[(d, "1A")] != X[(d, "1B")]).OnlyEnforceIf(b1B)
-    
-    # --- Revised Level 2 Constraints ---
-    for d in range(num_days):
-        for s in domain_2A:
-            b = model.NewBoolVar(f'level2A_{d}_{s}')
-            model.Add(X[(d, "2A")] == s).OnlyEnforceIf(b)
-            model.Add(X[(d, "2A")] != s).OnlyEnforceIf(b.Not())
-            group = get_level2_group(id_to_surgeon[s])
-            if group == 1:
-                model.Add(X[(d, "2B")] != -1).OnlyEnforceIf(b)
-                model.Add(X[(d, "2B")] != s).OnlyEnforceIf(b)
-            else:
-                model.Add(X[(d, "2B")] == -1).OnlyEnforceIf(b)
-    
-    # --- Constraint Set 3: Maximum Calls per Group ---
-    indicators = {}
-    for d in range(num_days):
-        for level in all_levels:
-            for s in all_surgeon_ids:
-                indicators[(d, level, s)] = model.NewBoolVar(f'ind_{d}_{level}_{s}')
-                model.Add(X[(d, level)] == s).OnlyEnforceIf(indicators[(d, level, s)])
-                model.Add(X[(d, level)] != s).OnlyEnforceIf(indicators[(d, level, s)].Not())
-    
-    call_count_overall = {}
-    for s in all_surgeon_ids:
-        call_count_overall[s] = model.NewIntVar(0, num_days * len(all_levels), f'count_all_{s}')
-        model.Add(call_count_overall[s] == sum(indicators[(d, level, s)] for d in range(num_days) for level in all_levels))
-    
-    max_all = model.NewIntVar(0, num_days * len(all_levels), 'max_all')
-    min_all = model.NewIntVar(0, num_days * len(all_levels), 'min_all')
-    model.AddMaxEquality(max_all, [call_count_overall[s] for s in all_surgeon_ids])
-    model.AddMinEquality(min_all, [call_count_overall[s] for s in all_surgeon_ids])
-    
-    diff_all = model.NewIntVar(0, num_days * len(all_levels), 'diff_all')
-    model.Add(diff_all == max_all - min_all)
-    
-    # --- New Constraint: Availability / No Call Hard Constraints ---
-    availability = get_availability_requests()
-    for i, day in enumerate(days):
-        current_day = datetime.datetime.strptime(day, "%Y-%m-%d").date()
-        for s_id, req_list in availability.items():
-            for req in req_list:
-                try:
-                    req_date = datetime.datetime.strptime(req["date"], "%Y-%m-%d").date()
-                except Exception:
-                    continue
-                if req_date == current_day:
-                    if req["request_type"] == "unavailable":
-                        model.Add(sum(indicators[(i, lev, s_id)] for lev in all_levels) == 0)
-                    elif req["request_type"] == "no_call" and no_call_hard:
-                        model.Add(sum(indicators[(i, lev, s_id)] for lev in all_levels) == 0)
-    
-    # --- Soft Penalties for Availability ---
-    soft_penalties_unavail_prev = []
-    for i in range(num_days - 1):
-        next_day = datetime.datetime.strptime(days[i+1], "%Y-%m-%d").date()
-        for s_id, req_list in get_availability_requests().items():
-            for req in req_list:
-                try:
-                    req_date = datetime.datetime.strptime(req["date"], "%Y-%m-%d").date()
-                except Exception:
-                    continue
-                if req_date == next_day and req["request_type"] == "unavailable":
-                    for lev in all_levels:
-                        b = model.NewBoolVar(f'penalty_unavailprev_{i}_{lev}_{s_id}')
-                        model.Add(X[(i, lev)] == s_id).OnlyEnforceIf(b)
-                        model.Add(X[(i, lev)] != s_id).OnlyEnforceIf(b.Not())
-                        soft_penalties_unavail_prev.append(b)
-    
-    soft_penalties_nocall = []
-    if not no_call_hard:
-        for i, day in enumerate(days):
-            for s_id, req_list in get_availability_requests().items():
-                for req in req_list:
-                    try:
-                        req_date = datetime.datetime.strptime(req["date"], "%Y-%m-%d").date()
-                    except Exception:
-                        continue
-                    if req_date == datetime.datetime.strptime(day, "%Y-%m-%d").date() and req["request_type"] == "no_call":
-                        for lev in all_levels:
-                            b = model.NewBoolVar(f'penalty_nocall_{i}_{lev}_{s_id}')
-                            model.Add(X[(i, lev)] == s_id).OnlyEnforceIf(b)
-                            model.Add(X[(i, lev)] != s_id).OnlyEnforceIf(b.Not())
-                            soft_penalties_nocall.append(b)
-    
-    penalty_unavail_prev = model.NewIntVar(0, num_days * len(all_levels) * 10, 'penalty_unavail_prev')
-    if soft_penalties_unavail_prev:
-        model.Add(penalty_unavail_prev == sum(soft_penalties_unavail_prev))
-    else:
-        model.Add(penalty_unavail_prev == 0)
-    
-    penalty_nocall = model.NewIntVar(0, num_days * len(all_levels) * 10, 'penalty_nocall')
-    if soft_penalties_nocall:
-        model.Add(penalty_nocall == sum(soft_penalties_nocall))
-    else:
-        model.Add(penalty_nocall == 0)
-    
-    # --- Incentive for Optional Level 1B ---
-    indicator_1B = {}
-    for d in range(num_days):
-        indicator_1B[d] = model.NewBoolVar(f'nonempty_1B_{d}')
-        model.Add(X[(d, "1B")] != -1).OnlyEnforceIf(indicator_1B[d])
-        model.Add(X[(d, "1B")] == -1).OnlyEnforceIf(indicator_1B[d].Not())
-    total_1B = model.NewIntVar(0, num_days, 'total_1B')
-    model.Add(total_1B == sum(indicator_1B[d] for d in range(num_days)))
-    
-    # --- Additional Fairness: Penalize Deviation from Average Calls ---
-    # Let T be the total calls and N be the number of surgeons.
-    N = len(all_surgeon_ids)
-    T = model.NewIntVar(0, num_days * len(all_levels) * N, "T")
-    model.Add(T == sum(call_count_overall[s] for s in all_surgeon_ids))
-    deviations = {}
-    for s in all_surgeon_ids:
-        # diff = (call_count_overall[s]*N - T)
-        diff = model.NewIntVar(-num_days * len(all_levels) * N, num_days * len(all_levels) * N, f"diff_{s}")
-        model.Add(diff == call_count_overall[s] * N - T)
-        deviations[s] = model.NewIntVar(0, num_days * len(all_levels) * N, f"dev_{s}")
-        model.Add(deviations[s] >= diff)
-        model.Add(deviations[s] >= -diff)
-    deviation_sum = model.NewIntVar(0, num_days * len(all_levels) * N, "deviation_sum")
-    model.Add(deviation_sum == sum(deviations[s] for s in all_surgeon_ids))
-    
-    # --- Final Objective ---
-    model.Minimize(
-        fairness_weight * diff_all 
-        - gamma_1B * total_1B 
-        + gamma_no_call * penalty_nocall 
-        + gamma_unavail_prev * penalty_unavail_prev
-        + gamma_balance * deviation_sum
-    )
-    
-    # --- Solve the Model ---
-    solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = 30.0
-    status = solver.Solve(model)
-    if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        solution = {}
-        for d in range(num_days):
-            day_solution = {}
-            for level in all_levels:
-                s_id = solver.Value(X[(d, level)])
-                day_solution[level] = id_to_surgeon[s_id]["name"] if s_id != -1 else None
-            solution[days[d]] = day_solution
-        return solution, solver.ObjectiveValue()
-    else:
-        print("No solution found")
-        return None, None
           
 #############################################
 # Constraint weights Endpoints
@@ -594,12 +172,17 @@ def constraint_weights():
         gamma_no_call = request.form.get('gamma_no_call', '10')
         gamma_unavail_prev = request.form.get('gamma_unavail_prev', '5')
         gamma_1B = request.form.get('gamma_1B', '1')
+        gamma_spacing = request.form.get('gamma_spacing', '10')
+        spacing_threshold = request.form.get("spacing_threshold", "7")
+
         # Update global configuration.
         update_global_config({
             "fairness_weight": fairness_weight,
             "gamma_no_call": gamma_no_call,
             "gamma_unavail_prev": gamma_unavail_prev,
-            "gamma_1B": gamma_1B
+            "gamma_1B": gamma_1B,
+            "gamma_spacing": gamma_spacing,
+            "spacing_threshold": spacing_threshold
         })
         flash("Constraint weights updated successfully!")
         return redirect(url_for('constraint_weights'))
@@ -611,90 +194,135 @@ def constraint_weights():
 #############################################
 # Schedule Generation and Saving Endpoints
 #############################################
+def run_solver_job(job_id, days, surgeons, prev_schedule, public_holidays):
+    from scheduler import solve_schedule_or_tools
+    with app.app_context():
+        solve_jobs[job_id] = {'status':'running','best':None,'cancel':False,'solution':None}
+        # call your solver end‑to‑end
+        sched, cost = solve_schedule_or_tools(days, surgeons, prev_schedule, public_holidays)
+        if sched:
+            solve_jobs[job_id].update({'status':'done','solution':sched,'best':cost})
+        else:
+            solve_jobs[job_id]['status'] = 'failed'
 
 @app.route('/new_schedule', methods=['GET'])
 def new_schedule():
     import datetime, calendar, json
-    # Get year and month from query parameters (or default to today's values).
+    from scheduler import solve_schedule_or_tools
+
+    # ── 1) Ensure year/month are always in the URL ──
+    if not request.args.get('year') or not request.args.get('month'):
+        today = datetime.date.today()
+        return redirect(url_for(
+            'new_schedule',
+            year=today.year,
+            month=today.month
+        ))
+
+    # ── 2) Parse year & month ──
     year_sel, month_sel = get_year_month()
-    print("DEBUG: year_sel =", year_sel, "month_sel =", month_sel, "Query:", request.args)
 
-    # Generate a list of ISO-formatted day strings for the selected month.
-    days_sel = [datetime.date(year_sel, month_sel, d).isoformat()
-                for d in range(1, calendar.monthrange(year_sel, month_sel)[1] + 1)]
-    
+    # ── 3) Build list of days for that month ──
+    days_sel = [
+        datetime.date(year_sel, month_sel, d).isoformat()
+        for d in range(1, calendar.monthrange(year_sel, month_sel)[1] + 1)
+    ]
+
+    # ── 4) HK holidays ──
+    hk_h = holidays.HK(years=[year_sel])
+    public_holidays = {
+        d.isoformat() for d in hk_h 
+        if d.year == year_sel and d.month == month_sel
+    }
+
+    # ── 5) Load previous month (for 3‑day spacing) ──
+    if month_sel == 1:
+        prev_year, prev_month = year_sel - 1, 12
+    else:
+        prev_year, prev_month = year_sel, month_sel - 1
     db = get_db()
-    # Check if 'generate' flag is in query parameters.
-    generate_flag = request.args.get('generate')
-    print("DEBUG: generate_flag =", generate_flag)
+    prev_row = db.execute(
+        "SELECT schedule_data FROM saved_schedule WHERE year=? AND month=?",
+        (prev_year, prev_month)
+    ).fetchone()
+    prev_schedule = (
+        json.loads(prev_row['schedule_data'])
+        if prev_row else None
+    )
 
-    # Look up any saved schedule for the selected year and month.
+    # ── 6) Do we already have one in the DB? ──
     row = db.execute(
-        "SELECT * FROM saved_schedule WHERE year = ? AND month = ?",
+        "SELECT * FROM saved_schedule WHERE year=? AND month=?",
         (year_sel, month_sel)
     ).fetchone()
-    
-    if row is not None and not generate_flag:
-        # Found a saved schedule and the generate flag is not set.
-        sched = json.loads(row['schedule_data'])
-        cost = None  # (Optional: load cost if saved.)
-        print("DEBUG: Loading saved schedule for", year_sel, month_sel)
-    elif generate_flag:
-        # Generate a new schedule if the generate flag is set.
-        sched, cost = solve_schedule_or_tools(days_sel, get_all_surgeons())
+
+    generate_flag = request.args.get('generate')
+    if generate_flag:
+        # ▶︎ Preview only; do *not* save
+        surgeons = get_all_surgeons()
+        sched, cost = solve_schedule_or_tools(
+            days_sel,
+            surgeons,
+            prev_schedule=prev_schedule,
+            public_holidays=public_holidays
+        )
         if sched is None:
-            flash("No feasible schedule was found. Check configuration and surgeon eligibility.")
+            flash("No feasible schedule found.", "error")
             return render_template('no_schedule.html')
-        # If a record exists, update it; otherwise, insert a new record.
-        if row is not None:
-            db.execute(
-                "UPDATE saved_schedule SET schedule_data = ?, date_saved = datetime('now') WHERE year = ? AND month = ?",
-                (json.dumps(sched), year_sel, month_sel)
-            )
-            print("DEBUG: Updated schedule record for", year_sel, month_sel)
-        else:
-            db.execute(
-                "INSERT INTO saved_schedule (year, month, schedule_data, date_saved) VALUES (?, ?, ?, datetime('now'))",
-                (year_sel, month_sel, json.dumps(sched))
-            )
-            print("DEBUG: Inserted new schedule record for", year_sel, month_sel)
-        db.commit()
-        # Force a redirect to remove the generate flag.
-        redirect_url = f"/new_schedule?year={year_sel}&month={month_sel}"
-        print("DEBUG: Redirecting to", redirect_url)
-        return redirect(redirect_url)
     else:
-        # If no saved schedule exists and no generate flag is provided.
-        sched = None
+        # ▶︎ No preview request → show the saved one (if any)
         cost = None
-        print("DEBUG: No saved schedule found for", year_sel, month_sel)
-    
-    # Compute the set of weekend days.
-    weekend_set = {d for d in days_sel if datetime.date.fromisoformat(d).weekday() >= 5}
-    
-    return render_template('new_schedule.html', schedule=sched, cost=cost,
-                           weekend_set=weekend_set, year=year_sel, month=month_sel)
+        sched = (
+            json.loads(row['schedule_data'])
+            if row else None
+        )
+
+    # ── 7) Compute weekends set ──
+    weekend_set = {
+        d for d in days_sel
+        if datetime.date.fromisoformat(d).weekday() >= 5
+    }
+
+    # ── 8) Render in both cases ──
+    return render_template(
+        'new_schedule.html',
+        schedule=sched,
+        cost=cost,
+        weekend_set=weekend_set,
+        public_holidays=public_holidays,
+        year=year_sel,
+        month=month_sel
+    )
+
 
 @app.route('/save_schedule', methods=['POST'])
 def save_schedule():
-    generated = session.get('last_generated_schedule')
-    cost = session.get('last_generated_cost')
-    year_sel = session.get('generated_year')
-    month_sel = session.get('generated_month')
-    if not generated or year_sel is None or month_sel is None:
-        flash("No generated schedule to save.")
-        return redirect(url_for('new_schedule'))
+    year, month = int(request.form['year']), int(request.form['month'])
+    data = request.form.get('schedule_json')
+    if not data:
+        flash("No schedule data provided to save.", "error")
+        return redirect(url_for('new_schedule', year=year, month=month))
+
     db = get_db()
-    row = db.execute("SELECT * FROM saved_schedule WHERE year = ? AND month = ?", (year_sel, month_sel)).fetchone()
-    if row:
-        db.execute("UPDATE saved_schedule SET schedule_data = ?, date_saved = datetime('now') WHERE year = ? AND month = ?",
-                   (generated, year_sel, month_sel))
+    exists = db.execute(
+        "SELECT 1 FROM saved_schedule WHERE year=? AND month=?",
+        (year, month)
+    ).fetchone()
+    if exists:
+        db.execute(
+            "UPDATE saved_schedule SET schedule_data=?, date_saved=datetime('now') "
+            "WHERE year=? AND month=?",
+            (data, year, month)
+        )
     else:
-        db.execute("INSERT INTO saved_schedule (year, month, schedule_data, date_saved) VALUES (?, ?, ?, datetime('now'))",
-                   (year_sel, month_sel, generated))
+        db.execute(
+            "INSERT INTO saved_schedule (year, month, schedule_data, date_saved) "
+            "VALUES (?, ?, ?, datetime('now'))",
+            (year, month, data)
+        )
     db.commit()
-    flash("Schedule saved successfully.")
-    return redirect(url_for('saved_schedule', year=year_sel, month=month_sel))
+    flash("Schedule saved.", "success")
+    return redirect(url_for('new_schedule', year=year, month=month))
 
 @app.route('/saved_schedule', methods=['GET'])
 def saved_schedule():
@@ -810,6 +438,22 @@ def delete_availability():
     return redirect(url_for('availability', surgeon_id=surgeon_id))
 
 #############################################
+# Delete Surgeon Endpoint
+#############################################
+
+@app.route('/surgeons/delete/<int:surgeon_id>', methods=['POST'])
+def delete_surgeon(surgeon_id):
+    db = get_db()
+    # First, clean up any related availability records:
+    db.execute("DELETE FROM surgeon_availability WHERE surgeon_id = ?", (surgeon_id,))
+    # Then delete the surgeon:
+    db.execute("DELETE FROM surgeons WHERE id = ?", (surgeon_id,))
+    db.commit()
+    flash("Surgeon deleted successfully.", "success")
+    return redirect(url_for('list_surgeons'))
+
+
+#############################################
 # Stats endpoint
 #############################################
 
@@ -900,12 +544,80 @@ def stats():
                            end_year=end_year, end_month=end_month)
 
 #############################################
+# Start, poll, cancel endpoints
+#############################################
+
+# --- Route to start a new solve job ---
+@app.route('/start_solve', methods=['POST'])
+def start_solve():
+    data = request.get_json()
+    year, month = int(data['year']), int(data['month'])
+
+    # Build days list
+    days = [
+        datetime.date(year, month, d).isoformat()
+        for d in range(1, calendar.monthrange(year, month)[1] + 1)
+    ]
+
+    # Load previous month’s schedule
+    if month == 1:
+        prev_year, prev_month = year - 1, 12
+    else:
+        prev_year, prev_month = year, month - 1
+    db = get_db()
+    prev_row = db.execute(
+        "SELECT schedule_data FROM saved_schedule WHERE year=? AND month=?",
+        (prev_year, prev_month)
+    ).fetchone()
+    prev_schedule = json.loads(prev_row['schedule_data']) if prev_row else None
+
+    # Compute HK public holidays
+    hk_h = holidays.HK(years=[year])
+    public_holidays = {
+        d.isoformat() for d in hk_h
+        if d.year == year and d.month == month
+    }
+
+    surgeons = get_all_surgeons()
+
+    job_id = uuid.uuid4().hex
+    threading.Thread(
+        target=run_solver_job,
+        args=(job_id, days, surgeons, prev_schedule, public_holidays),
+        daemon=True
+    ).start()
+    
+    return jsonify({'job_id': job_id})
+
+# --- Route to poll status of a job ---
+@app.route('/solve_status/<job_id>')
+def solve_status(job_id):
+    job = solve_jobs.get(job_id)
+    if not job:
+        return jsonify({'status': 'unknown'}), 404
+    resp = {
+        'status': job['status'],
+        'best':   job['best']
+    }
+    if job['status'] == 'done':
+        resp['solution'] = job['solution']
+    return jsonify(resp)
+
+# --- Route to cancel a running job ---
+@app.route('/cancel_solve/<job_id>', methods=['POST'])
+def cancel_solve(job_id):
+    job = solve_jobs.get(job_id)
+    if job and job['status'] == 'running':
+        job['cancel'] = True
+        return jsonify({'status': 'cancelling'})
+    return jsonify({'status': 'not_found'}), 404
+
+
+#############################################
 # Run the App
 #############################################
 if __name__ == '__main__':
-    import os
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    # On Windows, disable the threaded server to avoid socket.fromfd
+    app.run(host='0.0.0.0', port=5000, debug=True, threaded=True, use_reloader=False)
 
-if __name__ == '__main__':
-    app.run(debug=True)
 
