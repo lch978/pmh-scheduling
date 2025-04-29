@@ -70,7 +70,7 @@
   <div class="schedule-header">
     <h1>Schedule for {{ year }}-{{ '%02d'|format(month) }}</h1>
   </div>
-
+<br>
   <div class="schedule-form">
     <label for="year">Year:</label>
     <select id="year">
@@ -88,11 +88,34 @@
     <button type="button" id="btnGen">Generate New Schedule</button>
     <button type="button" id="btnStop" disabled>Stop</button>
   </div>
-
-  <div id="progress">
-    <p>Status: <span id="status">idle</span></p>
-    <p>Best Objective So Far: <span id="best">n/a</span></p>
+<br>
+<div id="progress" style="text-align:center; margin-top:10px;">
+  <p>Status: <span id="status">idle</span></p>
+  <p>Best Objective So Far: <span id="best">n/a</span></p>
+</div>
+<br>
+<!-- Loading Modal -->
+<div id="loadingModal"
+     style="
+       display: none;
+       position: fixed;
+       inset: 0;
+       background: rgba(0,0,0,0.5);
+       align-items: center;
+       justify-content: center;
+     ">
+  <div style="
+       background: white;
+       padding: 1.5rem;
+       border-radius: 0.5rem;
+       width: 20rem;
+     ">
+    <h3 style="text-align:center; margin-bottom:1rem;">Generating schedule…</h3>
+    <div style="width:100%; background:#eee; height:0.75rem; border-radius:0.375rem; overflow:hidden;">
+      <div id="modalLoadingBar" style="height:100%; width:0%; background:#3b82f6; transition:width 0.1s linear;"></div>
+    </div>
   </div>
+</div>
 
   <div id="scheduleContainer">
     {% if schedule %}
@@ -131,87 +154,165 @@
       <input type="hidden" name="schedule_json" id="schedule_json">
       <button type="submit" id="btnSave">Save Schedule</button>
     </form>
+
+    <!-- Export to Excel -->
+    <form method="post" action="{{ url_for('export_schedule') }}" style="display:inline-block; margin-left:1em;">
+      <input type="hidden" name="year" value="{{ year }}">
+      <input type="hidden" name="month" value="{{ month }}">
+      <!-- reuse the same hidden JSON -->
+      <input type="hidden" name="schedule_json" id="export_schedule_json" value="">
+      <button type="submit" id="btnExport">Download Excel</button>
+    </form>
   </div>
 </div>
 
+
 <script>
-  // Expose initial schedule & sets for JS
-  const initialSchedule   = {{ schedule|default({})|tojson }};
-  const weekendSet        = new Set({{ weekend_set|list|tojson }});
-  const publicHolidaysSet = new Set({{ public_holidays|list|tojson }});
-  let currentSolution     = initialSchedule;
-
   document.addEventListener('DOMContentLoaded', () => {
-    // initialize save-payload with whatever is loaded
-    document.getElementById('schedule_json').value = JSON.stringify(currentSolution);
-  });
+    // 1) Capture the existing schedule from the server:
+    const initialSchedule = {{ schedule|tojson }};
+    const weekendSet      = new Set({{ weekend_set|list|tojson }});
+    const publicHolidays  = new Set({{ public_holidays|list|tojson }});
 
-  // Load saved schedule by reloading with year/month in query
-  document.getElementById('btnLoad').onclick = () => {
-    const y = document.getElementById('year').value;
-    const m = document.getElementById('month').value;
-    window.location = `?year=${y}&month=${m}`;
-  };
+    // grab references
+    const modal   = document.getElementById('loadingModal');
+    const bar     = document.getElementById('modalLoadingBar');
+    const btnGen  = document.getElementById('btnGen');
+    const btnLoad = document.getElementById('btnLoad');
+    const btnStop = document.getElementById('btnStop');
+    let   currentJob = null;
 
-  // Kick off an async solve job
-  document.getElementById('btnGen').onclick = async () => {
-    const y = document.getElementById('year').value;
-    const m = document.getElementById('month').value;
-    const res = await fetch('/start_solve', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ year: y, month: m })
-    });
-    const { job_id } = await res.json();
-    window.currentJob = job_id;
-    document.getElementById('status').innerText = 'running';
-    document.getElementById('btnStop').disabled = false;
-    pollStatus();
-  };
+    // initialize both hidden JSON fields
+    const saveInput   = document.getElementById('schedule_json');
+    const exportInput = document.getElementById('export_schedule_json');
+    const initJSON    = JSON.stringify(initialSchedule);
+    saveInput.value   = initJSON;
+    exportInput.value = initJSON;
 
-  // Cancel an in-flight job
-  document.getElementById('btnStop').onclick = () => {
-    if (!window.currentJob) return;
-    fetch(`/cancel_solve/${window.currentJob}`, { method: 'POST' });
-    document.getElementById('status').innerText = 'cancelling';
-  };
-
-  // Poll until done or cancelled
-  async function pollStatus() {
-    if (!window.currentJob) return;
-    const res  = await fetch(`/solve_status/${window.currentJob}`);
-    const data = await res.json();
-    document.getElementById('status').innerText = data.status;
-    document.getElementById('best').innerText   = data.best ?? 'n/a';
-    if (data.status === 'running') {
-      setTimeout(pollStatus, 1000);
-    } else if (data.status === 'done') {
-      renderSchedule(data.solution);
-      document.getElementById('btnStop').disabled = true;
-      // update save payload
-      document.getElementById('schedule_json').value = JSON.stringify(currentSolution);
-    }
-  }
-
-  // Replace the HTML table with the new solution
-  function renderSchedule(sol) {
-    currentSolution = sol;
-    const container = document.getElementById('scheduleContainer');
-    let html = '<table class="schedule-table"><thead><tr><th>Date</th>'
-             + ['1A','1B','2A','2B','3','4'].map(l=>`<th>${l}</th>`).join('')
-             + '</tr></thead><tbody>';
-    for (const day of Object.keys(sol)) {
-      const classes = [];
-      if (weekendSet.has(day))        classes.push('weekend');
-      if (publicHolidaysSet.has(day)) classes.push('holiday');
-      html += `<tr class="${classes.join(' ')}"><td>${day}</td>`;
-      for (const lvl of ['1A','1B','2A','2B','3','4']) {
-        html += `<td>${sol[day][lvl] || ''}</td>`;
+    // helper to show/hide the 30s modal
+    function showPopupProgress(duration = 30000) {
+      modal.style.display = 'flex';
+      bar.style.width     = '0%';
+      const start = Date.now();
+      function tick() {
+        const pct = Math.min(100, (Date.now() - start) / duration * 100);
+        bar.style.width = pct + '%';
+        if (pct < 100) requestAnimationFrame(tick);
       }
-      html += '</tr>';
+      requestAnimationFrame(tick);
+      // fallback
+      setTimeout(hidePopupProgress, duration);
     }
-    html += '</tbody></table>';
-    container.innerHTML = html;
-  }
+    function hidePopupProgress() {
+      modal.style.display = 'none';
+    }
+
+    // redraw the table and update hidden fields + URL + forms
+    function renderSchedule(sol) {
+      // rebuild HTML
+      const container = document.getElementById('scheduleContainer');
+      let html = '<table class="schedule-table"><thead><tr><th>Date</th>'
+               + ['1A','1B','2A','2B','3','4']
+                 .map(l=>`<th>${l}</th>`).join('')
+               + '</tr></thead><tbody>';
+      for (const day of Object.keys(sol)) {
+        const classes = [];
+        if (weekendSet.has(day))   classes.push('weekend');
+        if (publicHolidays.has(day)) classes.push('holiday');
+        html += `<tr class="${classes.join(' ')}"><td>${day}</td>`;
+        for (const lvl of ['1A','1B','2A','2B','3','4']) {
+          html += `<td>${sol[day][lvl]||''}</td>`;
+        }
+        html += '</tr>';
+      }
+      html += '</tbody></table>';
+      container.innerHTML = html;
+
+      // stringified JSON
+      const schedJSON = JSON.stringify(sol);
+
+      // update hidden inputs
+      saveInput.value   = schedJSON;
+      exportInput.value = schedJSON;
+
+      // update forms in case year/month changed in the selects
+      const y = document.getElementById('year').value;
+      const m = document.getElementById('month').value;
+      // save form
+      const saveForm = document.querySelector('form[action$="save_schedule"]');
+      saveForm.elements['year'].value          = y;
+      saveForm.elements['month'].value         = m;
+      saveForm.elements['schedule_json'].value = schedJSON;
+      // export form
+      const expForm = document.querySelector('form[action$="export_schedule"]');
+      expForm.elements['year'].value          = y;
+      expForm.elements['month'].value         = m;
+      expForm.elements['schedule_json'].value = schedJSON;
+
+      // bump the URL so “Save”/“Export” will post to the right ?year=…&month=…
+      window.history.replaceState(null, '', `?year=${y}&month=${m}`);
+    }
+
+    // poll until done
+    async function pollStatus() {
+      try {
+        const res  = await fetch(`/solve_status/${currentJob}`);
+        const data = await res.json();
+        document.getElementById('status').innerText = data.status;
+        document.getElementById('best')  .innerText = data.best ?? 'n/a';
+
+        if (data.status === 'running') {
+          setTimeout(pollStatus, 1000);
+        } else {
+          // DONE or FAILED
+          hidePopupProgress();
+          btnStop.disabled = true;
+          if (data.status === 'done') {
+            renderSchedule(data.solution);
+          }
+        }
+      } catch (err) {
+        console.error(err);
+        hidePopupProgress();
+        btnStop.disabled = true;
+      }
+    }
+
+    // handlers
+    btnLoad.addEventListener('click', () => {
+      hidePopupProgress();
+      const y = document.getElementById('year').value;
+      const m = document.getElementById('month').value;
+      window.location = `?year=${y}&month=${m}`;
+    });
+
+    btnGen.addEventListener('click', async () => {
+      showPopupProgress(45000);
+      const y = +document.getElementById('year').value;
+      const m = +document.getElementById('month').value;
+      const res = await fetch('/start_solve', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ year: y, month: m })
+      });
+      const { job_id } = await res.json();
+      currentJob = job_id;
+      document.getElementById('status').innerText = 'running';
+      btnStop.disabled = false;
+      pollStatus();
+    });
+
+    btnStop.addEventListener('click', () => {
+      if (!currentJob) return;
+      fetch(`/cancel_solve/${currentJob}`, { method: 'POST' })
+        .finally(() => {
+          hidePopupProgress();
+          btnStop.disabled = true;
+        });
+      document.getElementById('status').innerText = 'cancelling';
+    });
+  });
 </script>
+
+
 {% endblock %}

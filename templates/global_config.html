@@ -13,41 +13,95 @@
     <div style="margin: 15px 0;">
       <label for="fairness_weight">Fairness Weight (diff_all multiplier):</label>
       <br>
-      <input type="range" id="fairness_weight" name="fairness_weight" min="0" max="20000" value="{{ config.get('fairness_weight', '1000') }}" style="width: 80%;">
-      <span id="fw_display">{{ config.get('fairness_weight', '1000') }}</span>
+      <input type="range" id="fairness_weight" name="fairness_weight" min="0" max="20000" value="{{ config.get('fairness_weight', '1000') }}" style="width: 80%;"
+	oninput="fairness_weightOutput.textContent = this.value">
+      <span id="fairness_weightOutput" class="w-12 text-right">{{ config.get('fairness_weight', '1000') }}</span>
     </div>
+
     <div style="margin: 15px 0;">
       <label for="gamma_no_call">Gamma (No Call Penalty):</label>
       <br>
-      <input type="range" id="gamma_no_call" name="gamma_no_call" min="0" max="500" value="{{ config.get('gamma_no_call', '10') }}" style="width: 80%;">
-      <span id="gnc_display">{{ config.get('gamma_no_call', '10') }}</span>
+      <input type="range" id="gamma_no_call" name="gamma_no_call" min="0" max="500" value="{{ config.get('gamma_no_call', '10') }}" style="width: 80%;"
+	oninput="gamma_no_callOutput.textContent = this.value">
+      <span id="gamma_no_callOutput" class="w-12 text-right">{{ config.get('gamma_no_call', '10') }}</span>
     </div>
+
     <div style="margin: 15px 0;">
       <label for="gamma_unavail_prev">Gamma (Unavailable Prev-Day Penalty):</label>
       <br>
-      <input type="range" id="gamma_unavail_prev" name="gamma_unavail_prev" min="0" max="500" value="{{ config.get('gamma_unavail_prev', '5') }}" style="width: 80%;">
-      <span id="gup_display">{{ config.get('gamma_unavail_prev', '5') }}</span>
+      <input type="range" id="gamma_unavail_prev" name="gamma_unavail_prev" min="0" max="500" value="{{ config.get('gamma_unavail_prev', '5') }}" style="width: 80%;"
+      oninput="gamma_unavail_prevOutput.textContent = this.value">
+      <span id="gamma_unavail_prevOutput" class="w-12 text-right">{{ config.get('gamma_unavail_prev', '5') }}</span>
     </div>
+
     <div style="margin: 15px 0;">
       <label for="gamma_1B">Gamma (Level 1B Incentive):</label>
       <br>
       <!-- Increased max value from 100 to 500 here -->
-      <input type="range" id="gamma_1B" name="gamma_1B" min="0" max="500" value="{{ config.get('gamma_1B', '1') }}" style="width: 80%;">
-      <span id="g1b_display">{{ config.get('gamma_1B', '1') }}</span>
+      <input type="range" id="gamma_1B" name="gamma_1B" min="0" max="500" value="{{ config.get('gamma_1B', '1') }}" 	style="width: 80%;"
+	oninput="gamma_1BOutput.textContent = this.value">
+      <span id="gamma_1BOutput" class="w-12 text-right">{{ config.get('gamma_1B', '1') }}</span>
     </div>
+
     <div style="margin: 15px 0;">
   	<label for="gamma_spacing">Gamma (Close‑Call Penalty):</label><br>
   	<input type="range" id="gamma_spacing" name="gamma_spacing" min="0" max="100" 
-         value="{{ config.get('gamma_spacing','10') }}" style="width:80%;">
-  	<span id="gs_display">{{ config.get('gamma_spacing','10') }}</span>
+         value="{{ config.get('gamma_spacing','10') }}" style="width:80%;"
+         oninput="gamma_spacingOutput.textContent = this.value">
+  	<span id="gamma_spacingOutput" class="w-12 text-right">{{ config.get('gamma_spacing','10') }}</span>
     </div>
     <div style="margin: 15px 0;">
   	<label for="spacing_threshold">Spacing Threshold (days):</label><br>
   	<input type="range" id="spacing_threshold" name="spacing_threshold" min="1" max="14" 
-         value="{{ config.get('spacing_threshold','7') }}" style="width:80%;">
-  	<span id="st_display">{{ config.get('spacing_threshold','7') }}</span>
+         value="{{ config.get('spacing_threshold','7') }}" style="width:80%;"
+	oninput="spacing_thresholdOutput.textContent = this.value">
+  	<span id="spacing_thresholdOutput" class="w-12 text-right">{{ config.get('spacing_threshold','7') }}</span>
     </div>
-    <br>
+  <div>
+    <label for="gamma_team_pref" class="block font-medium">Team-Day Penalty Weight</label>
+    <input
+      type="range"
+      name="gamma_team_pref"
+      id="gamma_team_pref"
+      min="0"
+      max="100"
+      value="{{ config.gamma_team_pref or '10' }}"
+      oninput="teamPrefOutput.textContent = this.value"
+      style="width:80%;">
+      <span id="teamPrefOutput" class="w-12 text-right"> {{ config.gamma_team_pref or '10' }}</span>
+  </div>
+<br><br><br>
+{% set day_names = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'] %}
+
+<h2 class="mt-6 text-xl font-semibold">Team-Day Call Preferences</h2>
+<table class="w-full table-auto border-collapse mb-6">
+  <thead>
+    <tr>
+      <th class="border px-2 py-1 bg-gray-100">Team \ Day</th>
+      {% for day in day_names %}
+        <th class="border px-2 py-1 bg-gray-100">{{ day }}</th>
+      {% endfor %}
+    </tr>
+  </thead>
+  <tbody>
+    {% for team in teams %}
+      <tr>
+        <td class="border px-2 py-1 font-medium">{{ team }}</td>
+        {% for day in day_names %}
+          {% set wd = loop.index0 %}
+          <td class="border px-2 py-1">
+            <select name="pref_{{ team }}_{{ wd }}" class="w-full p-1 border rounded">
+              <option value="-1" {% if prefs[team].get(wd) == -1 %}selected{% endif %}>Decrease</option>
+              <option value="0"  {% if prefs[team].get(wd) ==  0 %}selected{% endif %}>No change</option>
+              <option value="1"  {% if prefs[team].get(wd) ==  1 %}selected{% endif %}>Increase</option>
+            </select>
+          </td>
+        {% endfor %}
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>
+<br>
     <button type="submit" style="padding: 10px 20px; font-size: 16px; cursor: pointer;">Update Global Configuration</button>
   </form>
 

@@ -1,24 +1,43 @@
-{% extends "base.html" %}
+<!-- templates/surgeon_form.html -->
+{% extends 'base.html' %}
+
 {% block title %}{{ action }} Surgeon{% endblock %}
+
 {% block content %}
-  <h1 style="text-align: center;">{{ action }} Surgeon</h1>
-  <form method="post" action="" style="text-align: center; margin-top:20px;">
+  <h1 class="text-2xl font-bold mb-4">{{ action }} Surgeon</h1>
+  <form method="post" class="space-y-4">
     <div>
-      <label for="name">Name:</label>
-      <input type="text" name="name" id="name" value="{{ surgeon.name if surgeon.name else '' }}" required>
+      <label for="name" class="block font-medium">Name</label>
+      <input type="text" id="name" name="name" value="{{ surgeon.name or '' }}" required class="w-full p-2 border rounded" />
     </div>
-    <br>
+
     <div>
-      <label>Select Call Levels:</label>
-      <br>
-      {% set levels = ['1A','1B','2A','2B','3','4'] %}
-      {% for level in levels %}
-        <input type="checkbox" name="call_levels" value="{{ level }}"
-          {% if surgeon.call_levels and level in surgeon.call_levels %}checked{% endif %}>
-        {{ level }}
-      {% endfor %}
+      <span class="block font-medium">Call Levels</span>
+      <div class="flex flex-wrap gap-2 mt-1">
+        {% for lvl in ['1A','1B','2A','2B','3','4'] %}
+          <label class="inline-flex items-center">
+            <input type="checkbox" name="call_levels" value="{{ lvl }}" {% if lvl in surgeon.call_levels.split(',') %}checked{% endif %} class="mr-1" />
+            {{ lvl }}
+          </label>
+        {% endfor %}
+      </div>
     </div>
-    <br>
-    <button type="submit">{{ action }} Surgeon</button>
+
+    <div>
+      <label for="team" class="block font-medium">Team</label>
+      <select id="team" name="team" class="w-full p-2 border rounded mt-1">
+        <option value="" {% if not surgeon.team %}selected{% endif %}>&mdash; None &mdash;</option>
+        <option value="Team 1" {% if surgeon.team == 'Team 1' %}selected{% endif %}>Team 1</option>
+        <option value="Team 2" {% if surgeon.team == 'Team 2' %}selected{% endif %}>Team 2</option>
+        <option value="Team 3" {% if surgeon.team == 'Team 3' %}selected{% endif %}>Team 3</option>
+        <option value="Team 4" {% if surgeon.team == 'Team 4' %}selected{% endif %}>Team 4</option>
+        <option value="Urology" {% if surgeon.team == 'Urology' %}selected{% endif %}>Urology</option>
+      </select>
+    </div>
+
+    <div class="flex space-x-2">
+      <button type="submit" class="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700">{{ action }} Surgeon</button>
+      <a href="{{ url_for('list_surgeons') }}" class="px-4 py-2 bg-gray-300 rounded hover:bg-gray-400">Cancel</a>
+    </div>
   </form>
 {% endblock %}

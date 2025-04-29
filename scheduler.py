@@ -1,23 +1,28 @@
 import datetime
 from dateutil.parser import parse
 from ortools.sat.python import cp_model
+import itertools
 
 ############################# ################
 # OR‑Tools Scheduling Function (with Availability Constraints)
 #############################################
 
-def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=None):
+def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=None, preassignments=None):
     from helper import (
         get_max_calls_config,
         get_global_config,
         get_availability_requests,
         parse_call_levels,
         get_level2_group,
+        get_team_day_prefs
     )
     model = cp_model.CpModel()
     num_days = len(days)
     all_levels = ["1A","1B","2A","2B","3","4"]
     all_ids    = [s["id"] for s in surgeons]
+    nlth_ids = [s["id"] for s in surgeons if s.get("nlth")]
+
+    team_day_prefs = get_team_day_prefs()
 
     # Load global configuration weights.
     global_config = get_global_config()
@@ -33,6 +38,7 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
 
     gamma_weekend_balance = int(global_config.get("gamma_weekend_balance", "50"))
     gamma_consec_weekend = int(global_config.get("gamma_consec_weekend", "20"))
+    gamma_team_pref = int(global_config.get("gamma_team_pref", "10"))
 
     # Get maximum calls configuration.
     max_config = get_max_calls_config()  # e.g., {"1":10, "2":10, "3":10, "4":10}
@@ -46,7 +52,8 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
     if not domain_1A:
         domain_1A = [-1]
     domain_1B = [s["id"] for s in surgeons if "1B" in parse_call_levels(s.get("call_levels", ""))] 
-    domain_1B = domain_1B + [-1]     # now never empty
+    if not domain_1B:
+        domain_1B = [-1]
     domain_2A = [s["id"] for s in surgeons if "2A" in parse_call_levels(s.get("call_levels", ""))]
     if not domain_2A:
         domain_2A = [-1]
@@ -80,24 +87,26 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
         d: { lvl: list(base_domains[lvl]) for lvl in base_domains }
         for d in range(num_days)
     }
-    availability = get_availability_requests()
-    print("RAW availability data:", availability)
 
-    for i, day_str in enumerate(days):
+    availability = get_availability_requests()
+
+    for d, day_str in enumerate(days):
         current_date = datetime.datetime.strptime(day_str, "%Y-%m-%d").date()
         for s_id, req_list in availability.items():
             for req in req_list:
-                # parse the request’s date
-                req_date = datetime.datetime.strptime(req["date"], "%Y-%m-%d").date()
-                if req_date == current_date and req["request_type"] in ("unavailable","no_call") and no_call_hard:
+                # req is a tuple: (surgeon_id, request_type, date)
+                raw = req.get('date')
+                if isinstance(raw, datetime.date):
+                    req_date = raw
+                else:
+                    try:
+                        req_date = datetime.datetime.strptime(raw, "%Y-%m-%d").date()
+                    except:
+                        continue
+                if req_date == current_date and req.get('request_type') in ("unavailable","no_call") and no_call_hard:
                     for lvl in all_levels:
-                        if s_id in domains_by_day[i][lvl]:
-                            print(f"→ banning surgeon {s_id} on {day_str}/{lvl}")
-                            domains_by_day[i][lvl].remove(s_id)
-
-    print("\nDOMAINS AFTER BANS:")
-    for i, day_str in enumerate(days):
-        print(day_str, domains_by_day[i])
+                        if s_id in domains_by_day[d][lvl]:
+                            domains_by_day[d][lvl].remove(s_id)
     
     indicator_1B = {}
 
@@ -120,9 +129,44 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
         model.Add(X[(d, "1B")] == -1).OnlyEnforceIf(b1B.Not())
         indicator_1B[d] = b1B
 
+    print("Preassignments:", preassignments)
+    # ----- Apply Preassignment Constraints -----
+    # If preassignments is provided, force the variable to match the assigned surgeon.
+    # Expected format: { "YYYY-MM-DD": { "1A": surgeon_id, "3": surgeon_id, ... }, ... }
+    if preassignments:
+        for d, day_str in enumerate(days):
+            if day_str in preassignments:
+                for level, surgeon_id in preassignments[day_str].items():
+                    # Ensure surgeon_id is an integer, if not already.
+                    try:
+                        assigned_id = int(surgeon_id)
+                    except Exception:
+                        print(f"Error converting surgeon id {surgeon_id} on {day_str} at level {level}")
+                        continue
+                    # Debug print: show available domain for that slot.
+                    print(f"Day {day_str} level {level} domain: {domains_by_day[d][level]}, preassigned: {assigned_id}")
+                    # Enforce the constraint unconditionally:
+                    model.Add(X[(d, level)] == assigned_id)
+
+# prevent same surgeon from being assigned twice on same day
+
+    for d, day_str in enumerate(days):
+        print(f"\nChecking level‐pairs on {day_str}:")
+        for lvl1, lvl2 in itertools.combinations(all_levels, 2):
+            # compute the real candidates for each slot
+            c1 = set(domains_by_day[d][lvl1]) - {-1}
+            c2 = set(domains_by_day[d][lvl2]) - {-1}
+            # if both are to be filled, they each need ≥1 candidate...
+            if not c1 or not c2:
+                print(f"  • One of {lvl1}/{lvl2} has no candidates: {lvl1}→{c1}, {lvl2}→{c2}")
+            # ...and together they need ≥2 **distinct** candidates
+            elif len(c1 | c2) < 2:
+                print(f"  ✖ Pair ({lvl1},{lvl2}) has only {len(c1|c2)} distinct candidates: {c1|c2}")
+
+
     ### for fully staffing
     fully_staffed = []
-    BigDayPenalty = 100000  # big enough to outweigh any other trade‑off
+    BigDayPenalty = 100  # big enough to outweigh any other trade‑off
 
     for d in range(num_days):
         # one BoolVar per (d,level) signaling “that slot is filled”
@@ -146,15 +190,25 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
         total_1B = model.NewIntVar(0, num_days, 'total_1B')
         model.Add(total_1B == sum(indicator_1B[d] for d in range(num_days)))
 
-    # --- Constraint Set 1: Within-Day Uniqueness for Forced Slots (levels 1A, 2A, 3, 4) ---
+    indicators = {}
+        # --- Prevent any surgeon from having two calls on the same day ---
     for d in range(num_days):
-        forced_vars = []
-        for level, dom in zip(["1A", "2A", "3", "4"], [domain_1A, domain_2A, domain_3, domain_4]):
-            if dom != [-1]:
-                forced_vars.append(X[(d, level)])
-        if len(forced_vars) > 1:
-            model.AddAllDifferent(forced_vars)
-    
+        for lvl1 in all_levels:
+            for lvl2 in all_levels:
+                if lvl1 >= lvl2:
+                    continue
+                # only enforce uniqueness if both slots are actually filled
+                b1 = model.NewBoolVar(f"filled_{d}_{lvl1}_dupcheck")
+                b2 = model.NewBoolVar(f"filled_{d}_{lvl2}_dupcheck")
+                # b1 == 1 ↔ X[(d,lvl1)] != -1
+                model.Add(X[(d, lvl1)] != -1).OnlyEnforceIf(b1)
+                model.Add(X[(d, lvl1)] == -1).OnlyEnforceIf(b1.Not())
+                # b2 == 1 ↔ X[(d,lvl2)] != -1
+                model.Add(X[(d, lvl2)] != -1).OnlyEnforceIf(b2)
+                model.Add(X[(d, lvl2)] == -1).OnlyEnforceIf(b2.Not())
+                # if both filled, they must not be the same surgeon
+                model.Add(X[(d, lvl1)] != X[(d, lvl2)]).OnlyEnforceIf([b1, b2])
+
     # --- Constraint Set 2: 3-Day Gap ---
     for d in range(num_days):
         for d2 in range(d + 1, min(num_days, d + 3)):
@@ -167,41 +221,70 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                     model.Add(X[(d2, lev2)] != -1).OnlyEnforceIf(b2)
                     model.Add(X[(d2, lev2)] == -1).OnlyEnforceIf(b2.Not())
                     model.Add(X[(d, lev1)] != X[(d2, lev2)]).OnlyEnforceIf([b1, b2])
+
+### Enforce 3 day gap for the last 3 days of the previous month as well
+#               
     if prev_schedule:
-        # Map names back to IDs
+    # Map surgeon names to IDs (assuming prev_schedule stores names)
         name_to_id = {s["name"]: s["id"] for s in surgeons}
-        # Parse prev dates into datetime.date
-        prev_dates = [
+        # Parse previous schedule dates into date objects and sort them.
+        prev_dates = sorted([
             datetime.datetime.strptime(dstr, "%Y-%m-%d").date()
-            for dstr in prev_schedule
-        ]
-        # Sort and take only those in the last 3 days of prev month
-        prev_dates.sort()
+            for dstr in prev_schedule.keys()
+        ])
+        # Get the last three days from the previous month
         last_three = prev_dates[-3:]
+        
+        # Build banned sets for each of the first three days.
+        banned_day0 = set()  # For current day 1: ban surgeons from all last 3 days
+        banned_day1 = set()  # For current day 2: ban surgeons from the last 2 days
+        banned_day2 = set()  # For current day 3: ban surgeons from the last day
 
-        for idx, dstr in enumerate(days):
-            current_date = datetime.datetime.strptime(dstr, "%Y-%m-%d").date()
-            # For each prev_date within 3 days
-            for pd in last_three:
-                if (current_date - pd).days <= 3:
-                    # Ban any surgeon assigned on pd from any level on this day
-                    for level in ["1A","1B","2A","2B","3","4"]:
-                        prev_name = prev_schedule.get(pd.isoformat(), {}).get(level)
-                        if prev_name:
-                            s_id = name_to_id.get(prev_name)
-                            if s_id is not None:
-                                model.Add(X[(idx, level)] != s_id)
+        for pd in last_three:
+            for level in all_levels:
+                prev_name = prev_schedule.get(pd.isoformat(), {}).get(level)
+                if prev_name:
+                    s_id = name_to_id.get(prev_name)
+                    if s_id is not None:
+                        banned_day0.add(s_id)
+        
+        for pd in last_three[-2:]:
+            for level in all_levels:
+                prev_name = prev_schedule.get(pd.isoformat(), {}).get(level)
+                if prev_name:
+                    s_id = name_to_id.get(prev_name)
+                    if s_id is not None:
+                        banned_day1.add(s_id)
+        
+        for pd in last_three[-1:]:
+            for level in all_levels:
+                prev_name = prev_schedule.get(pd.isoformat(), {}).get(level)
+                if prev_name:
+                    s_id = name_to_id.get(prev_name)
+                    if s_id is not None:
+                        banned_day2.add(s_id)
 
-    # --- New Constraint: Level 1 Pairing (1A and 1B must differ if 1B is assigned) ---
-    for d in range(num_days):
-        b1B = model.NewBoolVar(f'nonempty_1B_day_{d}')
-        model.Add(X[(d, "1B")] != -1).OnlyEnforceIf(b1B)
-        model.Add(X[(d, "1B")] == -1).OnlyEnforceIf(b1B.Not())
-        model.Add(X[(d, "1A")] != X[(d, "1B")]).OnlyEnforceIf(b1B)
-    
-    # --- Revised Level 2 Constraints ---
+        # Now remove these banned surgeons from the domains of day 0, 1, and 2 respectively.
+        if num_days >= 1:
+            for lvl in all_levels:
+                domains_by_day[0][lvl] = [s for s in domains_by_day[0][lvl] if s not in banned_day0]
+        if num_days >= 2:
+            for lvl in all_levels:
+                domains_by_day[1][lvl] = [s for s in domains_by_day[1][lvl] if s not in banned_day1]
+        if num_days >= 3:
+            for lvl in all_levels:
+                domains_by_day[2][lvl] = [s for s in domains_by_day[2][lvl] if s not in banned_day2]
 
-# --- Level‑2 Grouping & Supervision Constraints ---
+    # --- Force 1B to be filled on weekends and public holidays ---
+    for d, day_str in enumerate(days):
+        dt = datetime.datetime.strptime(day_str, "%Y-%m-%d").date()
+        is_weekend = dt.weekday() >= 5
+        is_ph      = public_holidays and (day_str in public_holidays)
+        if is_weekend or is_ph:
+            # slot 1B must not be the “–1” hole
+            model.Add( X[(d, "1B")] != -1 )
+
+    # --- Level‑2 Grouping & Supervision Constraints ---
     for d in range(num_days):
         # domains for 2B are pure supervisors + hole
         # (this was already done in base_domains before var creation)
@@ -234,9 +317,17 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
         # 4) Never let the same person occupy both slots:
         model.Add(X[(d, "2A")] != X[(d, "2B")])
 
-    # --- Constraint Set 3: Maximum Calls per Group ---
-    indicators = {}
+    # ── Prevent Group-4 surgeons from covering both 2B and 3 on the same day ──
+    for d in range(num_days):
+        for s1 in group4_ids:
+            for s2 in group4_ids:
+                # forbid the pair (2B=s1, 3=s2)
+                model.AddForbiddenAssignments(
+                    [ X[(d, "2B")], X[(d, "3")] ],
+                    [ [s1, s2] ]
+                )
 
+    # --- Constraint Set 3: Maximum Calls per Group ---
     for d in range(num_days):
         for lev in all_levels:
             for s_id in all_ids:
@@ -264,52 +355,42 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
             c1 == sum(indicators[(d, "1A", s_id)] + indicators[(d, "1B", s_id)]
                         for d in range(num_days))
         )
-        print("Max‑calls constraint for level1:", max_calls_level1)
         model.Add(c1 <= max_calls_level1)
+
+    non_nlth_surgeons = [s for s in all_surgeon_ids if s not in nlth_ids]
 
     max_all = model.NewIntVar(0, num_days * len(all_levels), 'max_all')
     min_all = model.NewIntVar(0, num_days * len(all_levels), 'min_all')
-    model.AddMaxEquality(max_all, [call_count_overall[s] for s in all_surgeon_ids])
-    model.AddMinEquality(min_all, [call_count_overall[s] for s in all_surgeon_ids])
+    model.AddMaxEquality(max_all, [call_count_overall[s] for s in non_nlth_surgeons])
+    model.AddMinEquality(min_all, [call_count_overall[s] for s in non_nlth_surgeons])
     diff_all = model.NewIntVar(0, num_days * len(all_levels), 'diff_all')
     model.Add(diff_all == max_all - min_all)
-    
+
+
     # --- Balance within skill‐groups: no more than 1 call difference ---
-    # (place this after you’ve built call_count_overall)
 
     # Build the four balancing groups by surgeon ID:
-    grp1 = [ s["id"]
-            for s in surgeons
-            if set(parse_call_levels(s.get("call_levels",""))).intersection({"1A","1B"}) ]
+    grp_defs = [
+        ("grp1", [s["id"] for s in surgeons if set(parse_call_levels(s.get("call_levels",""))).intersection({"1A","1B"})]),
+        ("grp2", [s["id"] for s in surgeons if ("2A" in parse_call_levels(s.get("call_levels","")) or "2B" in parse_call_levels(s.get("call_levels",""))) and "3" not in parse_call_levels(s.get("call_levels",""))]),
+        ("grp3", [s["id"] for s in surgeons if "3" in parse_call_levels(s.get("call_levels",""))]),
+        ("grp4", [s["id"] for s in surgeons if "4" in parse_call_levels(s.get("call_levels",""))])
+    ]
     
-    # 2A+2B only, no level‑3:
-    grp2 = [ s["id"]
-            for s in surgeons
-            if "2A" in parse_call_levels(s.get("call_levels",""))
-            or "2B" in parse_call_levels(s.get("call_levels",""))
-            and "3"  not in parse_call_levels(s.get("call_levels","")) ]
-    
-    # 2B+3 eligible:
-    grp3 = [ s["id"]
-            for s in surgeons
-            if "3"  in parse_call_levels(s.get("call_levels","")) ]
-    
-    # Level‑4 only:
-    grp4 = [ s["id"]
-            for s in surgeons
-            if "4" in parse_call_levels(s.get("call_levels","")) ]
-
-    for i, grp in enumerate((grp1, grp2, grp3, grp4), start=1):
-        if len(grp) > 1:
-            max_g = model.NewIntVar(0, num_days * len(all_levels),
-                                    f"max_calls_group{i}")
-            min_g = model.NewIntVar(0, num_days * len(all_levels),
-                                    f"min_calls_group{i}")
-            # link to your overall call counters
-            model.AddMaxEquality(max_g, [call_count_overall[s] for s in grp])
-            model.AddMinEquality(min_g, [call_count_overall[s] for s in grp])
-            # enforce the ≤1 spread
+    for i, (_, grp) in enumerate(grp_defs, start=1):
+        # remove any NLTH
+        grp_clean = [s for s in grp if s not in nlth_ids]
+        if len(grp_clean) > 1:
+            max_g = model.NewIntVar(0, num_days * len(all_levels), f"max_calls_group{i}")
+            min_g = model.NewIntVar(0, num_days * len(all_levels), f"min_calls_group{i}")
+            model.AddMaxEquality(max_g, [call_count_overall[s] for s in grp_clean])
+            model.AddMinEquality(min_g, [call_count_overall[s] for s in grp_clean])
             model.Add(max_g - min_g <= 1)
+
+    # 4) Exempt NLTH from all that—and instead just keep calls between 2-3:
+    for s in nlth_ids:
+        model.Add(call_count_overall[s] <= 3)
+        model.Add(call_count_overall[s] >= 2)
 
     # --- Then, create a per-surgeon, per-day “assigned” BoolVar ----
     assigned = {}
@@ -325,25 +406,34 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
             ).OnlyEnforceIf(a.Not())
             assigned[(s, d)] = a
 
-    # --- NLTH constraint: these surgeons can only be on Sat or public holidays ---
-    nlth_ids = [s["id"] for s in surgeons if s.get("nlth")]
-    for d, daystr in enumerate(days):
-        is_sat = datetime.datetime.strptime(daystr, "%Y-%m-%d").weekday() == 5
-        is_ph  = (public_holidays and daystr in public_holidays)
-        if not (is_sat or is_ph):
-            # Ban NLTH surgeons on this day
-            for level in all_levels:
+    # --- NLTH constraint: allow NLTH surgeons only on days where today AND tomorrow are weekend or PH ---
+
+    # # Precompute flags for each calendar day
+    is_weekend = [
+        datetime.datetime.strptime(day, "%Y-%m-%d").weekday() >= 5
+        for day in days
+    ]
+    is_ph = [
+        (public_holidays is not None and day in public_holidays)
+        for day in days
+    ]
+    is_wk_or_ph = [
+        wk or ph for wk, ph in zip(is_weekend, is_ph)
+    ]
+
+    is_ph = [day in public_holidays for day in days]
+    is_wk_or_ph = [w or ph for w,ph in zip(is_weekend, is_ph)]
+
+    for d in range(num_days):
+        # only allow NLTH if today AND the next day are wk/PH
+        allow_nlth = (d < num_days - 1) and is_wk_or_ph[d] and is_wk_or_ph[d+1]
+        if not allow_nlth:
+            for lvl in all_levels:
                 for s_id in nlth_ids:
-                    model.Add(X[(d, level)] != s_id)
+                    # Hard ban
+                    model.Add(X[(d, lvl)] != s_id)
 
     # soft penalties for weekend call balance
-
-    # check which days are weekends
-    is_weekend = []
-    for day_str in days:
-        dow = datetime.datetime.strptime(day_str, "%Y-%m-%d").weekday()
-        is_weekend.append(dow >= 5)   # Sat=5 or Sun=6
-
     # 2) build a BoolVar w_call[s,d] == “s is assigned on a weekend d”
     w_call = {}
     for s in all_surgeon_ids:
@@ -357,13 +447,13 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                 # on weekdays, force w==0
                 model.Add(w == 0)
 
-    # 3) count weekend calls per surgeon and hard‐limit to 2
+    # 3) count weekend calls per surgeon and hard‐limit to 3
     weekend_count = {}
     for s in all_surgeon_ids:
         wc = model.NewIntVar(0, num_days, f"weekend_count_s{s}")
         model.Add(wc == sum(w_call[(s,d)] for d in range(num_days)))
         weekend_count[s] = wc
-        model.Add(wc <= 2)   # hard cap: no more than 2 weekend calls
+        model.Add(wc <= 3)   # hard cap: no more than 3 weekend calls
 
     consec_penalties = []
     for s in all_surgeon_ids:
@@ -385,8 +475,10 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
 
     # 5) within‐group weekend‐balance soft constraints
     weekend_diff_terms = []
-    for i, grp in enumerate((grp1, grp2, grp3, grp4), start=1):
-        if len(grp) > 1:
+    for i, (_, grp) in enumerate(grp_defs, start=1):
+        # remove any NLTH
+        grp_clean = [s for s in grp if s not in nlth_ids]
+        if len(grp_clean) > 1:
             max_w = model.NewIntVar(0, num_days, f"max_wknd_grp{i}")
             min_w = model.NewIntVar(0, num_days, f"min_wknd_grp{i}")
             model.AddMaxEquality(max_w, [weekend_count[s] for s in grp])
@@ -395,16 +487,47 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
             model.Add(diff == max_w - min_w)
             weekend_diff_terms.append(diff)
 
+
+    # now collect a list of (coeff, BoolVar) for the soft penalties
+
+    #Soft constraint for team preference of the day
+
+    td_terms = []
+
+    for d, day_str in enumerate(days):
+        wd = datetime.datetime.strptime(day_str, "%Y-%m-%d").weekday()
+        for lvl in all_levels:
+            # the indicator b==1 if that slot is filled by surgeon s
+            for s in surgeons:
+                sid  = s['id']
+                team = s.get('team')
+                if team in team_day_prefs:
+                    adj = team_day_prefs[team].get(wd, 0)
+                    if adj != 0:
+                        b = indicators[(d, lvl, sid)]
+                        coef = gamma_team_pref * adj
+                        # a positive adj means “penalize assignments on that day for that team”
+                        td_terms.append((coef, b))
+
+
     # --- Soft Penalties for Availability ---
     soft_penalties_unavail_prev = []
+    # Penalty for assigning someone on a day they flagged unavailable the previous day
     for i in range(num_days - 1):
+        # Compute the date object for the next day in the schedule
         next_day = datetime.datetime.strptime(days[i+1], "%Y-%m-%d").date()
         for s_id, req_list in get_availability_requests().items():
             for req in req_list:
-                try:
-                    req_date = datetime.datetime.strptime(req["date"], "%Y-%m-%d").date()
-                except Exception:
-                    continue
+                raw = req["date"]
+                # Postgres may return a date object already
+                if isinstance(raw, datetime.date):
+                    req_date = raw
+                else:
+                    try:
+                        req_date = datetime.datetime.strptime(raw, "%Y-%m-%d").date()
+                    except Exception:
+                        continue
+
                 if req_date == next_day and req["request_type"] == "unavailable":
                     for lev in all_levels:
                         b = model.NewBoolVar(f'penalty_unavailprev_{i}_{lev}_{s_id}')
@@ -487,14 +610,15 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
         + gamma_balance * deviation_sum
         + gamma_spacing * penalty_spacing
         - BigDayPenalty * sum(fully_staffed)
-        + gamma_weekend_balance * sum(weekend_diff_terms)
+        + gamma_weekend_balance * (sum(weekend_diff_terms) * 10)
         + gamma_consec_weekend   * consec_penalty
+        - coef * b for coef, b in td_terms
     ]
     model.Minimize( sum(objective_terms) )
 
     # --- Solve the Model ---
     solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds   = 10    # so it will keep going if you don’t cancel
+    solver.parameters.max_time_in_seconds   = 30    # so it will keep going if you don’t cancel
     solver.parameters.log_search_progress   = True   # print logs to console
     solver.parameters.log_to_stdout         = True
 
@@ -511,4 +635,3 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
         }
         return solution, solver.ObjectiveValue()
     return None, None
-          

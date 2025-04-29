@@ -14,8 +14,12 @@
       <!-- Sort Surgeon Button -->
       <a href="{{ url_for('list_surgeons', sort=1) }}" 
          class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">
-        Sort Surgeons
+        Sort Surgeons by Call Level
       </a>
+  	<a href="{{ url_for('list_surgeons_by_team_then_level') }}"
+    	 class="px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700">
+   	 Sort by Team &amp; Level
+  	</a>
     </div>
   </div>
 
@@ -26,6 +30,7 @@
           <th class="border px-4 py-2">Name</th>
           <th class="border px-4 py-2">Call Levels</th>
           <th class="border px-4 py-2">NLTH</th>
+	  <th class="border px-4 py-2">Team</th>
           <th class="border px-4 py-2">Actions</th>
         </tr>
       </thead>
@@ -67,6 +72,28 @@
                 NLTH
               </label>
             </td>
+            <td class="border px-4 py-2 text-center">
+		<div class="form-group">
+   		 <label for="team">Team</label>
+    		 <select
+    			name="team_{{ surgeon.id }}"
+    			id="team_{{ surgeon.id }}"
+    			class="p-1 border rounded w-full"
+  		>
+    			<option value="" {% if not surgeon.team %}selected{% endif %}>
+      			 Unassigned
+   			</option>
+  			{% for t in ['Team 1','Team 2','Team 3','Team 4','Urology'] %}
+      			 <option
+        		  value="{{ t }}"
+        		  {% if surgeon.team == t %}selected{% endif %}
+      		 	 >
+        			{{ t }}
+      			 </option>
+    			{% endfor %}
+ 		 </select>
+  	     </div>
+	    </td>
             <td class="border px-4 py-2 text-center">
               <!-- Delete Surgeon Button -->
               <form method="post" action="{{ url_for('delete_surgeon', surgeon_id=surgeon.id) }}" onsubmit="return confirm('Delete {{ surgeon.name }}?');">
