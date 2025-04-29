@@ -1,27 +1,19 @@
-FROM python:3.9-slim
+# start from an official Python image
+FROM python:3.11-slim
 
-# Prevent Python from writing .pyc files to disk and enable stdout/stderr logging
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
-
-# Set working directory
+# set working dir
 WORKDIR /app
 
-# Install system dependencies (if needed)
-RUN apt-get update && apt-get install -y gcc
+# copy & install dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy dependency file and install Python dependencies
-COPY requirements.txt /app/requirements.txt
-RUN pip install --upgrade pip && pip install -r requirements.txt
+# copy the rest of your code
+COPY . .
 
-# Copy the rest of the application code
-COPY . /app
+# tell Cloud Run to listen on port 8080
+ENV PORT 8080
+EXPOSE 8080
 
-# Expose the port (Flask default is 5000)
-EXPOSE 5000
-
-# Set environment variable for Flask
-ENV FLASK_APP=app.py
-
-# Start the Flask app
-CMD ["flask", "run", "--host=0.0.0.0", "--port=5000"]
+# use gunicorn to serve your Flask app
+CMD ["gunicorn", "-b", "0.0.0.0:8080", "app:create_app()"]
