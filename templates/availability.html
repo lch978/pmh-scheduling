@@ -34,6 +34,11 @@
       border-radius: 8px;
       box-shadow: 0 4px 8px rgba(0,0,0,0.1);
     }
+        /* Increase the font size of the calendar day numbers */
+    .fc-daygrid-day-number {
+      font-size: 2rem; /* Adjust the size as needed */
+    }
+
     #calendar, #existing-calendar {
       border: none;
       padding: 10px;
@@ -66,6 +71,8 @@
     }
     button {
       cursor: pointer;
+      color: #333; /* Set a visible color for the text */
+      background-color: #e0f7fa; /* Light blue background */
     }
     button:hover {
       background-color: #e6f7ff;
@@ -167,21 +174,22 @@
       });
       calendar.render();
       
-      // If a surgeon is selected, render the existing requests calendar.
-      {% if selected_surgeon_id and events %}
+      {% if selected_surgeon_id %}
         // Build an array of events from your "events" structure.
         var existingEvents = [
-          {% for req_type, ranges in events.items() %}
-            {% for range in ranges %}
-              {
-                title: "{{ req_type }}",
-                start: "{{ range.start }}",
-                // FullCalendar expects an exclusive end date so we add one day.
-                end: moment("{{ range.end }}", "YYYY-MM-DD").add(1, 'days').format("YYYY-MM-DD"),
-                reqType: "{{ req_type }}"
-              },
+          {% if events %}
+            {% for req_type, ranges in events.items() %}
+              {% for range in ranges %}
+                {
+                  title: "{{ req_type }}",
+                  start: "{{ range.start }}",
+                  // FullCalendar expects an exclusive end date so we add one day.
+                  end: moment("{{ range.end }}", "YYYY-MM-DD").add(1, 'days').format("YYYY-MM-DD"),
+                  reqType: "{{ req_type }}"
+                },
+              {% endfor %}
             {% endfor %}
-          {% endfor %}
+          {% endif %}
         ];
         
         // Color each event based on type.
