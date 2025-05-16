@@ -222,8 +222,7 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                     model.Add(X[(d2, lev2)] == -1).OnlyEnforceIf(b2.Not())
                     model.Add(X[(d, lev1)] != X[(d2, lev2)]).OnlyEnforceIf([b1, b2])
 
-### Enforce 3 day gap for the last 3 days of the previous month as well
-#               
+### Enforce 3 day gap for the last 3 days of the previous month as well               
     if prev_schedule:
     # Map surgeon names to IDs (assuming prev_schedule stores names)
         name_to_id = {s["name"]: s["id"] for s in surgeons}
@@ -267,13 +266,16 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
         # Now remove these banned surgeons from the domains of day 0, 1, and 2 respectively.
         if num_days >= 1:
             for lvl in all_levels:
-                domains_by_day[0][lvl] = [s for s in domains_by_day[0][lvl] if s not in banned_day0]
+                for s in banned_day0:
+                    model.Add(X[(0, lvl)] != s)
         if num_days >= 2:
             for lvl in all_levels:
-                domains_by_day[1][lvl] = [s for s in domains_by_day[1][lvl] if s not in banned_day1]
+                for s in banned_day1:
+                    model.Add(X[(1, lvl)] != s)
         if num_days >= 3:
             for lvl in all_levels:
-                domains_by_day[2][lvl] = [s for s in domains_by_day[2][lvl] if s not in banned_day2]
+                for s in banned_day2:
+                    model.Add(X[(2, lvl)] != s)
 
     # --- Force 1B to be filled on weekends and public holidays ---
     for d, day_str in enumerate(days):
