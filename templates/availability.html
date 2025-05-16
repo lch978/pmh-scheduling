@@ -34,11 +34,10 @@
       border-radius: 8px;
       box-shadow: 0 4px 8px rgba(0,0,0,0.1);
     }
-        /* Increase the font size of the calendar day numbers */
+    /* Increase the font size of the calendar day numbers */
     .fc-daygrid-day-number {
       font-size: 2rem; /* Adjust the size as needed */
     }
-
     #calendar, #existing-calendar {
       border: none;
       padding: 10px;
@@ -71,7 +70,7 @@
     }
     button {
       cursor: pointer;
-      color: #333; /* Set a visible color for the text */
+      color: #333;
       background-color: #e0f7fa; /* Light blue background */
     }
     button:hover {
@@ -123,6 +122,18 @@
     <div class="calendar-container">
       <div id="existing-calendar"></div>
     </div>
+    
+    <!-- Delete Selected Requests Section -->
+    <div style="text-align: center; margin-top: 20px;">
+      <button id="deleteButton">Delete Selected Requests</button>
+    </div>
+    
+    <!-- Hidden form to submit deletion requests -->
+    <form id="deleteForm" method="post" action="{{ url_for('delete_availability') }}" style="display:none;">
+      <input type="hidden" name="surgeon_id" value="{{ selected_surgeon_id }}">
+      <!-- This hidden field will hold a JSON array describing the events to delete -->
+      <input type="hidden" id="delete_requests" name="delete_requests">
+    </form>
   {% else %}
     <p style="text-align: center;">Please select a surgeon to view their requests and apply.</p>
   {% endif %}
@@ -181,6 +192,7 @@
             {% for req_type, ranges in events.items() %}
               {% for range in ranges %}
                 {
+                  id: "{{ req_type }}-{{ range.start }}",
                   title: "{{ req_type }}",
                   start: "{{ range.start }}",
                   // FullCalendar expects an exclusive end date so we add one day.
@@ -192,7 +204,7 @@
           {% endif %}
         ];
         
-        // Color each event based on type.
+        // Assign colors and readable titles based on request type.
         existingEvents = existingEvents.map(function(evt) {
           if(evt.reqType === "unavailable") {
             evt.backgroundColor = "#ffcccc"; // pastel red
@@ -208,6 +220,8 @@
           return evt;
         });
         
+        var selectedForDeletion = [];
+        
         var existingCalendarEl = document.getElementById('existing-calendar');
         var existingCalendar = new FullCalendar.Calendar(existingCalendarEl, {
           initialView: 'dayGridMonth',
@@ -217,9 +231,48 @@
             right: 'next'
           },
           height: document.documentElement.clientHeight * 0.7,
-          events: existingEvents
+          events: existingEvents,
+          eventClick: function(info) {
+            var event = info.event;
+            // Check if the event is already selected.
+            var index = selectedForDeletion.findIndex(function(e) { return e.id === event.id; });
+            if(index === -1) {
+              // Mark as selected and update styling.
+              selectedForDeletion.push({
+                id: event.id,
+                reqType: event.extendedProps.reqType,
+                start: event.startStr,
+                // Adjust end date on submission (subtract one day)
+                end: moment(event.end).subtract(1, 'days').format("YYYY-MM-DD")
+              });
+              event.setProp('borderColor', 'red');
+              event.setProp('textColor', 'red');
+            } else {
+              // Deselect this event.
+              selectedForDeletion.splice(index, 1);
+              if(event.extendedProps.reqType === "unavailable") {
+                event.setProp('borderColor', "#ffcccc");
+                event.setProp('textColor', "#000");
+              } else if(event.extendedProps.reqType === "no_call") {
+                event.setProp('borderColor', "#cce5ff");
+                event.setProp('textColor', "#000");
+              }
+            }
+          }
         });
         existingCalendar.render();
+        
+        // Handler for the Delete button click.
+        document.getElementById('deleteButton').addEventListener('click', function() {
+          if(selectedForDeletion.length === 0) {
+            alert("No requests selected for deletion.");
+            return;
+          }
+          if(confirm("Are you sure you want to delete the selected requests?")) {
+            document.getElementById('delete_requests').value = JSON.stringify(selectedForDeletion);
+            document.getElementById('deleteForm').submit();
+          }
+        });
       {% endif %}
     });
   </script>

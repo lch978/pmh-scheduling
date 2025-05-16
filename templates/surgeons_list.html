@@ -2,102 +2,158 @@
 
 {% block title %}Surgeon Management{% endblock %}
 
-{% block content %}
-  <div class="flex items-center justify-between mb-6">
-    <h1 class="text-2xl font-bold">Surgeon Management</h1>
-    <div class="space-x-2">
-      <!-- Add New Surgeon Button -->
-      <a href="{{ url_for('add_surgeon') }}" 
-         class="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700">
-        Add New Surgeon
-      </a>
-      <!-- Sort Surgeon Button -->
-      <a href="{{ url_for('list_surgeons', sort=1) }}" 
-         class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">
-        Sort Surgeons by Call Level
-      </a>
-  	<a href="{{ url_for('list_surgeons_by_team_then_level') }}"
-    	 class="px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700">
-   	 Sort by Team &amp; Level
-  	</a>
-    </div>
-  </div>
+{% block head %}
+<style>
+  .container {
+    max-width: 1000px;
+    margin: auto;
+    background: #fff;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  }
+  .header {
+    text-align: center;
+    margin-bottom: 20px;
+  }
+  .button-group {
+    text-align: center;
+    margin-bottom: 20px;
+  }
+  .button-group a {
+    padding:10px 15px;
+    font-size:14px;
+    margin:5px;
+    border: none;
+    border-radius:4px;
+    background-color:#337ab7;
+    color:#fff;
+    text-decoration: none;
+    transition: background-color 0.3s;
+  }
+  .button-group a:hover {
+    background-color:#286090;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 20px;
+  }
+  table th,
+  table td {
+    border: 1px solid #ccc;
+    padding: 10px;
+    text-align: center;
+  }
+  table th {
+    background-color: #f2f2f2;
+  }
+  .input-text {
+    width: 100%;
+    padding: 6px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+  }
+  .checkbox-inline {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .update-button {
+    margin-top: 20px;
+    text-align: right;
+  }
+  .update-button button {
+    padding: 10px 15px;
+    font-size:14px;
+    border: none;
+    border-radius:4px;
+    background-color: #337ab7;
+    color: #fff;
+    cursor: pointer;
+    transition: background-color 0.3s;
+  }
+  .update-button button:hover {
+    background-color: #286090;
+  }
+</style>
+{% endblock %}
 
+{% block content %}
+<div class="container">
+  <div class="header">
+    <h1 class="text-2xl font-bold">Surgeon Management</h1>
+  </div>
+  <div class="button-group">
+    <a href="{{ url_for('add_surgeon') }}">Add New Surgeon</a>
+    <a href="{{ url_for('list_surgeons', sort=1) }}">Sort Surgeons by Call Level</a>
+    <a href="{{ url_for('list_surgeons_by_team_then_level') }}">Sort by Team &amp; Level</a>
+  </div>
+  
   <form method="post" action="{{ url_for('update_all_surgeons') }}">
-    <table class="w-full table-auto border-collapse">
+    <table>
       <thead>
-        <tr class="bg-gray-200">
-          <th class="border px-4 py-2">Name</th>
-          <th class="border px-4 py-2">Call Levels</th>
-          <th class="border px-4 py-2">NLTH</th>
-	  <th class="border px-4 py-2">Team</th>
-          <th class="border px-4 py-2">Actions</th>
+        <tr>
+          <th>Name</th>
+          <th>Call Levels</th>
+          <th>NLTH</th>
+          <th>Team</th>
+          <th>Actions</th>
         </tr>
       </thead>
       <tbody>
         {% for surgeon in surgeons %}
           <tr>
-            <td class="border px-4 py-2">
+            <td>
               <input
                 type="text"
                 name="name_{{ surgeon.id }}"
                 value="{{ surgeon.name }}"
-                class="w-full p-1 border rounded"
+                class="input-text"
               />
             </td>
-            <td class="border px-4 py-2">
-              <div class="flex flex-wrap gap-2">
+            <td>
+              <div>
                 {% for level in ['1A','1B','2A','2B','3','4'] %}
-                  <label class="inline-flex items-center">
+                  <label class="checkbox-inline">
                     <input
                       type="checkbox"
                       name="call_levels_{{ surgeon.id }}"
                       value="{{ level }}"
                       {% if level in parse_call_levels(surgeon.call_levels) %}checked{% endif %}
-                      class="mr-1"
                     />
                     {{ level }}
                   </label>
                 {% endfor %}
               </div>
             </td>
-            <td class="border px-4 py-2 text-center">
-              <label class="inline-flex items-center">
+            <td>
+              <label class="checkbox-inline">
                 <input
                   type="checkbox"
                   name="nlth_{{ surgeon.id }}"
                   {% if surgeon.nlth %}checked{% endif %}
-                  class="mr-1"
                 />
                 NLTH
               </label>
             </td>
-            <td class="border px-4 py-2 text-center">
-		<div class="form-group">
-   		 <label for="team">Team</label>
-    		 <select
-    			name="team_{{ surgeon.id }}"
-    			id="team_{{ surgeon.id }}"
-    			class="p-1 border rounded w-full"
-  		>
-    			<option value="" {% if not surgeon.team %}selected{% endif %}>
-      			 Unassigned
-   			</option>
-  			{% for t in ['Team 1','Team 2','Team 3','Team 4','Urology'] %}
-      			 <option
-        		  value="{{ t }}"
-        		  {% if surgeon.team == t %}selected{% endif %}
-      		 	 >
-        			{{ t }}
-      			 </option>
-    			{% endfor %}
- 		 </select>
-  	     </div>
-	    </td>
-            <td class="border px-4 py-2 text-center">
+            <td>
+              <select name="team_{{ surgeon.id }}" class="input-text">
+                <option value="" {% if not surgeon.team %}selected{% endif %}>
+                  Unassigned
+                </option>
+                {% for t in ['Team 1','Team 2','Team 3','Team 4','Urology'] %}
+                  <option value="{{ t }}" {% if surgeon.team == t %}selected{% endif %}>
+                    {{ t }}
+                  </option>
+                {% endfor %}
+              </select>
+            </td>
+            <td>
               <!-- Delete Surgeon Button -->
               <form method="post" action="{{ url_for('delete_surgeon', surgeon_id=surgeon.id) }}" onsubmit="return confirm('Delete {{ surgeon.name }}?');">
-                <button type="submit" class="px-2 py-1 bg-red-600 text-white rounded hover:bg-red-700">
+                <button type="submit" style="padding:8px 12px; font-size:14px; margin:2px; border:none; border-radius:4px; background-color:#dc3545; color:#fff; transition: background-color 0.3s;"
+                  onmouseover="this.style.backgroundColor='#c82333';" onmouseout="this.style.backgroundColor='#dc3545';">
                   Delete
                 </button>
               </form>
@@ -107,13 +163,9 @@
       </tbody>
     </table>
 
-    <div class="mt-4 text-right">
-      <button
-        type="submit"
-        class="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700"
-      >
-        Update All
-      </button>
+    <div class="update-button">
+      <button type="submit">Update All</button>
     </div>
   </form>
+</div>
 {% endblock %}
