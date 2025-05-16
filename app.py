@@ -96,8 +96,9 @@ def create_app():
             db.commit()
             flash("Surgeon added successfully!")
             return redirect(url_for('list_surgeons'))
-        return render_template('surgeon_form.html', surgeon={}, action="Add")
-
+    # Pass a default surgeon dict with "call_levels" defined so the template doesn't error out.
+        default_surgeon = {"name": "", "call_levels": "", "team": "", "id": 0}
+        return render_template('surgeon_form.html', surgeon=default_surgeon, action="Add")
     @app.route('/surgeons/edit/<int:surgeon_id>', methods=['GET', 'POST'])
     def edit_surgeon(surgeon_id):
         db = get_db()
@@ -732,25 +733,215 @@ def create_app():
     @app.route('/delete_availability', methods=['POST'])
     def delete_availability():
         surgeon_id = request.form.get('surgeon_id')
-        request_type = request.form.get('request_type')
-        start_date = request.form.get('start_date')
-        end_date = request.form.get('end_date')
-        if not surgeon_id or not request_type or not start_date or not end_date:
-            flash("Missing parameters for deletion.")
+        delete_requests_json = request.form.get('delete_requests')
+        
+        if not surgeon_id or not delete_requests_json:
+            flash("Missing surgeon id or delete requests data.", category="error")
             return redirect(url_for('availability', surgeon_id=surgeon_id))
-        db = get_db()
-        db.execute(
-            text(
-                "DELETE FROM surgeon_availability "
-                "WHERE surgeon_id = :sid "
-                "  AND request_type = :rtype "
-                "  AND date BETWEEN :start AND :end"
-            ),
-            {"sid": surgeon_id, "rtype": request_type, "start": start_date, "end": end_date}
-        )
+        
+        try:
+            delete_requests = json.loads(delete_requests_json)
+        except Exception:
+            flash("Invalid delete requests data.", category="error")
+            return redirect(url_for('availability', surgeon_id=surgeon_id))
+        
+        db = get_db()  # Get the DB connection from your helper
+
+        success = True
+        for req in delete_requests:
+            req_type = req.get('reqType')
+            start_date = req.get('start')
+            end_date = req.get('end')
+            if not (req_type and start_date and end_date):
+                continue
+            # Delete all rows within the given date range.
+            query = text("""
+                DELETE FROM surgeon_availability 
+                WHERE surgeon_id = :surgeon_id 
+                AND request_type = :req_type 
+                AND date BETWEEN :start_date AND :end_date
+            """)
+            result = db.execute(query, {
+                "surgeon_id": surgeon_id,
+                "req_type": req_type,
+                "start_date": start_date,
+                "end_date": end_date
+            })
+            if result.rowcount == 0:
+                success = False
+
         db.commit()
-        flash("Request deleted successfully.")
+        
+        if success:
+            flash("Selected availability requests deleted successfully.", category="success")
+        else:
+            flash("Some availability requests could not be deleted.", category="warning")
+        
         return redirect(url_for('availability', surgeon_id=surgeon_id))
+    
+    #############################################
+    # Export availability Endpoint
+    #############################################
+
+    @app.route('/export_requests', methods=['POST'])
+    def export_requests():
+        try:
+            year = int(request.form.get("year"))
+            month = int(request.form.get("month"))
+        except (TypeError, ValueError):
+            flash("Invalid year or month provided.", category="error")
+            return redirect(url_for('new_schedule'))
+        
+        # Build date boundaries for the selected month.
+        from datetime import date
+        start_date = date(year, month, 1)
+        if month == 12:
+            next_date = date(year + 1, 1, 1)
+        else:
+            next_date = date(year, month + 1, 1)
+        
+        db = get_db()
+        stmt = text("""
+            SELECT sa.surgeon_id, sa.request_type, sa.date, s.name, s.team, s.call_levels
+            FROM surgeon_availability sa 
+            JOIN surgeons s ON sa.surgeon_id = s.id
+            WHERE sa.date >= :start_date AND sa.date < :next_date
+            ORDER BY s.team, s.name, sa.date
+        """)
+        rows = db.execute(stmt, {"start_date": start_date.isoformat(), "next_date": next_date.isoformat()}).fetchall()
+
+        # Organize records per surgeon.
+        data = {}
+        for row in rows:
+            mapping = row._mapping
+            sid = mapping["surgeon_id"]
+            if sid not in data:
+                data[sid] = {
+                    "name": mapping["name"],
+                    "team": mapping["team"],
+                    "call_levels": mapping["call_levels"],
+                    "unavailable": [],
+                    "no_call": []
+                }
+            day = mapping["date"].day
+            if mapping["request_type"] == "unavailable":
+                data[sid]["unavailable"].append(day)
+            elif mapping["request_type"] == "no_call":
+                data[sid]["no_call"].append(day)
+            # Also include surgeons with no requests.
+        surgeons = get_all_surgeons()
+        for surgeon in surgeons:
+            sid = surgeon['id']
+            if sid not in data:
+                data[sid] = {
+                    "name": surgeon["name"],
+                    "team": surgeon["team"],
+                    "call_levels": surgeon.get("call_levels", ""),
+                    "unavailable": [],
+                    "no_call": []
+                }
+        # Helper: group sorted integer days into ranges (e.g. [1,2,3,5] → "1-3, 5")
+        def group_days(day_list):
+            if not day_list:
+                return ""
+            days = sorted(set(day_list))
+            groups = []
+            start = days[0]
+            end = days[0]
+            for d in days[1:]:
+                if d == end + 1:
+                    end = d
+                else:
+                    groups.append(f"{start}" if start == end else f"{start}-{end}")
+                    start = d
+                    end = d
+            groups.append(f"{start}" if start == end else f"{start}-{end}")
+            return ", ".join(groups)
+        
+        # Sorting: by team order then by lowest call level.
+        team_order = {"Team 1": 1, "Team 2": 2, "Team 3": 3, "Team 4": 4, "Urology": 5}
+        call_order = {"1A": 1, "1B": 1, "2A": 2, "2B": 3, "3": 4, "4": 5}
+        def get_call_rank(call_levels):
+            levels = parse_call_levels(call_levels)
+            if not levels:
+                return 99
+            return max(call_order.get(l, 99) for l in levels)
+        
+        # Group surgeons by team.
+        teams = {}
+        for info in data.values():
+            team = info["team"]
+            teams.setdefault(team, []).append(info)
+        
+        # Sort teams in order.
+        sorted_teams = sorted(teams.items(), key=lambda kv: team_order.get(kv[0], 99))
+        # For each team, sort by call rank then name.
+        for t, surgeons in sorted_teams:
+            surgeons.sort(key=lambda s: (get_call_rank(s["call_levels"]), s["name"].lower()))
+        
+        # Build Excel rows.
+        excel_rows = []
+        for team, surgeons in sorted_teams:
+            # Add a header row for the team.
+            excel_rows.append({"Surgeon": f"Team: {team}", "Unavailability": "", "No Call": ""})
+            for s in surgeons:
+                excel_rows.append({
+                    "Surgeon": s["name"],
+                    "Unavailability": group_days(s["unavailable"]),
+                    "No Call": group_days(s["no_call"])
+                })
+            # Add a blank spacer row.
+            excel_rows.append({"Surgeon": "", "Unavailability": "", "No Call": ""})
+        
+        df = pd.DataFrame(excel_rows)
+        
+        # Write to Excel with formatting.
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine="openpyxl") as writer:
+            df.to_excel(writer, index=False, sheet_name="Requests")
+            ws = writer.sheets["Requests"]
+            from openpyxl.styles import PatternFill, Font
+            # Define team background colors.
+            team_colors = {
+                "Team 1": "ADD8E6",   # light blue
+                "Team 2": "FFC0CB",   # pink
+                "Team 3": "90EE90",   # light green
+                "Team 4": "FFFF00",   # yellow
+                "Urology": "FFFFFF"   # white
+            }
+            
+            # Apply Arial font size 12 to all cells.
+            default_font = Font(name="Arial", size=12)
+            for row in ws.iter_rows(min_row=1, max_row=ws.max_row):
+                for cell in row:
+                    cell.font = default_font
+            
+            # Fill team header rows with corresponding team color.
+            for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
+                cell = row[0]
+                if cell.value and isinstance(cell.value, str) and cell.value.startswith("Team:"):
+                    team_name = cell.value.split("Team:")[-1].strip()
+                    fill_color = team_colors.get(team_name, "FFFFFF")
+                    fill = PatternFill(start_color=fill_color, end_color=fill_color, fill_type="solid")
+                    for c in row:
+                        c.fill = fill
+            # Adjust column widths so headers and cells are fully visible.
+            for col in ws.columns:
+                max_length = 0
+                col_letter = col[0].column_letter
+                for cell in col:
+                    if cell.value:
+                        max_length = max(max_length, len(str(cell.value)))
+                ws.column_dimensions[col_letter].width = max_length + 2
+
+        output.seek(0)
+        filename = f"requests_{year}_{month:02d}.xlsx"
+        return send_file(
+            output,
+            as_attachment=True,
+            download_name=filename,
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 
     #############################################
     # Delete Surgeon Endpoint
