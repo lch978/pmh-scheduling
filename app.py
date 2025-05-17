@@ -655,35 +655,37 @@ def create_app():
     def availability():
         db = get_db()
         if request.method == 'POST':
-            # Process submission of a new request over a date range.
+            # Process submission of selected dates.
             surgeon_id = request.form.get('surgeon_id')
             request_type = request.form.get('request_type')  # "unavailable" or "no_call"
-            start_date = request.form.get('start_date')
-            end_date = request.form.get('end_date')
-            if not surgeon_id or not start_date or not end_date or not request_type:
+            selected_dates_json = request.form.get('selected_dates')
+            
+            # Validate that all required data is provided.
+            if not surgeon_id or not request_type or not selected_dates_json:
                 flash("Please fill in all fields.")
-            else:
-                try:
-                    start_dt = datetime.datetime.strptime(start_date, "%Y-%m-%d").date()
-                    end_dt = datetime.datetime.strptime(end_date, "%Y-%m-%d").date()
-                    if start_dt > end_dt:
-                        flash("Start date must be before or equal to end date.")
-                        return redirect(url_for('availability', surgeon_id=surgeon_id))
-                    current_dt = start_dt
-                    while current_dt <= end_dt:
-                        db.execute(
-                            text(
-                                "INSERT INTO surgeon_availability "
-                                "(surgeon_id, request_type, date) "
-                                "VALUES (:sid, :rtype, :dt)"
-                            ),
-                            {"sid": surgeon_id, "rtype": request_type, "dt": current_dt.isoformat()}
-                        )
-                        current_dt += datetime.timedelta(days=1)
-                    db.commit()
-                    flash("Request submitted successfully!")
-                except Exception as e:
-                    flash(f"Error processing the dates: {str(e)}")
+                return redirect(url_for('availability', surgeon_id=surgeon_id))
+            
+            try:
+                # Parse the JSON array of dates.
+                dates_list = json.loads(selected_dates_json)
+                if not dates_list:
+                    flash("No dates selected.")
+                    return redirect(url_for('availability', surgeon_id=surgeon_id))
+                
+                # Insert each date as a separate row.
+                for d in dates_list:
+                    db.execute(
+                        text(
+                            "INSERT INTO surgeon_availability "
+                            "(surgeon_id, request_type, date) "
+                            "VALUES (:sid, :rtype, :dt)"
+                        ),
+                        {"sid": surgeon_id, "rtype": request_type, "dt": d}
+                    )
+                db.commit()
+                flash("Request submitted successfully!")
+            except Exception as e:
+                flash(f"Error processing the dates: {str(e)}")
             return redirect(url_for('availability', surgeon_id=surgeon_id))
         else:
             # GET: Display the page with existing requests grouped by date range.
@@ -699,32 +701,30 @@ def create_app():
                 rows = (
                     db.execute(
                         text(
-                        "SELECT sa.date, sa.request_type, s.name, s.call_levels "
-                        "FROM surgeon_availability sa "
-                        "JOIN surgeons s ON sa.surgeon_id = s.id "
-                        "WHERE s.id = :sid "
-                        "ORDER BY sa.date"
-                    ),
-                    {"sid": surgeon_id}
-                )
-                .mappings()      # ← turn each row into a dict-like Mapping
-                .all()           # ← fetch all of them
+                            "SELECT sa.date, sa.request_type, s.name, s.call_levels "
+                            "FROM surgeon_availability sa "
+                            "JOIN surgeons s ON sa.surgeon_id = s.id "
+                            "WHERE s.id = :sid "
+                            "ORDER BY sa.date"
+                        ),
+                        {"sid": surgeon_id}
+                    )
+                    .mappings()
+                    .all()
                 )
                 if rows:
                     surgeon_name = rows[0]["name"]
-                # Group records by request_type.
                 grouped_by_type = {}
                 for row in rows:
                     rtype = row["request_type"]
                     if rtype not in grouped_by_type:
                         grouped_by_type[rtype] = []
                     grouped_by_type[rtype].append(row["date"])
-                # Group the dates in each request type into ranges.
                 for rtype, date_list in grouped_by_type.items():
                     events[rtype] = group_dates(date_list)
-            # Fetch all surgeons for drop-down
-            surgeons = get_all_surgeons()
-            return render_template('availability.html', events=events, surgeons=surgeons, selected_surgeon_id=surgeon_id, surgeon_name=surgeon_name)
+        surgeons = get_all_surgeons()
+        return render_template('availability.html', events=events, surgeons=surgeons,
+                               selected_surgeon_id=surgeon_id, surgeon_name=surgeon_name)
 
     #############################################
     # Delete Availability Request Endpoint
