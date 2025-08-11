@@ -89,11 +89,11 @@ def create_app():
             call_levels = ','.join(call_levels_list)
             team  = request.form['team']
             db = get_db()
-            db.execute(
-                text("INSERT INTO surgeons (name, call_levels, team) VALUES (:name, :levels, :team)"),
-                {"name": name, "levels": call_levels, "team": team}
-)
-            db.commit()
+            with db.begin():
+                db.execute(
+                    text("INSERT INTO surgeons (name, call_levels, team) VALUES (:name, :levels, :team)"),
+                    {"name": name, "levels": call_levels, "team": team}
+                )
             flash("Surgeon added successfully!")
             return redirect(url_for('list_surgeons'))
     # Pass a default surgeon dict with "call_levels" defined so the template doesn't error out.
@@ -115,11 +115,11 @@ def create_app():
             call_levels_list = request.form.getlist('call_levels')
             call_levels = ','.join(call_levels_list)
             team = request.form['team']
-            db.execute(
-                text("UPDATE surgeons SET name = :name, call_levels = :levels, team = team WHERE id = :id"),
-                {"name": name, "levels": call_levels, "team": team, "id": surgeon_id}
-            )
-            db.commit()
+            with db.begin():
+                db.execute(
+                    text("UPDATE surgeons SET name = :name, call_levels = :levels, team = team WHERE id = :id"),
+                    {"name": name, "levels": call_levels, "team": team, "id": surgeon_id}
+                )
             flash("Surgeon updated successfully!")
             return redirect(url_for('list_surgeons'))
         return render_template('surgeon_form.html', surgeon=surgeon, action="Edit")
@@ -132,11 +132,11 @@ def create_app():
         team = request.form['team']
 
         db = get_db()
-        db.execute(
-                text("UPDATE surgeons SET name = :name, call_levels = :levels, team = team WHERE id = :id"),
-                {"name": name, "levels": call_levels, "team": team, "id": surgeon_id}
-        )
-        db.commit()
+        with db.begin():
+            db.execute(
+                    text("UPDATE surgeons SET name = :name, call_levels = :levels, team = team WHERE id = :id"),
+                    {"name": name, "levels": call_levels, "team": team, "id": surgeon_id}
+            )
         flash("Surgeon updated successfully!")
         return redirect(url_for('list_surgeons'))
 
@@ -154,32 +154,32 @@ def create_app():
             WHERE id         = :id
         """)
 
-        for surgeon in surgeons:
-            sid = surgeon['id']
-            name_field = f"name_{sid}"
-            levels_field = f"call_levels_{sid}"
-            nlth_field = f"nlth_{sid}"
-            team_field = f"team_{sid}"
+        with db.begin():
+            for surgeon in surgeons:
+                sid = surgeon['id']
+                name_field = f"name_{sid}"
+                levels_field = f"call_levels_{sid}"
+                nlth_field = f"nlth_{sid}"
+                team_field = f"team_{sid}"
 
-            new_name   = request.form.get(name_field, surgeon['name'])
-            new_levels = request.form.getlist(levels_field)
-            new_levels_str = ",".join(new_levels)
-            new_team = request.form.get(team_field) or None
+                new_name   = request.form.get(name_field, surgeon['name'])
+                new_levels = request.form.getlist(levels_field)
+                new_levels_str = ",".join(new_levels)
+                new_team = request.form.get(team_field) or None
 
-            # Checkbox: if the field is present in form data, checkbox was checked
-            new_nlth = (request.form.get(nlth_field) == 'on')
+                # Checkbox: if the field is present in form data, checkbox was checked
+                new_nlth = (request.form.get(nlth_field) == 'on')
 
-            db.execute(
-                stmt,
-                {
-                    "name":   new_name,
-                    "levels": new_levels_str,
-                    "nlth":   new_nlth,
-                    "team":   new_team,
-                    "id":     sid
-                }
-            )
-        db.commit()
+                db.execute(
+                    stmt,
+                    {
+                        "name":   new_name,
+                        "levels": new_levels_str,
+                        "nlth":   new_nlth,
+                        "team":   new_team,
+                        "id":     sid
+                    }
+                )
         flash("Surgeon updates applied successfully!")
         return redirect(url_for('list_surgeons'))
 
@@ -221,17 +221,52 @@ def create_app():
                 }
             update_team_day_prefs(new_prefs)
             no_call_hard_val = request.form.get("no_call_hard", "1")
+            # sliders
+            fairness_weight = request.form.get("fairness_weight", "1000")
+            gamma_no_call = request.form.get("gamma_no_call", "10")
+            gamma_unavail_prev = request.form.get("gamma_unavail_prev", "5")
+            gamma_1B = request.form.get("gamma_1B", "1")
+            gamma_spacing = request.form.get("gamma_spacing", "10")
+            spacing_threshold = request.form.get("spacing_threshold", "7")
+            gamma_team_pref = request.form.get("gamma_team_pref", "10")
+            gamma_weekend_balance = request.form.get("gamma_weekend_balance", "50")
+            gamma_consec_weekend = request.form.get("gamma_consec_weekend", "20")
+            gamma_weekend_team_diversity = request.form.get("gamma_weekend_team_diversity", "50")
+            # checkboxes
+            def cb(name):
+                return '1' if request.form.get(name) == '1' else '0'
+            flags = {
+                "enable_fairness_diff_all": cb("enable_fairness_diff_all"),
+                "enable_deviation_sum": cb("enable_deviation_sum"),
+                "enable_spacing_penalty": cb("enable_spacing_penalty"),
+                "enable_availability_unavail_prev_penalty": cb("enable_availability_unavail_prev_penalty"),
+                "enable_availability_nocall_penalty": cb("enable_availability_nocall_penalty"),
+                "enable_force_1B_weekend": cb("enable_force_1B_weekend"),
+                "enable_level2_supervision": cb("enable_level2_supervision"),
+                "enable_group4_2B3_ban": cb("enable_group4_2B3_ban"),
+                "enable_max_2B_group4": cb("enable_max_2B_group4"),
+                "enable_max_calls_level1": cb("enable_max_calls_level1"),
+                "enable_nlth_rules": cb("enable_nlth_rules"),
+                "enable_weekend_balance": cb("enable_weekend_balance"),
+                "enable_weekend_consecutive_penalty": cb("enable_weekend_consecutive_penalty"),
+                "enable_weekend_team_diversity_enable": cb("enable_weekend_team_diversity_enable"),
+                "enable_team_day_prefs": cb("enable_team_day_prefs"),
+            }
             update_global_config({
                 "no_call_hard": no_call_hard_val,
-                "fairness_weight": request.form.get("fairness_weight", "1000"),
-                "gamma_no_call": request.form.get("gamma_no_call", "10"),
-                "gamma_unavail_prev": request.form.get("gamma_unavail_prev", "5"),
-                "gamma_1B": request.form.get("gamma_1B", "1"),
-                "gamma_spacing": request.form.get("gamma_spacing", "10"),
-                "spacing_threshold": request.form.get("spacing_threshold", "7"),
-                "gamma_team_pref": request.form.get("gamma_team_pref", "10")
+                "fairness_weight": fairness_weight,
+                "gamma_no_call": gamma_no_call,
+                "gamma_unavail_prev": gamma_unavail_prev,
+                "gamma_1B": gamma_1B,
+                "gamma_spacing": gamma_spacing,
+                "spacing_threshold": spacing_threshold,
+                "gamma_team_pref": gamma_team_pref,
+                "gamma_weekend_balance": gamma_weekend_balance,
+                "gamma_consec_weekend": gamma_consec_weekend,
+                "gamma_weekend_team_diversity": gamma_weekend_team_diversity,
+                **flags
             })
-            flash("Global configuration updated successfully!")
+            flash("Global configuration saved.", "success")
             return redirect(url_for('global_config_page'))
         else:
             config = get_global_config()
@@ -254,6 +289,29 @@ def create_app():
             gamma_spacing = request.form.get('gamma_spacing', '10')
             spacing_threshold = request.form.get("spacing_threshold", "7")
             gamma_team_pref = request.form.get("gamma_team_pref", "10")
+            gamma_weekend_team_diversity = request.form.get("gamma_weekend_team_diversity", "50")
+            gamma_unavail_credit = request.form.get('gamma_unavail_credit', '50')
+            unavail_credit_days = request.form.get('unavail_credit_days', '7')
+            # Feature flags via checkboxes (unchecked -> missing -> treat as '0')
+            def cb(name):
+                return '1' if request.form.get(name) == '1' else '0'
+            flags = {
+                "enable_force_1B_weekend": cb("enable_force_1B_weekend"),
+                "enable_level2_supervision": cb("enable_level2_supervision"),
+                "enable_group4_2B3_ban": cb("enable_group4_2B3_ban"),
+                "enable_max_2B_group4": cb("enable_max_2B_group4"),
+                "enable_max_calls_level1": cb("enable_max_calls_level1"),
+                "enable_nlth_rules": cb("enable_nlth_rules"),
+                "enable_weekend_consecutive_penalty": cb("enable_weekend_consecutive_penalty"),
+                "enable_weekend_balance": cb("enable_weekend_balance"),
+                "enable_weekend_team_diversity_enable": cb("enable_weekend_team_diversity_enable"),
+                "enable_team_day_prefs": cb("enable_team_day_prefs"),
+                "enable_availability_unavail_prev_penalty": cb("enable_availability_unavail_prev_penalty"),
+                "enable_availability_nocall_penalty": cb("enable_availability_nocall_penalty"),
+                "enable_spacing_penalty": cb("enable_spacing_penalty"),
+                "enable_fairness_diff_all": cb("enable_fairness_diff_all"),
+                "enable_deviation_sum": cb("enable_deviation_sum"),
+            }
             # Update global configuration.
             update_global_config({
                 "fairness_weight": fairness_weight,
@@ -262,7 +320,11 @@ def create_app():
                 "gamma_1B": gamma_1B,
                 "gamma_spacing": gamma_spacing,
                 "spacing_threshold": spacing_threshold,
-                "gamma_team_pref": gamma_team_pref
+                "gamma_team_pref": gamma_team_pref,
+                "gamma_weekend_team_diversity": gamma_weekend_team_diversity,
+                "gamma_unavail_credit": gamma_unavail_credit,
+                "unavail_credit_days": unavail_credit_days,
+                **flags
             })
             flash("Constraint weights updated successfully!")
             return redirect(url_for('constraint_weights'))
@@ -274,7 +336,7 @@ def create_app():
     #############################################
     # Schedule Generation and Saving Endpoints
     #############################################
-    def run_solver_job(job_id, days, surgeons, prev_schedule, public_holidays, preassignments):
+    def run_solver_job(job_id, days, surgeons, prev_schedule, public_holidays, preassignments, time_limit_seconds: int = 30):
         # we only import the solver function here—never re‑import `app` or `solve_jobs`
         from scheduler import solve_schedule_or_tools
 
@@ -289,7 +351,8 @@ def create_app():
         # we need the app_context so that any DB or flask helpers will work
         with app.app_context():
             sched, cost = solve_schedule_or_tools(
-                days, surgeons, prev_schedule, public_holidays, preassignments
+                days, surgeons, prev_schedule, public_holidays, preassignments,
+                time_limit_seconds=time_limit_seconds
             )
 
             if sched is not None:
@@ -456,30 +519,30 @@ def create_app():
             return redirect(url_for('new_schedule', year=year, month=month))
 
         db = get_db()
-        exists = db.execute(
-            text("SELECT 1 FROM saved_schedule WHERE year = :y AND month = :m"),
-            {"y": year, "m": month}
-        ).fetchone()
+        with db.begin():
+            exists = db.execute(
+                text("SELECT 1 FROM saved_schedule WHERE year = :y AND month = :m"),
+                {"y": year, "m": month}
+            ).fetchone()
 
-        if exists:
-            db.execute(
-                text(
-                    "UPDATE saved_schedule "
-                    "SET schedule_data = :sched, date_saved = now() "
-                    "WHERE year = :y AND month = :m"
-                ),
-                {"sched": data, "y": year, "m": month}
-            )
-        else:
-            db.execute(
-                text(
-                    "INSERT INTO saved_schedule "
-                    "(year, month, schedule_data, date_saved) "
-                    "VALUES (:y, :m, :sched, now())"
-                ),
-                {"y": year, "m": month, "sched": data}
-            )
-        db.commit()
+            if exists:
+                db.execute(
+                    text(
+                        "UPDATE saved_schedule "
+                        "SET schedule_data = :sched, date_saved = now() "
+                        "WHERE year = :y AND month = :m"
+                    ),
+                    {"sched": data, "y": year, "m": month}
+                )
+            else:
+                db.execute(
+                    text(
+                        "INSERT INTO saved_schedule "
+                        "(year, month, schedule_data, date_saved) "
+                        "VALUES (:y, :m, :sched, now())"
+                    ),
+                    {"y": year, "m": month, "sched": data}
+                )
         flash("Schedule saved.", "success")
         return redirect(url_for('new_schedule', year=year, month=month))
 
@@ -673,16 +736,16 @@ def create_app():
                     return redirect(url_for('availability', surgeon_id=surgeon_id))
                 
                 # Insert each date as a separate row.
-                for d in dates_list:
-                    db.execute(
-                        text(
-                            "INSERT INTO surgeon_availability "
-                            "(surgeon_id, request_type, date) "
-                            "VALUES (:sid, :rtype, :dt)"
-                        ),
-                        {"sid": surgeon_id, "rtype": request_type, "dt": d}
-                    )
-                db.commit()
+                with db.begin():
+                    for d in dates_list:
+                        db.execute(
+                            text(
+                                "INSERT INTO surgeon_availability "
+                                "(surgeon_id, request_type, date) "
+                                "VALUES (:sid, :rtype, :dt)"
+                            ),
+                            {"sid": surgeon_id, "rtype": request_type, "dt": d}
+                        )
                 flash("Request submitted successfully!")
             except Exception as e:
                 flash(f"Error processing the dates: {str(e)}")
@@ -747,30 +810,29 @@ def create_app():
         
         db = get_db()  # Get the DB connection from your helper
 
-        success = True
-        for req in delete_requests:
-            req_type = req.get('reqType')
-            start_date = req.get('start')
-            end_date = req.get('end')
-            if not (req_type and start_date and end_date):
-                continue
-            # Delete all rows within the given date range.
-            query = text("""
-                DELETE FROM surgeon_availability 
-                WHERE surgeon_id = :surgeon_id 
-                AND request_type = :req_type 
-                AND date BETWEEN :start_date AND :end_date
-            """)
-            result = db.execute(query, {
-                "surgeon_id": surgeon_id,
-                "req_type": req_type,
-                "start_date": start_date,
-                "end_date": end_date
-            })
-            if result.rowcount == 0:
-                success = False
-
-        db.commit()
+        with db.begin():
+            success = True
+            for req in delete_requests:
+                req_type = req.get('reqType')
+                start_date = req.get('start')
+                end_date = req.get('end')
+                if not (req_type and start_date and end_date):
+                    continue
+                # Delete all rows within the given date range.
+                query = text("""
+                    DELETE FROM surgeon_availability 
+                    WHERE surgeon_id = :surgeon_id 
+                    AND request_type = :req_type 
+                    AND date BETWEEN :start_date AND :end_date
+                """)
+                result = db.execute(query, {
+                    "surgeon_id": surgeon_id,
+                    "req_type": req_type,
+                    "start_date": start_date,
+                    "end_date": end_date
+                })
+                if result.rowcount == 0:
+                    success = False
         
         if success:
             flash("Selected availability requests deleted successfully.", category="success")
@@ -791,153 +853,131 @@ def create_app():
         except (TypeError, ValueError):
             flash("Invalid year or month provided.", category="error")
             return redirect(url_for('new_schedule'))
-        
-        # Build date boundaries for the selected month.
-        from datetime import date
-        start_date = date(year, month, 1)
-        if month == 12:
-            next_date = date(year + 1, 1, 1)
-        else:
-            next_date = date(year, month + 1, 1)
-        
-        db = get_db()
-        stmt = text("""
-            SELECT sa.surgeon_id, sa.request_type, sa.date, s.name, s.team, s.call_levels
-            FROM surgeon_availability sa 
-            JOIN surgeons s ON sa.surgeon_id = s.id
-            WHERE sa.date >= :start_date AND sa.date < :next_date
-            ORDER BY s.team, s.name, sa.date
-        """)
-        rows = db.execute(stmt, {"start_date": start_date.isoformat(), "next_date": next_date.isoformat()}).fetchall()
 
-        # Organize records per surgeon.
-        data = {}
-        for row in rows:
-            mapping = row._mapping
-            sid = mapping["surgeon_id"]
-            if sid not in data:
-                data[sid] = {
-                    "name": mapping["name"],
-                    "team": mapping["team"],
-                    "call_levels": mapping["call_levels"],
-                    "unavailable": [],
-                    "no_call": []
-                }
-            day = mapping["date"].day
-            if mapping["request_type"] == "unavailable":
-                data[sid]["unavailable"].append(day)
-            elif mapping["request_type"] == "no_call":
-                data[sid]["no_call"].append(day)
-            # Also include surgeons with no requests.
+        # Compute month day range and metadata
+        import calendar as _cal
+        from datetime import date
+        num_days = _cal.monthrange(year, month)[1]
+        days = [date(year, month, d) for d in range(1, num_days + 1)]
+
+        # Weekend and holiday sets
+        hk_h = holidays.HK(years=[year])
+        holiday_dates = {d for d in hk_h if d.year == year and d.month == month}
+        weekend_idx = {d.day for d in days if d.weekday() >= 5}
+
+        # Load surgeons and sort by team then call level rank then name
         surgeons = get_all_surgeons()
-        for surgeon in surgeons:
-            sid = surgeon['id']
-            if sid not in data:
-                data[sid] = {
-                    "name": surgeon["name"],
-                    "team": surgeon["team"],
-                    "call_levels": surgeon.get("call_levels", ""),
-                    "unavailable": [],
-                    "no_call": []
-                }
-        # Helper: group sorted integer days into ranges (e.g. [1,2,3,5] → "1-3, 5")
-        def group_days(day_list):
-            if not day_list:
-                return ""
-            days = sorted(set(day_list))
-            groups = []
-            start = days[0]
-            end = days[0]
-            for d in days[1:]:
-                if d == end + 1:
-                    end = d
-                else:
-                    groups.append(f"{start}" if start == end else f"{start}-{end}")
-                    start = d
-                    end = d
-            groups.append(f"{start}" if start == end else f"{start}-{end}")
-            return ", ".join(groups)
-        
-        # Sorting: by team order then by lowest call level.
-        team_order = {"Team 1": 1, "Team 2": 2, "Team 3": 3, "Team 4": 4, "Urology": 5}
-        call_order = {"1A": 1, "1B": 1, "2A": 2, "2B": 3, "3": 4, "4": 5}
+        level_rank = {"1A": 1, "1B": 1, "2A": 2, "2B": 3, "3": 4, "4": 5}
         def get_call_rank(call_levels):
-            levels = parse_call_levels(call_levels)
+            levels = parse_call_levels(call_levels or "")
             if not levels:
                 return 99
-            return max(call_order.get(l, 99) for l in levels)
-        
-        # Group surgeons by team.
-        teams = {}
-        for info in data.values():
-            team = info["team"]
-            teams.setdefault(team, []).append(info)
-        
-        # Sort teams in order.
-        sorted_teams = sorted(teams.items(), key=lambda kv: team_order.get(kv[0], 99))
-        # For each team, sort by call rank then name.
-        for t, surgeons in sorted_teams:
-            surgeons.sort(key=lambda s: (get_call_rank(s["call_levels"]), s["name"].lower()))
-        
-        # Build Excel rows.
-        excel_rows = []
-        for team, surgeons in sorted_teams:
-            # Add a header row for the team.
-            excel_rows.append({"Surgeon": f"Team: {team}", "Unavailability": "", "No Call": ""})
-            for s in surgeons:
-                excel_rows.append({
-                    "Surgeon": s["name"],
-                    "Unavailability": group_days(s["unavailable"]),
-                    "No Call": group_days(s["no_call"])
-                })
-            # Add a blank spacer row.
-            excel_rows.append({"Surgeon": "", "Unavailability": "", "No Call": ""})
-        
-        df = pd.DataFrame(excel_rows)
-        
-        # Write to Excel with formatting.
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine="openpyxl") as writer:
-            df.to_excel(writer, index=False, sheet_name="Requests")
-            ws = writer.sheets["Requests"]
-            from openpyxl.styles import PatternFill, Font
-            # Define team background colors.
-            team_colors = {
-                "Team 1": "ADD8E6",   # light blue
-                "Team 2": "FFC0CB",   # pink
-                "Team 3": "90EE90",   # light green
-                "Team 4": "FFFF00",   # yellow
-                "Urology": "FFFFFF"   # white
-            }
-            
-            # Apply Arial font size 12 to all cells.
-            default_font = Font(name="Arial", size=12)
-            for row in ws.iter_rows(min_row=1, max_row=ws.max_row):
-                for cell in row:
-                    cell.font = default_font
-            
-            # Fill team header rows with corresponding team color.
-            for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
-                cell = row[0]
-                if cell.value and isinstance(cell.value, str) and cell.value.startswith("Team:"):
-                    team_name = cell.value.split("Team:")[-1].strip()
-                    fill_color = team_colors.get(team_name, "FFFFFF")
-                    fill = PatternFill(start_color=fill_color, end_color=fill_color, fill_type="solid")
-                    for c in row:
-                        c.fill = fill
-            # Adjust column widths so headers and cells are fully visible.
-            for col in ws.columns:
-                max_length = 0
-                col_letter = col[0].column_letter
-                for cell in col:
-                    if cell.value:
-                        max_length = max(max_length, len(str(cell.value)))
-                ws.column_dimensions[col_letter].width = max_length + 2
+            return min(level_rank.get(l, 99) for l in levels)
+        surgeons.sort(key=lambda s: (
+            (s.get('team') or 'zzz'),
+            get_call_rank(s.get('call_levels')),
+            s.get('name','').lower()
+        ))
 
-        output.seek(0)
-        filename = f"requests_{year}_{month:02d}.xlsx"
+        # Build row mapping with a blank row between teams for legibility
+        surgeon_id_to_row = {}
+        row_cursor = 2  # header at row 1
+        prev_team = None
+        for s in surgeons:
+            team = s.get('team')
+            if prev_team is not None and team != prev_team:
+                row_cursor += 1  # insert one empty separator row
+            surgeon_id_to_row[s['id']] = row_cursor
+            row_cursor += 1
+            prev_team = team
+        last_row = row_cursor - 1
+
+        # Fetch requests for the month
+        start_date = date(year, month, 1)
+        next_date = date(year + (1 if month == 12 else 0), 1 if month == 12 else month + 1, 1)
+        db = get_db()
+        stmt = text(
+            """
+            SELECT surgeon_id, request_type, date
+            FROM surgeon_availability
+            WHERE date >= :start_date AND date < :next_date
+            """
+        )
+        req_rows = db.execute(stmt, {"start_date": start_date.isoformat(), "next_date": next_date.isoformat()}).mappings().all()
+
+        # Build a matrix of marks: any request (unavailable/no_call) -> X
+        marks = {(r['surgeon_id'], r['date'].day): 'X' for r in req_rows if r['request_type'] in ('unavailable', 'no_call')}
+
+        # Build workbook
+        from openpyxl import Workbook
+        from openpyxl.styles import PatternFill, Font, Alignment
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Requests"
+
+        # Header row
+        ws.cell(row=1, column=1, value="Surgeon")
+        for d in range(1, num_days + 1):
+            ws.cell(row=1, column=1 + d, value=d)
+
+        # Write surgeon names with separator rows preserved
+        for s in surgeons:
+            row = surgeon_id_to_row[s['id']]
+            name = s.get('name')
+            team = s.get('team')
+            ws.cell(row=row, column=1, value=f"{team or ''} - {name}")
+
+        # Styles
+        dark_red = PatternFill(start_color="8B0000", end_color="8B0000", fill_type="solid")
+        weekend_fill = PatternFill(start_color="D3D3D3", end_color="D3D3D3", fill_type="solid")
+        holiday_fill = PatternFill(start_color="ADD8E6", end_color="ADD8E6", fill_type="solid")
+        header_font = Font(bold=True)
+        center = Alignment(horizontal="center", vertical="center")
+
+        # Apply header style
+        for cell in ws[1]:
+            cell.font = header_font
+            cell.alignment = center
+
+        # Pre-color weekend/holiday columns
+        for d in range(1, num_days + 1):
+            col_idx = 1 + d
+            the_date = date(year, month, d)
+            base_fill = None
+            if the_date in holiday_dates:
+                base_fill = holiday_fill
+            elif d in weekend_idx:
+                base_fill = weekend_fill
+            if base_fill:
+                for r in range(2, last_row + 1):
+                    ws.cell(row=r, column=col_idx).fill = base_fill
+
+        # Fill marks
+        for (sid, d), mark in marks.items():
+            row = surgeon_id_to_row.get(sid)
+            if not row:
+                continue
+            cell = ws.cell(row=row, column=1 + d)
+            cell.value = mark
+            cell.alignment = center
+            cell.fill = dark_red
+
+        # Autosize columns
+        for col in ws.columns:
+            max_len = 0
+            col_letter = col[0].column_letter
+            for cell in col:
+                if cell.value is not None:
+                    max_len = max(max_len, len(str(cell.value)))
+            ws.column_dimensions[col_letter].width = min(18, max(6, max_len + 2))
+
+        # Return file
+        out = io.BytesIO()
+        wb.save(out)
+        out.seek(0)
+        filename = f"requests_matrix_{year}_{month:02d}.xlsx"
         return send_file(
-            output,
+            out,
             as_attachment=True,
             download_name=filename,
             mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -950,17 +990,17 @@ def create_app():
     @app.route('/surgeons/delete/<int:surgeon_id>', methods=['POST'])
     def delete_surgeon(surgeon_id):
         db = get_db()
-        # First, clean up any related availability records:
-        db.execute(
-            text("DELETE FROM surgeon_availability WHERE surgeon_id = :sid"),
-            {"sid": surgeon_id}
-        )
-        # Then delete the surgeon:
-        db.execute(
-            text("DELETE FROM surgeons WHERE id = :sid"),
-            {"sid": surgeon_id}
-        )
-        db.commit()
+        with db.begin():
+            # First, clean up any related availability records:
+            db.execute(
+                text("DELETE FROM surgeon_availability WHERE surgeon_id = :sid"),
+                {"sid": surgeon_id}
+            )
+            # Then delete the surgeon:
+            db.execute(
+                text("DELETE FROM surgeons WHERE id = :sid"),
+                {"sid": surgeon_id}
+            )
         flash("Surgeon deleted successfully.", "success")
         return redirect(url_for('list_surgeons'))
 
@@ -1077,6 +1117,7 @@ def create_app():
     def start_solve():
         data = request.get_json()
         year, month = int(data['year']), int(data['month'])
+        time_limit_seconds = int(data.get('time_limit_seconds', 30))
 
         # Build days list
         days = [
@@ -1136,7 +1177,7 @@ def create_app():
         job_id = uuid.uuid4().hex
         threading.Thread(
             target=run_solver_job,
-            args=(job_id, days, surgeons, prev_schedule, public_holidays, preassignments),
+            args=(job_id, days, surgeons, prev_schedule, public_holidays, preassignments, time_limit_seconds),
             daemon=True
         ).start()
         
@@ -1199,22 +1240,22 @@ def create_app():
                 today = datetime.date.today()
                 year, month = today.year, today.month
 
-            row = db.execute(
-                text("SELECT id FROM preassignments WHERE year = :year AND month = :month"),
-                {"year": year, "month": month}
-            ).fetchone()
-            if row:
-                row_dict = row._mapping  # Access the row as a mapping object
-                db.execute(
-                    text("UPDATE preassignments SET preassignment_data = :data, date_updated = now() WHERE id = :id"),
-                    {"data": json.dumps(preassignments), "id": row_dict["id"]}
-                )
-            else:
-                db.execute(
-                    text("INSERT INTO preassignments (year, month, preassignment_data) VALUES (:year, :month, :data)"),
-                    {"year": year, "month": month, "data": json.dumps(preassignments)}
-                )
-            db.commit()
+            with db.begin():
+                row = db.execute(
+                    text("SELECT id FROM preassignments WHERE year = :year AND month = :month"),
+                    {"year": year, "month": month}
+                ).fetchone()
+                if row:
+                    row_dict = row._mapping  # Access the row as a mapping object
+                    db.execute(
+                        text("UPDATE preassignments SET preassignment_data = :data, date_updated = now() WHERE id = :id"),
+                        {"data": json.dumps(preassignments), "id": row_dict["id"]}
+                    )
+                else:
+                    db.execute(
+                        text("INSERT INTO preassignments (year, month, preassignment_data) VALUES (:year, :month, :data)"),
+                        {"year": year, "month": month, "data": json.dumps(preassignments)}
+                    )
             flash("Preassignments updated successfully!", "success")
             return redirect(url_for('preassignment', year=year, month=month))
         else:

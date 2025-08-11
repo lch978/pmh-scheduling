@@ -38,122 +38,125 @@ def close_db(error=None):
     if conn is not None:
         conn.close()
 
+
+
 def init_db():
     db = get_db()
 
-    # ── 1) Create all tables if they don't exist ──
+    # Use a transaction context manager
+    with db.begin():
+        # ── 1) Create all tables if they don't exist ──
 
-    ddl_statements = [
-        """
-        CREATE TABLE IF NOT EXISTS surgeons (
-            id SERIAL PRIMARY KEY,
-            name TEXT NOT NULL,
-            call_levels TEXT NOT NULL,
-            nlth BOOLEAN NOT NULL DEFAULT FALSE,
-            team TEXT NOT NULL
-        );
-        """,
-        """
-        CREATE TABLE IF NOT EXISTS saved_schedule (
-            id SERIAL PRIMARY KEY,
-            year INTEGER,
-            month INTEGER,
-            schedule_data JSONB,
-            date_saved TIMESTAMP WITHOUT TIME ZONE DEFAULT now(),
-            UNIQUE (year, month)
-        );
-        """,
-        """
-        CREATE TABLE IF NOT EXISTS max_calls_config (
-            level_group TEXT PRIMARY KEY,
-            max_calls INTEGER
-        );
-        """,
-        """
-        CREATE TABLE IF NOT EXISTS surgeon_availability (
-            id SERIAL PRIMARY KEY,
-            surgeon_id INTEGER REFERENCES surgeons(id),
-            request_type TEXT,
-            date DATE
-        );
-        """,
-        """
-        CREATE TABLE IF NOT EXISTS global_config (
-            key TEXT PRIMARY KEY,
-            value TEXT
-        );
-        """
+        ddl_statements = [
+            """
+            CREATE TABLE IF NOT EXISTS surgeons (
+                id SERIAL PRIMARY KEY,
+                name TEXT NOT NULL,
+                call_levels TEXT NOT NULL,
+                nlth BOOLEAN NOT NULL DEFAULT FALSE,
+                team TEXT NOT NULL
+            );
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS saved_schedule (
+                id SERIAL PRIMARY KEY,
+                year INTEGER,
+                month INTEGER,
+                schedule_data JSONB,
+                date_saved TIMESTAMP WITHOUT TIME ZONE DEFAULT now(),
+                UNIQUE (year, month)
+            );
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS max_calls_config (
+                level_group TEXT PRIMARY KEY,
+                max_calls INTEGER
+            );
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS surgeon_availability (
+                id SERIAL PRIMARY KEY,
+                surgeon_id INTEGER REFERENCES surgeons(id),
+                request_type TEXT,
+                date DATE
+            );
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS global_config (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            );
+            """,
             # New table: one row per (team, weekday)
-        """
-        CREATE TABLE IF NOT EXISTS team_day_preferences (
-            team TEXT NOT NULL,
-            weekday INTEGER NOT NULL,
-            preference INTEGER NOT NULL DEFAULT 0,
-            PRIMARY KEY (team, weekday)
-        );
-        """
-        """
-        CREATE TABLE IF NOT EXISTS preassignments (
-            id SERIAL PRIMARY KEY,
-            year INTEGER,
-            month INTEGER,
-            preassignment_data JSONB,
-            date_updated TIMESTAMP WITHOUT TIME ZONE DEFAULT now(),
-            UNIQUE (year, month)
-        );
-        """
+            """
+            CREATE TABLE IF NOT EXISTS team_day_preferences (
+                team TEXT NOT NULL,
+                weekday INTEGER NOT NULL,
+                preference INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (team, weekday)
+            );
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS preassignments (
+                id SERIAL PRIMARY KEY,
+                year INTEGER,
+                month INTEGER,
+                preassignment_data JSONB,
+                date_updated TIMESTAMP WITHOUT TIME ZONE DEFAULT now(),
+                UNIQUE (year, month)
+            );
+            """
         ]
-    for ddl in ddl_statements:
-        # exec_driver_sql allows raw SQL strings
-        db.exec_driver_sql(ddl)
+        for ddl in ddl_statements:
+            # exec_driver_sql allows raw SQL strings
+            db.exec_driver_sql(ddl)
 
-    # ── 2) Seed global_config defaults ──
-    defaults = {
-        "no_call_hard":          "1",
-        "fairness_weight":       "1000",
-        "gamma_no_call":         "10",
-        "gamma_unavail_prev":    "5",
-        "gamma_1B":              "1",
-        "gamma_balance":         "100",
-        "gamma_spacing":         "10",
-        "spacing_threshold":     "7",
-        "gamma_weekend_balance": "50",
-        "gamma_consec_weekend":  "20",
-        "gamma_team_pref":       "10"
-    }
-    
-    insert_gc = text("""
-        INSERT INTO global_config (key, value)
-        VALUES (:key, :value)
-        ON CONFLICT (key) DO NOTHING
-    """)
-    for key, val in defaults.items():
-        db.execute(insert_gc, {"key": key, "value": val})
+        # ── 2) Seed global_config defaults ──
+        defaults = {
+            "no_call_hard":          "1",
+            "fairness_weight":       "1000",
+            "gamma_no_call":         "10",
+            "gamma_unavail_prev":    "5",
+            "gamma_1B":              "1",
+            "gamma_balance":         "100",
+            "gamma_spacing":         "10",
+            "spacing_threshold":     "7",
+            "gamma_weekend_balance": "50",
+            "gamma_consec_weekend":  "20",
+            "gamma_team_pref":       "10"
+        }
+        
+        insert_gc = text("""
+            INSERT INTO global_config (key, value)
+            VALUES (:key, :value)
+            ON CONFLICT (key) DO NOTHING
+        """)
+        for key, val in defaults.items():
+            db.execute(insert_gc, {"key": key, "value": val})
 
-    # ── 3) Seed max_calls_config defaults ──
-    max_defaults = {"1": 10, "2": 10, "3": 10, "4": 10}
-    insert_mc = text("""
-        INSERT INTO max_calls_config (level_group, max_calls)
-        VALUES (:group, :max_calls)
-        ON CONFLICT (level_group) DO NOTHING
-    """)
-    for group, max_val in max_defaults.items():
-        db.execute(insert_mc, {"group": group, "max_calls": max_val})
+        # ── 3) Seed max_calls_config defaults ──
+        max_defaults = {"1": 10, "2": 10, "3": 10, "4": 10}
+        insert_mc = text("""
+            INSERT INTO max_calls_config (level_group, max_calls)
+            VALUES (:group, :max_calls)
+            ON CONFLICT (level_group) DO NOTHING
+        """)
+        for group, max_val in max_defaults.items():
+            db.execute(insert_mc, {"group": group, "max_calls": max_val})
 
-    # Seed one row per team per weekday with default preference=0
-    teams = ['Team 1', 'Team 2', 'Team 3', 'Team 4', 'Urology']
-    insert_pref = text("""
-    INSERT INTO team_day_preferences (team, weekday, preference)
-    VALUES (:team, :weekday, 0)
-    ON CONFLICT (team, weekday) DO NOTHING
-    """)
+        # Seed one row per team per weekday with default preference=0
+        teams = ['Team 1', 'Team 2', 'Team 3', 'Team 4', 'Urology']
+        insert_pref = text("""
+        INSERT INTO team_day_preferences (team, weekday, preference)
+        VALUES (:team, :weekday, 0)
+        ON CONFLICT (team, weekday) DO NOTHING
+        """)
 
-    for team in teams:
-        for weekday in range(7):
-            db.execute(insert_pref, {"team": team, "weekday": weekday})
+        for team in teams:
+            for weekday in range(7):
+                db.execute(insert_pref, {"team": team, "weekday": weekday})
 
-    # ── 4) Commit everything ──
-    db.commit()
+        # Transaction will be automatically committed when exiting the context
 
 def group_dates(date_list):
     """
@@ -261,20 +264,20 @@ def get_team_day_prefs():
 
 def update_team_day_prefs(new_prefs):
     db = get_db()
-    stmt = text("""
-        UPDATE team_day_preferences
-           SET preference = :preference
-         WHERE team      = :team
-           AND weekday   = :weekday
-    """)
-    for team, by_wd in new_prefs.items():
-        for wd, pref in by_wd.items():
-            db.execute(stmt, {
-                "preference": pref,
-                "team":       team,
-                "weekday":    wd
-            })
-    db.commit()
+    with db.begin():
+        stmt = text("""
+            UPDATE team_day_preferences
+               SET preference = :preference
+             WHERE team      = :team
+               AND weekday   = :weekday
+        """)
+        for team, by_wd in new_prefs.items():
+            for wd, pref in by_wd.items():
+                db.execute(stmt, {
+                    "preference": pref,
+                    "team":       team,
+                    "weekday":    wd
+                })
 
 #############################################
 # Global Config for No Call Request Handling
@@ -289,12 +292,12 @@ def get_global_config():
 
 def update_global_config(new_config):
     db = get_db()
-    for key, value in new_config.items():
-        db.execute(
-            text("UPDATE global_config SET value = :value WHERE key = :key"),
-            {"key": key, "value": str(value)}
-        )
-    db.commit()
+    with db.begin():
+        for key, value in new_config.items():
+            db.execute(
+                text("UPDATE global_config SET value = :value WHERE key = :key"),
+                {"key": key, "value": str(value)}
+            )
 
 def get_all_surgeons():
     db = get_db()
@@ -310,12 +313,12 @@ def get_max_calls_config():
 
 def update_max_calls_config(new_config):
     db = get_db()
-    for group, max_val in new_config.items():
-        db.execute(
-            text("UPDATE max_calls_config SET max_calls = :max_val WHERE level_group = :group"),
-            {"group": group, "max_val": max_val}
-        )
-    db.commit()
+    with db.begin():
+        for group, max_val in new_config.items():
+            db.execute(
+                text("UPDATE max_calls_config SET max_calls = :max_val WHERE level_group = :group"),
+                {"group": group, "max_val": max_val}
+            )
 
 def get_availability_requests():
     db = get_db()

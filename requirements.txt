@@ -1,6 +1,6 @@
 Flask==3.0.3
 gunicorn==23.0.0
-ortools==9.10.4067
+ortools~=9.14.0
 python-dateutil==2.8.2
 holidays==0.27
 Flask-SQLAlchemy==3.1.1

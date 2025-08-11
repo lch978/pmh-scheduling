@@ -103,7 +103,8 @@
   <div style="margin-bottom: 10px;"></div>
     <!-- All buttons are now inline and use the same styling -->
     <button type="button" id="btnLoad" style="padding:10px 15px; font-size:14px; margin: 5px;">Load Saved Schedule</button>
-    <button type="button" id="btnGen" style="padding:10px 15px; font-size:14px; margin: 5px;">Generate New Schedule</button>
+    <button type="button" id="btnGen30" style="padding:10px 15px; font-size:14px; margin: 5px;">Generate New Schedule (30s)</button>
+    <button type="button" id="btnGen120" style="padding:10px 15px; font-size:14px; margin: 5px;">Generate New Schedule (120s)</button>
     <button type="button" id="btnStop" disabled style="padding:10px 15px; font-size:14px; margin: 5px;">Stop</button>
     
     <form method="post" action="{{ url_for('save_schedule') }}" style="display:inline;">
@@ -123,7 +124,7 @@
     <form method="post" action="{{ url_for('export_requests') }}" style="display:inline;">
       <input type="hidden" name="year" value="{{ year }}">
       <input type="hidden" name="month" value="{{ month }}">
-      <button type="submit" id="btnExportRequests" style="padding:10px 15px; font-size:14px; margin:5px;">Export Availability/No Call Requests</button>
+      <button type="submit" id="btnExportRequests" style="padding:10px 15px; font-size:14px; margin:5px;">Export Requests Matrix (Excel)</button>
     </form>
   </div>
 <div id="progress" style="text-align:center; margin-top:10px;">
@@ -193,7 +194,8 @@
     // grab references
     const modal   = document.getElementById('loadingModal');
     const bar     = document.getElementById('modalLoadingBar');
-    const btnGen  = document.getElementById('btnGen');
+    const btnGen30  = document.getElementById('btnGen30');
+    const btnGen120 = document.getElementById('btnGen120');
     const btnLoad = document.getElementById('btnLoad');
     const btnStop = document.getElementById('btnStop');
     let   currentJob = null;
@@ -205,7 +207,7 @@
     saveInput.value   = initJSON;
     exportInput.value = initJSON;
 
-    // helper to show/hide the 30s modal
+    // helper to show/hide the modal with variable duration
     function showPopupProgress(duration = 30000) {
       modal.style.display = 'flex';
       bar.style.width     = '0%';
@@ -302,21 +304,24 @@
       window.location = `?year=${y}&month=${m}`;
     });
 
-    btnGen.addEventListener('click', async () => {
-      showPopupProgress(45000);
+    async function startSolve(timeLimitMs) {
+      showPopupProgress(timeLimitMs + 15000);
       const y = +document.getElementById('year').value;
       const m = +document.getElementById('month').value;
       const res = await fetch('/start_solve', {
         method: 'POST',
         headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ year: y, month: m })
+        body: JSON.stringify({ year: y, month: m, time_limit_seconds: Math.floor(timeLimitMs/1000) })
       });
       const { job_id } = await res.json();
       currentJob = job_id;
       document.getElementById('status').innerText = 'running';
       btnStop.disabled = false;
       pollStatus();
-    });
+    }
+
+    btnGen30.addEventListener('click', () => startSolve(30000));
+    btnGen120.addEventListener('click', () => startSolve(120000));
 
     btnStop.addEventListener('click', () => {
       if (!currentJob) return;

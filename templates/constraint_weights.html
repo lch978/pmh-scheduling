@@ -1,33 +1,159 @@
 {% extends "base.html" %}
 {% block title %}Constraint Weights{% endblock %}
 {% block content %}
-  <h1 style="text-align: center;">Update Constraint Weights</h1>
-  <form method="post" action="{{ url_for('constraint_weights') }}" style="text-align: center; margin-top: 20px;">
-    <div>
-      <label for="fairness_weight">Fairness Weight (diff_all multiplier):</label>
-      <input type="range" id="fairness_weight" name="fairness_weight" min="0" max="5000" value="{{ config.fairness_weight or '1000' }}">
-      <span id="fw_display">{{ config.fairness_weight or '1000' }}</span>
+  <h1 style="text-align: center;">Global Configuration</h1>
+  <form method="post" action="{{ url_for('constraint_weights') }}" style="max-width:900px;margin:20px auto;display:grid;grid-template-columns: 260px 1fr;gap:20px;align-items:start;">
+    <div style="border:1px solid #ddd;border-radius:8px;padding:12px;">
+      <h3 style="margin-top:0;">Enable/Disable Constraints</h3>
+      <label style="display:block;margin:6px 0;">
+        <input type="checkbox" name="enable_fairness_diff_all" value="1" {% if config.enable_fairness_diff_all != '0' %}checked{% endif %}> Fairness (overall diff)
+      </label>
+      <label style="display:block;margin:6px 0;">
+        <input type="checkbox" name="enable_deviation_sum" value="1" {% if config.enable_deviation_sum != '0' %}checked{% endif %}> Deviation from average
+      </label>
+      <label style="display:block;margin:6px 0;">
+        <input type="checkbox" name="enable_spacing_penalty" value="1" {% if config.enable_spacing_penalty != '0' %}checked{% endif %}> Spacing penalty
+      </label>
+      <label style="display:block;margin:6px 0;">
+        <input type="checkbox" name="enable_availability_unavail_prev_penalty" value="1" {% if config.enable_availability_unavail_prev_penalty != '0' %}checked{% endif %}> Unavailable prev-day penalty
+      </label>
+      <label style="display:block;margin:6px 0;">
+        <input type="checkbox" name="enable_availability_nocall_penalty" value="1" {% if config.enable_availability_nocall_penalty != '0' %}checked{% endif %}> No-call penalty (soft)
+      </label>
+      <hr>
+      <label style="display:block;margin:6px 0;">
+        <input type="checkbox" name="enable_force_1B_weekend" value="1" {% if config.enable_force_1B_weekend != '0' %}checked{% endif %}> Force 1B on weekends/holidays
+      </label>
+      <label style="display:block;margin:6px 0;">
+        <input type="checkbox" name="enable_level2_supervision" value="1" {% if config.enable_level2_supervision != '0' %}checked{% endif %}> Level-2 supervision rules
+      </label>
+      <label style="display:block;margin:6px 0;">
+        <input type="checkbox" name="enable_group4_2B3_ban" value="1" {% if config.enable_group4_2B3_ban != '0' %}checked{% endif %}> Forbid Group-4 covering 2B and 3 same day
+      </label>
+      <label style="display:block;margin:6px 0;">
+        <input type="checkbox" name="enable_max_2B_group4" value="1" {% if config.enable_max_2B_group4 != '0' %}checked{% endif %}> Limit Group-4 to ≤1 total 2B
+      </label>
+      <label style="display:block;margin:6px 0;">
+        <input type="checkbox" name="enable_max_calls_level1" value="1" {% if config.enable_max_calls_level1 != '0' %}checked{% endif %}> Max 1A+1B per surgeon
+      </label>
+      <label style="display:block;margin:6px 0;">
+        <input type="checkbox" name="enable_nlth_rules" value="1" {% if config.enable_nlth_rules != '0' %}checked{% endif %}> NLTH weekend-only rule
+      </label>
+      <hr>
+      <label style="display:block;margin:6px 0;">
+        <input type="checkbox" name="enable_weekend_balance" value="1" {% if config.enable_weekend_balance != '0' %}checked{% endif %}> Weekend fairness (per group)
+      </label>
+      <label style="display:block;margin:6px 0;">
+        <input type="checkbox" name="enable_weekend_consecutive_penalty" value="1" {% if config.enable_weekend_consecutive_penalty != '0' %}checked{% endif %}> Penalize consecutive weekend days
+      </label>
+      <label style="display:block;margin:6px 0;">
+        <input type="checkbox" name="enable_weekend_team_diversity_enable" value="1" {% if config.enable_weekend_team_diversity_enable != '0' %}checked{% endif %}> Weekend team diversity
+      </label>
+      <label style="display:block;margin:6px 0;">
+        <input type="checkbox" name="enable_team_day_prefs" value="1" {% if config.enable_team_day_prefs != '0' %}checked{% endif %}> Team day preferences
+      </label>
     </div>
-    <br>
-    <div>
-      <label for="gamma_no_call">Gamma (No Call Penalty):</label>
-      <input type="range" id="gamma_no_call" name="gamma_no_call" min="0" max="100" value="{{ config.gamma_no_call or '10' }}">
-      <span id="gnc_display">{{ config.gamma_no_call or '10' }}</span>
+
+    <div style="border:1px solid #ddd;border-radius:8px;padding:12px;">
+      <h3 style="margin-top:0;">Weights</h3>
+      <div style="display:grid;grid-template-columns: 1fr auto;gap:8px;align-items:center;">
+        <div style="grid-column:1 / span 2; width:80%;">
+          <label for="fairness_weight" style="margin:0; display:block;">Overall fairness strength:</label>
+          <div style="display:grid; grid-template-columns: 1fr auto; align-items:center; gap:8px;">
+            <input type="range" id="fairness_weight" name="fairness_weight" min="0" max="5000" value="{{ config.fairness_weight or '1000' }}" style="width:100%;" oninput="fw_display.textContent=this.value">
+            <span id="fw_display">{{ config.fairness_weight or '1000' }}</span>
+          </div>
+          <div style="font-size:12px; font-style:italic; color:#666;">Higher values push total calls to be more equal across all surgeons.</div>
+        </div>
+
+        <div style="grid-column:1 / span 2; width:80%;">
+          <label for="gamma_no_call" style="margin:0; display:block;">Penalty for ignoring “No‑call” requests:</label>
+          <div style="display:grid; grid-template-columns: 1fr auto; align-items:center; gap:8px;">
+            <input type="range" id="gamma_no_call" name="gamma_no_call" min="0" max="200" value="{{ config.gamma_no_call or '10' }}" style="width:100%;" oninput="gnc_display.textContent=this.value">
+            <span id="gnc_display">{{ config.gamma_no_call or '10' }}</span>
+          </div>
+          <div style="font-size:12px; font-style:italic; color:#666;">Discourages assigning a call on days when a surgeon requested “no call”.</div>
+        </div>
+
+        <div style="grid-column:1 / span 2; width:80%;">
+          <label for="gamma_unavail_prev" style="margin:0; display:block;">Penalty for assigning day before “Unavailable”:</label>
+          <div style="display:grid; grid-template-columns: 1fr auto; align-items:center; gap:8px;">
+            <input type="range" id="gamma_unavail_prev" name="gamma_unavail_prev" min="0" max="200" value="{{ config.gamma_unavail_prev or '5' }}" style="width:100%;" oninput="gup_display.textContent=this.value">
+            <span id="gup_display">{{ config.gamma_unavail_prev or '5' }}</span>
+          </div>
+          <div style="font-size:12px; font-style:italic; color:#666;">Avoids scheduling a surgeon the day before a declared unavailability.</div>
+        </div>
+
+        <div style="grid-column:1 / span 2; width:80%;">
+          <label for="gamma_1B" style="margin:0; display:block;">Preference to fill 1B level:</label>
+          <div style="display:grid; grid-template-columns: 1fr auto; align-items:center; gap:8px;">
+            <input type="range" id="gamma_1B" name="gamma_1B" min="0" max="200" value="{{ config.gamma_1B or '1' }}" style="width:100%;" oninput="g1b_display.textContent=this.value">
+            <span id="g1b_display">{{ config.gamma_1B or '1' }}</span>
+          </div>
+          <div style="font-size:12px; font-style:italic; color:#666;">Encourages ensuring the 1B slot is assigned when feasible.</div>
+        </div>
+
+        <div style="grid-column:1 / span 2; width:80%;">
+          <label for="gamma_team_pref" style="margin:0; display:block;">Team day preference strength:</label>
+          <div style="display:grid; grid-template-columns: 1fr auto; align-items:center; gap:8px;">
+            <input type="range" id="gamma_team_pref" name="gamma_team_pref" min="0" max="200" value="{{ config.gamma_team_pref or '10' }}" style="width:100%;" oninput="gtdp_display.textContent=this.value">
+            <span id="gtdp_display">{{ config.gamma_team_pref or '10' }}</span>
+          </div>
+          <div style="font-size:12px; font-style:italic; color:#666;">Applies the increase/decrease preferences per team for each weekday.</div>
+        </div>
+
+        <div style="grid-column:1 / span 2; width:80%;">
+          <label for="gamma_unavail_credit" style="margin:0; display:block;">Credit for unavailability (more → fewer calls):</label>
+          <div style="display:grid; grid-template-columns: 1fr auto; align-items:center; gap:8px;">
+            <input type="range" id="gamma_unavail_credit" name="gamma_unavail_credit" min="0" max="500" value="{{ config.gamma_unavail_credit or '50' }}" style="width:100%;" oninput="guc_display.textContent=this.value">
+            <span id="guc_display">{{ config.gamma_unavail_credit or '50' }}</span>
+          </div>
+          <div style="font-size:12px; font-style:italic; color:#666;">Grants call reduction credit per set number of unavailable days.</div>
+        </div>
+        
+        <div style="grid-column:1 / span 2; width:80%;">
+          <label for="unavail_credit_days" style="margin:0; display:block;">Days of unavailability per 1 call credit:</label>
+          <div style="display:grid; grid-template-columns: 1fr auto; align-items:center; gap:8px;">
+            <input type="range" id="unavail_credit_days" name="unavail_credit_days" min="1" max="14" value="{{ config.unavail_credit_days or '7' }}" style="width:100%;" oninput="ucd_display.textContent=this.value">
+            <span id="ucd_display">{{ config.unavail_credit_days or '7' }}</span>
+          </div>
+          <div style="font-size:12px; font-style:italic; color:#666;">Example: 7 means 7 days off ≈ 1 fewer expected call; 14 ≈ 2 fewer.</div>
+        </div>
+
+        <div style="grid-column:1 / span 2;">
+          <div style="width:80%;">
+            <label for="gamma_weekend_balance" style="margin:0; display:block;">Weekend fairness across groups:</label>
+            <div style="display:grid; grid-template-columns: 1fr auto; align-items:center; gap:8px;">
+              <input type="range" id="gamma_weekend_balance" name="gamma_weekend_balance" min="0" max="500" value="{{ config.gamma_weekend_balance or '50' }}" style="width:100%;">
+              <span id="gwb_display">{{ config.gamma_weekend_balance or '50' }}</span>
+            </div>
+            <div style="font-size:12px; font-style:italic; color:#666;">Balances weekend load across level groups (e.g., 1/2/3/4).</div>
+          </div>
+        </div>
+
+        <div style="grid-column:1 / span 2; width:80%;">
+          <label for="gamma_consec_weekend" style="margin:0; display:block;">Penalty for consecutive weekends:</label>
+          <div style="display:grid; grid-template-columns: 1fr auto; align-items:center; gap:8px;">
+            <input type="range" id="gamma_consec_weekend" name="gamma_consec_weekend" min="0" max="200" value="{{ config.gamma_consec_weekend or '20' }}" style="width:100%;" oninput="gcw_display.textContent=this.value">
+            <span id="gcw_display">{{ config.gamma_consec_weekend or '20' }}</span>
+          </div>
+          <div style="font-size:12px; font-style:italic; color:#666;">Discourages the same surgeon being scheduled on back‑to‑back weekend days.</div>
+        </div>
+
+        <div style="grid-column:1 / span 2; width:80%;">
+          <label for="gamma_weekend_team_diversity" style="margin:0; display:block;">Weekend team diversity balance:</label>
+          <div style="display:grid; grid-template-columns: 1fr auto; align-items:center; gap:8px;">
+            <input type="range" id="gamma_weekend_team_diversity" name="gamma_weekend_team_diversity" min="0" max="500" value="{{ config.gamma_weekend_team_diversity or '50' }}" style="width:100%;" oninput="gwtd_display.textContent=this.value">
+            <span id="gwtd_display">{{ config.gamma_weekend_team_diversity or '50' }}</span>
+          </div>
+          <div style="font-size:12px; font-style:italic; color:#666;">Promotes having different teams represented across weekends.</div>
+        </div>
+      </div>
+
+      <div style="margin-top:12px;text-align:right;">
+        <button type="submit" style="padding: 10px 20px; font-size: 14px;">Save</button>
+      </div>
     </div>
-    <br>
-    <div>
-      <label for="gamma_unavail_prev">Gamma (Unavailable Prev-Day Penalty):</label>
-      <input type="range" id="gamma_unavail_prev" name="gamma_unavail_prev" min="0" max="100" value="{{ config.gamma_unavail_prev or '5' }}">
-      <span id="gup_display">{{ config.gamma_unavail_prev or '5' }}</span>
-    </div>
-    <br>
-    <div>
-      <label for="gamma_1B">Gamma (Level 1B Incentive):</label>
-      <input type="range" id="gamma_1B" name="gamma_1B" min="0" max="100" value="{{ config.gamma_1B or '1' }}">
-      <span id="g1b_display">{{ config.gamma_1B or '1' }}</span>
-    </div>
-    <br>
-    <button type="submit" style="padding: 10px 20px; font-size: 14px;">Update Constraint Weights</button>
   </form>
   
   <script>
@@ -42,6 +168,24 @@
     });
     document.getElementById('gamma_1B').addEventListener('input', function() {
        document.getElementById('g1b_display').innerText = this.value;
+    });
+    document.getElementById('gamma_team_pref').addEventListener('input', function() {
+       document.getElementById('gtdp_display').innerText = this.value;
+    });
+    document.getElementById('gamma_weekend_balance').addEventListener('input', function() {
+       document.getElementById('gwb_display').innerText = this.value;
+    });
+    document.getElementById('gamma_consec_weekend').addEventListener('input', function() {
+       document.getElementById('gcw_display').innerText = this.value;
+    });
+    document.getElementById('gamma_weekend_team_diversity').addEventListener('input', function() {
+       document.getElementById('gwtd_display').innerText = this.value;
+    });
+    document.getElementById('gamma_unavail_credit').addEventListener('input', function() {
+       document.getElementById('guc_display').innerText = this.value;
+    });
+    document.getElementById('unavail_credit_days').addEventListener('input', function() {
+       document.getElementById('ucd_display').innerText = this.value;
     });
   </script>
 {% endblock %}

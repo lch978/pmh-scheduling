@@ -53,17 +53,14 @@
       min-height: 100vh;
     }
     /* Flash messages */
-    .flash-messages ul {
-      list-style: none;
-      padding: 0;
-      margin-bottom: 20px;
-    }
-    .flash-messages li {
-      background-color: #ffdddd;
-      border: 1px solid #f5c6cb;
-      padding: 10px;
-      margin-bottom: 10px;
-    }
+    .toast-container { position: fixed; top: 16px; right: 16px; z-index: 9999; display: flex; flex-direction: column; gap: 10px; }
+    .toast { min-width: 280px; max-width: 420px; padding: 10px 12px; border: 1px solid; border-radius: 6px; box-shadow: 0 6px 16px rgba(0,0,0,0.1); display: flex; align-items: center; justify-content: space-between; animation: toast-in 200ms ease-out; }
+    .toast.success { background-color: #e6ffed; border-color: #b7eb8f; color: #1f7a1f; }
+    .toast.error { background-color: #ffefef; border-color: #f5c6cb; color: #7a1f1f; }
+    .toast.warning { background-color: #fffbe6; border-color: #ffe58f; color: #7a651f; }
+    .toast .toast-close { background: transparent; border: none; font-size: 16px; cursor: pointer; color: inherit; margin-left: 10px; }
+    @keyframes toast-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
+    .fade-out { opacity: 0; transition: opacity 0.4s ease; }
   </style>
   {% block head %}{% endblock %}
 </head>
@@ -89,18 +86,30 @@
   
   <!-- Main Content Area -->
   <div class="main-content">
-    <!-- Flash messages area -->
-    <div class="flash-messages">
-      {% with messages = get_flashed_messages() %}
-        {% if messages %}
-          <ul>
-            {% for message in messages %}
-              <li>{{ message }}</li>
-            {% endfor %}
-          </ul>
-        {% endif %}
-      {% endwith %}
-    </div>
+    <!-- Toast messages area -->
+    {% with messages = get_flashed_messages(with_categories=True) %}
+      {% if messages %}
+        <div class="toast-container" id="toastContainer">
+          {% for category, message in messages %}
+            <div class="toast {{ category }}">
+              <span>{{ message }}</span>
+              <button class="toast-close" onclick="this.parentElement.remove()">×</button>
+            </div>
+          {% endfor %}
+        </div>
+        <script>
+          (function(){
+            var toasts = document.querySelectorAll('.toast');
+            toasts.forEach(function(t){
+              setTimeout(function(){
+                t.classList.add('fade-out');
+                setTimeout(function(){ t.remove(); }, 500);
+              }, 3000);
+            });
+          })();
+        </script>
+      {% endif %}
+    {% endwith %}
     
     {% block content %}{% endblock %}
   </div>

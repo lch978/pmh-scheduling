@@ -9,7 +9,7 @@ import sys
 # OR‑Tools Scheduling Function (with Availability Constraints)
 #############################################
 
-def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=None, preassignments=None):
+def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=None, preassignments=None, time_limit_seconds: int = 30):
 
     from helper import (
         get_max_calls_config,
@@ -47,6 +47,34 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
     gamma_weekend_balance = int(global_config.get("gamma_weekend_balance", "50"))
     gamma_consec_weekend = int(global_config.get("gamma_consec_weekend", "20"))
     gamma_team_pref = int(global_config.get("gamma_team_pref", "10"))
+    # New: encourage balanced team presence on weekends (more diverse teams across weekends)
+    gamma_weekend_team_diversity = int(global_config.get("gamma_weekend_team_diversity", "50"))
+    # New: credit for unavailability (each k days → 1 fewer call, soft)
+    gamma_unavail_credit = int(global_config.get("gamma_unavail_credit", "50"))
+    unavail_credit_days = int(global_config.get("unavail_credit_days", "7")) or 7
+    if unavail_credit_days < 1:
+        unavail_credit_days = 7
+
+    # Feature flags (on/off) for constraint families
+    def is_enabled(key: str, default: str = "1") -> bool:
+        return str(global_config.get(key, default)) == "1"
+
+    enable_force_1B_weekend           = is_enabled("enable_force_1B_weekend")
+    enable_level2_supervision         = is_enabled("enable_level2_supervision")
+    enable_group4_2B3_ban            = is_enabled("enable_group4_2B3_ban")
+    enable_max_2B_group4             = is_enabled("enable_max_2B_group4")
+    enable_max_calls_level1          = is_enabled("enable_max_calls_level1")
+    enable_nlth_rules                = is_enabled("enable_nlth_rules")
+    enable_weekend_consecutive_pen   = is_enabled("enable_weekend_consecutive_penalty")
+    enable_weekend_balance           = is_enabled("enable_weekend_balance")
+    enable_weekend_team_diversity    = is_enabled("enable_weekend_team_diversity_enable")
+    enable_team_day_prefs            = is_enabled("enable_team_day_prefs")
+    enable_unavail_prev_penalty      = is_enabled("enable_availability_unavail_prev_penalty")
+    enable_nocall_penalty            = is_enabled("enable_availability_nocall_penalty")
+    enable_spacing_penalty           = is_enabled("enable_spacing_penalty")
+    enable_fairness_diff_all         = is_enabled("enable_fairness_diff_all")
+    enable_deviation_sum             = is_enabled("enable_deviation_sum")
+    enable_unavail_credit            = is_enabled("enable_unavail_credit")
 
     max_config = get_max_calls_config()  # e.g., {"1":10, "2":10, "3":10, "4":10}
     
@@ -301,66 +329,69 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
         ).OnlyEnforceIf(b1B.Not())
         indicator_1B[d] = b1B
 
-    # --- Force 1B to be filled on weekends and public holidays ---
-    for d, day_str in enumerate(days):
-        dt = datetime.datetime.strptime(day_str, "%Y-%m-%d").date()
-        is_weekend = dt.weekday() >= 5
-        is_ph = public_holidays and (day_str in public_holidays)
-        if is_weekend or is_ph:
-            add_named_constraint(f"Force 1B on {day_str}: 1B != -1",
-                model.Add, X[(d, "1B")] != -1)
+    # --- Force 1B to be filled on weekends and public holidays (toggle) ---
+    if enable_force_1B_weekend:
+        for d, day_str in enumerate(days):
+            dt = datetime.datetime.strptime(day_str, "%Y-%m-%d").date()
+            is_weekend_day = dt.weekday() >= 5
+            is_holiday_day = public_holidays and (day_str in public_holidays)
+            if is_weekend_day or is_holiday_day:
+                add_named_constraint(f"Force 1B on {day_str}: 1B != -1",
+                    model.Add, X[(d, "1B")] != -1)
     
-    # --- Level‑2 Grouping & Supervision Constraints ---
-    for d in range(num_days):
-        # 1) If a group‑1 surgeon is on 2A, must have someone in 2B.
-        for s in group1_ids:
-            b1 = model.NewBoolVar(f"lvl2_grp1_day{d}_is_s{s}")
-            add_named_constraint(f"Level2 group1: Day {d} 2A == {s}",
-                model.Add, X[(d, "2A")] == s
-            ).OnlyEnforceIf(b1)
-            add_named_constraint(f"Level2 group1: Day {d} 2A != {s}",
-                model.Add, X[(d, "2A")] != s
-            ).OnlyEnforceIf(b1.Not())
-            add_named_constraint(f"Level2 group1: Day {d} if 2A=={s} then 2B != -1",
-                model.Add, X[(d, "2B")] != -1
-            ).OnlyEnforceIf(b1)
-        # 2) If a group‑2 or 3 surgeon is on 2A, forbid any 2B.
-        for s in group2_ids:
-            b2 = model.NewBoolVar(f"lvl2_grp2_day{d}_is_s{s}")
-            add_named_constraint(f"Level2 group2: Day {d} 2A == {s}",
-                model.Add, X[(d, "2A")] == s
-            ).OnlyEnforceIf(b2)
-            add_named_constraint(f"Level2 group2: Day {d} 2A != {s}",
-                model.Add, X[(d, "2A")] != s
-            ).OnlyEnforceIf(b2.Not())
-            add_named_constraint(f"Level2 group2: Day {d} if 2A=={s} then 2B == -1",
-                model.Add, X[(d, "2B")] == -1
-            ).OnlyEnforceIf(b2)
-        for s in group3_ids:
-            b3 = model.NewBoolVar(f"lvl2_grp3_day{d}_is_s{s}")
-            add_named_constraint(f"Level2 group3: Day {d} 2A == {s}",
-                model.Add, X[(d, "2A")] == s
-            ).OnlyEnforceIf(b3)
-            add_named_constraint(f"Level2 group3: Day {d} 2A != {s}",
-                model.Add, X[(d, "2A")] != s
-            ).OnlyEnforceIf(b3.Not())
-            add_named_constraint(f"Level2 group3: Day {d} if 2A=={s} then 2B == -1",
-                model.Add, X[(d, "2B")] == -1
-            ).OnlyEnforceIf(b3)
-        # 3) Never allow Group 4 in 2A.
-        for s in group4_ids:
-            add_named_constraint(f"Level2 group4 ban: Day {d} 2A != {s}",
-                model.Add, X[(d, "2A")] != s)
-        # 4) Never let the same person occupy both 2A and 2B.
-        add_named_constraint(f"Level2 uniqueness: Day {d} 2A != 2B",
-            model.Add, X[(d, "2A")] != X[(d, "2B")])
+    # --- Level‑2 Grouping & Supervision Constraints (toggle) ---
+    if enable_level2_supervision:
+        for d in range(num_days):
+            # 1) If a group‑1 surgeon is on 2A, must have someone in 2B.
+            for s in group1_ids:
+                b1 = model.NewBoolVar(f"lvl2_grp1_day{d}_is_s{s}")
+                add_named_constraint(f"Level2 group1: Day {d} 2A == {s}",
+                    model.Add, X[(d, "2A")] == s
+                ).OnlyEnforceIf(b1)
+                add_named_constraint(f"Level2 group1: Day {d} 2A != {s}",
+                    model.Add, X[(d, "2A")] != s
+                ).OnlyEnforceIf(b1.Not())
+                add_named_constraint(f"Level2 group1: Day {d} if 2A=={s} then 2B != -1",
+                    model.Add, X[(d, "2B")] != -1
+                ).OnlyEnforceIf(b1)
+            # 2) If a group‑2 or 3 surgeon is on 2A, forbid any 2B.
+            for s in group2_ids:
+                b2 = model.NewBoolVar(f"lvl2_grp2_day{d}_is_s{s}")
+                add_named_constraint(f"Level2 group2: Day {d} 2A == {s}",
+                    model.Add, X[(d, "2A")] == s
+                ).OnlyEnforceIf(b2)
+                add_named_constraint(f"Level2 group2: Day {d} 2A != {s}",
+                    model.Add, X[(d, "2A")] != s
+                ).OnlyEnforceIf(b2.Not())
+                add_named_constraint(f"Level2 group2: Day {d} if 2A=={s} then 2B == -1",
+                    model.Add, X[(d, "2B")] == -1
+                ).OnlyEnforceIf(b2)
+            for s in group3_ids:
+                b3 = model.NewBoolVar(f"lvl2_grp3_day{d}_is_s{s}")
+                add_named_constraint(f"Level2 group3: Day {d} 2A == {s}",
+                    model.Add, X[(d, "2A")] == s
+                ).OnlyEnforceIf(b3)
+                add_named_constraint(f"Level2 group3: Day {d} 2A != {s}",
+                    model.Add, X[(d, "2A")] != s
+                ).OnlyEnforceIf(b3.Not())
+                add_named_constraint(f"Level2 group3: Day {d} if 2A=={s} then 2B == -1",
+                    model.Add, X[(d, "2B")] == -1
+                ).OnlyEnforceIf(b3)
+            # 3) Never allow Group 4 in 2A.
+            for s in group4_ids:
+                add_named_constraint(f"Level2 group4 ban: Day {d} 2A != {s}",
+                    model.Add, X[(d, "2A")] != s)
+            # 4) Never let the same person occupy both 2A and 2B.
+            add_named_constraint(f"Level2 uniqueness: Day {d} 2A != 2B",
+                model.Add, X[(d, "2A")] != X[(d, "2B")])
     
-    # ── Prevent Group-4 surgeons from covering both 2B and 3 on the same day ──
-    for d in range(num_days):
-        for s1 in group4_ids:
-            for s2 in group4_ids:
-                add_named_constraint(f"Group4 ban: Day {d} 2B != {s1} OR 3 != {s2}",
-                    model.AddForbiddenAssignments, [ X[(d, "2B")], X[(d, "3")] ], [ [s1, s2] ])
+    # ── Prevent Group-4 surgeons from covering both 2B and 3 on the same day (toggle) ──
+    if enable_group4_2B3_ban:
+        for d in range(num_days):
+            for s1 in group4_ids:
+                for s2 in group4_ids:
+                    add_named_constraint(f"Group4 ban: Day {d} 2B != {s1} OR 3 != {s2}",
+                        model.AddForbiddenAssignments, [ X[(d, "2B")], X[(d, "3")] ], [ [s1, s2] ])
     
     # --- Constraint Set 3: Maximum Calls per Group ---
     indicators = {}
@@ -377,9 +408,10 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                 indicators[(d, lev, s_id)] = b
     
     # --- At most one 2B‐shift per Group 4 surgeon over the entire schedule ---
-    for s in group4_ids:
-        add_named_constraint(f"Max 2B-shifts for Group4 surgeon {s}",
-            model.Add, sum(indicators[(d, "2B", s)] for d in range(num_days)) <= 1)
+    if enable_max_2B_group4:
+        for s in group4_ids:
+            add_named_constraint(f"Max 2B-shifts for Group4 surgeon {s}",
+                model.Add, sum(indicators[(d, "2B", s)] for d in range(num_days)) <= 1)
     
     call_count_overall = {}
     for s in all_surgeon_ids:
@@ -387,12 +419,13 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
         add_named_constraint(f"Total calls for surgeon {s}",
             model.Add, call_count_overall[s] == sum(indicators[(d, level, s)] for d in range(num_days) for level in all_levels))
     
-    for s_id in all_ids:
-        c1 = model.NewIntVar(0, num_days*2, f"count1_{s_id}")
-        add_named_constraint(f"1A+1B calls for surgeon {s_id}",
-            model.Add, c1 == sum(indicators[(d, "1A", s_id)] + indicators[(d, "1B", s_id)] for d in range(num_days)))
-        add_named_constraint(f"Max 1A+1B calls for surgeon {s_id}",
-            model.Add, c1 <= max_calls_level1)
+    if enable_max_calls_level1:
+        for s_id in all_ids:
+            c1 = model.NewIntVar(0, num_days*2, f"count1_{s_id}")
+            add_named_constraint(f"1A+1B calls for surgeon {s_id}",
+                model.Add, c1 == sum(indicators[(d, "1A", s_id)] + indicators[(d, "1B", s_id)] for d in range(num_days)))
+            add_named_constraint(f"Max 1A+1B calls for surgeon {s_id}",
+                model.Add, c1 <= max_calls_level1)
     
     non_nlth_surgeons = [s for s in all_surgeon_ids if s not in nlth_ids]
     max_all = model.NewIntVar(0, num_days * len(all_levels), 'max_all')
@@ -418,30 +451,34 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
             ).OnlyEnforceIf(a.Not())
             assigned[(s, d)] = a
 
-    # --- NLTH constraint: allow NLTH surgeons only on days where today AND tomorrow are weekend or PH ---
+    # --- NLTH constraint (toggle) --- allow NLTH surgeons only on days where today AND tomorrow are weekend or PH
     is_weekend = [datetime.datetime.strptime(day, "%Y-%m-%d").weekday() >= 5 for day in days]
     is_ph = [day in public_holidays for day in days]
     is_wk_or_ph = [w or ph for w, ph in zip(is_weekend, is_ph)]
-    for d in range(num_days):
-        allow_nlth = (d < num_days - 1) and is_wk_or_ph[d] and is_wk_or_ph[d+1]
-        if not allow_nlth:
-            for lvl in all_levels:
-                for s_id in nlth_ids:
-                    add_named_constraint(f"NLTH ban: Day {days[d]}, level {lvl} cannot be surgeon {s_id}",
-                        model.Add, X[(d, lvl)] != s_id)
+    if enable_nlth_rules:
+        for d in range(num_days):
+            allow_nlth = (d < num_days - 1) and is_wk_or_ph[d] and is_wk_or_ph[d+1]
+            if not allow_nlth:
+                for lvl in all_levels:
+                    for s_id in nlth_ids:
+                        add_named_constraint(f"NLTH ban: Day {days[d]}, level {lvl} cannot be surgeon {s_id}",
+                            model.Add, X[(d, lvl)] != s_id)
     
-    # --- Soft penalties for weekend call balance ---
+    # --- Soft penalties for weekend call balance (toggle) ---
     w_call = {}
     for s in all_surgeon_ids:
         for d in range(num_days):
             w = model.NewBoolVar(f"weekend_call_s{s}_d{d}")
             w_call[(s,d)] = w
-            if is_weekend[d]:
-                add_named_constraint(f"Weekend call assignment: Day {days[d]}, surgeon {s}",
-                    model.Add, w == assigned[(s,d)])
+            if enable_weekend_balance:
+                if is_weekend[d]:
+                    add_named_constraint(f"Weekend call assignment: Day {days[d]}, surgeon {s}",
+                        model.Add, w == assigned[(s,d)])
+                else:
+                    add_named_constraint(f"Weekday weekend call: Day {days[d]}, surgeon {s}",
+                        model.Add, w == 0)
             else:
-                add_named_constraint(f"Weekday weekend call: Day {days[d]}, surgeon {s}",
-                    model.Add, w == 0)
+                add_named_constraint(f"Weekend call disabled: Day {days[d]}, surgeon {s}", model.Add, w == 0)
     
     weekend_count = {}
     for s in all_surgeon_ids:
@@ -449,21 +486,22 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
         add_named_constraint(f"Count weekend calls for surgeon {s}",
             model.Add, wc == sum(w_call[(s,d)] for d in range(num_days)))
         weekend_count[s] = wc
-        add_named_constraint(f"Max weekend calls for surgeon {s}",
-            model.Add, wc <= 3)
+        if enable_weekend_balance:
+            add_named_constraint(f"Max weekend calls for surgeon {s}", model.Add, wc <= 3)
     
     consec_penalties = []
-    for s in all_surgeon_ids:
-        for d in range(num_days-1):
-            if is_weekend[d] and is_weekend[d+1]:
-                b = model.NewBoolVar(f"consec_wknd_s{s}_d{d}")
-                add_named_constraint(f"Consecutive weekend: surgeon {s} days {d} & {d+1} both assigned",
-                    model.AddBoolAnd, [w_call[(s,d)], w_call[(s,d+1)]]
-                ).OnlyEnforceIf(b)
-                add_named_constraint(f"Consecutive weekend negation: surgeon {s} days {d} & {d+1} not both assigned",
-                    model.AddBoolOr, [w_call[(s,d)].Not(), w_call[(s,d+1)].Not()]
-                ).OnlyEnforceIf(b.Not())
-                consec_penalties.append(b)
+    if enable_weekend_consecutive_pen:
+        for s in all_surgeon_ids:
+            for d in range(num_days-1):
+                if is_weekend[d] and is_weekend[d+1]:
+                    b = model.NewBoolVar(f"consec_wknd_s{s}_d{d}")
+                    add_named_constraint(f"Consecutive weekend: surgeon {s} days {d} & {d+1} both assigned",
+                        model.AddBoolAnd, [w_call[(s,d)], w_call[(s,d+1)]]
+                    ).OnlyEnforceIf(b)
+                    add_named_constraint(f"Consecutive weekend negation: surgeon {s} days {d} & {d+1} not both assigned",
+                        model.AddBoolOr, [w_call[(s,d)].Not(), w_call[(s,d+1)].Not()]
+                    ).OnlyEnforceIf(b.Not())
+                    consec_penalties.append(b)
     
     if consec_penalties:
         consec_penalty = model.NewIntVar(0, len(consec_penalties), "penalty_consec_weekend")
@@ -487,7 +525,51 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
             add_named_constraint(f"Min weekend count for group {i}", model.AddMinEquality, min_w, [weekend_count[s] for s in grp])
             diff = model.NewIntVar(0, num_days, f"diff_wknd_grp{i}")
             add_named_constraint(f"Weekend difference for group {i}", model.Add, diff == max_w - min_w)
-            weekend_diff_terms.append(diff)
+            if enable_weekend_balance:
+                weekend_diff_terms.append(diff)
+
+    # --- Weekend team diversity balance (soft): balance how many weekend days each team appears on ---
+    # Build team -> surgeon IDs map (exclude None teams)
+    teams = sorted({s.get("team") for s in surgeons if s.get("team")})
+    team_to_ids = {t: [s["id"] for s in surgeons if s.get("team") == t] for t in teams}
+    weekend_days = [d for d in range(num_days) if is_weekend[d]]
+
+    team_presence_vars = { }
+    if enable_weekend_team_diversity:
+        for t in teams:
+            for d in weekend_days:
+                p = model.NewBoolVar(f"presence_team_{t}_d{d}")
+                team_presence_vars[(t,d)] = p
+                # p == OR(indicators[(d, level, s)] for all levels and s in team t)
+                ors = [indicators[(d, lvl, sid)] for lvl in all_levels for sid in team_to_ids[t]]
+                if ors:
+                    add_named_constraint(f"Team presence upper {t} d{d}", model.Add, p <= sum(ors))
+                    for v in ors:
+                        add_named_constraint(f"Team presence lower {t} d{d}", model.Add, v <= p)
+                else:
+                    add_named_constraint(f"Team presence none {t} d{d}", model.Add, p == 0)
+
+    # Count weekend presence per team (per-day OR, not per-slot)
+    team_weekend_counts = {}
+    for t in teams:
+        cnt = model.NewIntVar(0, len(weekend_days), f"team_weekend_count_{t}")
+        if enable_weekend_team_diversity and weekend_days:
+            add_named_constraint(f"Team weekend count {t}", model.Add, cnt == sum(team_presence_vars[(t,d)] for d in weekend_days))
+        else:
+            add_named_constraint(f"Team weekend count zero {t}", model.Add, cnt == 0)
+        team_weekend_counts[t] = cnt
+
+    # Balance: minimize max-min across teams
+    if enable_weekend_team_diversity and len(teams) >= 2:
+        tw_max = model.NewIntVar(0, len(weekend_days), "team_weekend_max")
+        tw_min = model.NewIntVar(0, len(weekend_days), "team_weekend_min")
+        add_named_constraint("Team weekend max", model.AddMaxEquality, tw_max, list(team_weekend_counts.values()))
+        add_named_constraint("Team weekend min", model.AddMinEquality, tw_min, list(team_weekend_counts.values()))
+        team_weekend_diff = model.NewIntVar(0, len(weekend_days), "team_weekend_diff")
+        add_named_constraint("Team weekend diff", model.Add, team_weekend_diff == tw_max - tw_min)
+    else:
+        team_weekend_diff = model.NewIntVar(0, 0, "team_weekend_diff")
+        add_named_constraint("Team weekend diff zero", model.Add, team_weekend_diff == 0)
     
     td_terms = []
     for d, day_str in enumerate(days):
@@ -574,6 +656,30 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
     deviation_sum = model.NewIntVar(0, num_days * len(all_levels) * N, "deviation_sum")
     add_named_constraint("Deviation sum", model.Add, deviation_sum == sum(deviations[s] for s in all_surgeon_ids))
     
+    # --- Unavailability credit (soft): for each 7 days unavailable, allow one fewer call without penalty ---
+    # Count per-surgeon unavailable days in this month
+    unavail_days_per_surgeon = {s_id: 0 for s_id in all_surgeon_ids}
+    day_set = {datetime.datetime.strptime(d, "%Y-%m-%d").date() for d in days}
+    for s_id, req_list in get_availability_requests().items():
+        u_days = {datetime.datetime.strptime(req["date"], "%Y-%m-%d").date()
+                  for req in req_list if req.get("request_type") == "unavailable"
+                  if isinstance(req.get("date"), str)}
+        # include only dates in current month days
+        unavail_days_per_surgeon[s_id] = len(u_days & day_set)
+
+    # Overflow above (avg - credit) measured in N-scaled units to avoid division
+    unavail_overflows = []
+    if enable_unavail_credit:
+        for s in all_surgeon_ids:
+            credit_units = (unavail_days_per_surgeon.get(s, 0) // unavail_credit_days) * N
+            # os >= call_count[s]*N - T + credit_units ; os >= 0
+            os = model.NewIntVar(0, num_days * len(all_levels) * N, f"unavail_overflow_{s}")
+            tmp = model.NewIntVar(-num_days * len(all_levels) * N, num_days * len(all_levels) * N, f"tmp_overflow_{s}")
+            add_named_constraint(f"Tmp overflow expr {s}", model.Add, tmp == call_count_overall[s] * N - T + credit_units)
+            add_named_constraint(f"Overflow lower bound {s}", model.Add, os >= tmp)
+            add_named_constraint(f"Overflow nonneg {s}", model.Add, os >= 0)
+            unavail_overflows.append(os)
+
     # --- Create soft‐penalties for any two calls within spacing_threshold days ---
     spacing_penalties = []
     for s in all_surgeon_ids:
@@ -594,20 +700,38 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
     else:
         add_named_constraint("Penalty spacing zero", model.Add, penalty_spacing == 0)
     
-    objective_terms = [
-        fairness_weight * diff_all,
-        gamma_no_call * penalty_nocall,
-        gamma_unavail_prev * penalty_unavail_prev,
-        gamma_balance * deviation_sum,
-        gamma_spacing * penalty_spacing,
-        gamma_weekend_balance * (sum(weekend_diff_terms) * 10),
-        gamma_consec_weekend * consec_penalty
-    ] + [- coef * b for coef, b in td_terms]
+    objective_terms = []
+    if enable_fairness_diff_all:
+        objective_terms.append(fairness_weight * diff_all)
+    if enable_nocall_penalty:
+        objective_terms.append(gamma_no_call * penalty_nocall)
+    if enable_unavail_prev_penalty:
+        objective_terms.append(gamma_unavail_prev * penalty_unavail_prev)
+    if enable_deviation_sum:
+        objective_terms.append(gamma_balance * deviation_sum)
+    if enable_unavail_credit and 'unavail_overflows' in locals() and unavail_overflows:
+        objective_terms.append(gamma_unavail_credit * sum(unavail_overflows))
+    if enable_spacing_penalty:
+        objective_terms.append(gamma_spacing * penalty_spacing)
+    if enable_weekend_balance and weekend_diff_terms:
+        objective_terms.append(gamma_weekend_balance * (sum(weekend_diff_terms) * 10))
+    if enable_weekend_consecutive_pen and isinstance(consec_penalty, cp_model.IntVar):
+        objective_terms.append(gamma_consec_weekend * consec_penalty)
+    if enable_weekend_team_diversity:
+        objective_terms.append(gamma_weekend_team_diversity * team_weekend_diff)
+    # team day preferences
+    if enable_team_day_prefs and td_terms:
+        objective_terms += [- coef * b for coef, b in td_terms]
+    add_named_constraint("Objective", model.Minimize, sum(objective_terms) if objective_terms else 0)
     add_named_constraint("Objective", model.Minimize, sum(objective_terms))
     
     # --- Solve the Model ---
     solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = 30
+    # Allow caller to control time limit
+    try:
+        solver.parameters.max_time_in_seconds = int(time_limit_seconds)
+    except Exception:
+        solver.parameters.max_time_in_seconds = 30
     solver.parameters.log_search_progress = True
     solver.parameters.log_to_stdout = True
 
