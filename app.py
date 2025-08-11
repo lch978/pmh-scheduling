@@ -89,9 +89,10 @@ def create_app():
             call_levels = ','.join(call_levels_list)
             team  = request.form['team']
             db = get_db()
-            with db.begin():
             db.execute(
-                text("INSERT INTO surgeons (name, call_levels, team) VALUES (:name, :levels, :team)"),
+                text(
+                    "INSERT INTO surgeons (name, call_levels, team) VALUES (:name, :levels, :team)"
+                ),
                 {"name": name, "levels": call_levels, "team": team}
 )
             flash("Surgeon added successfully!")
@@ -116,12 +117,12 @@ def create_app():
             call_levels = ','.join(call_levels_list)
             team = request.form['team']
             with db.begin():
-            db.execute(
-                text("UPDATE surgeons SET name = :name, call_levels = :levels, team = team WHERE id = :id"),
-                {"name": name, "levels": call_levels, "team": team, "id": surgeon_id}
-            )
-            flash("Surgeon updated successfully!")
-            return redirect(url_for('list_surgeons'))
+                db.execute(
+                    text("UPDATE surgeons SET name = :name, call_levels = :levels, team = team WHERE id = :id"),
+                    {"name": name, "levels": call_levels, "team": team, "id": surgeon_id}
+                )
+                flash("Surgeon updated successfully!")
+                return redirect(url_for('list_surgeons'))
         return render_template('surgeon_form.html', surgeon=surgeon, action="Edit")
 
     @app.route('/surgeons/update/<int:surgeon_id>', methods=['POST'])
@@ -133,12 +134,12 @@ def create_app():
 
         db = get_db()
         with db.begin():
-        db.execute(
-                text("UPDATE surgeons SET name = :name, call_levels = :levels, team = team WHERE id = :id"),
-                {"name": name, "levels": call_levels, "team": team, "id": surgeon_id}
-        )
-        flash("Surgeon updated successfully!")
-        return redirect(url_for('list_surgeons'))
+            db.execute(
+                    text("UPDATE surgeons SET name = :name, call_levels = :levels, team = team WHERE id = :id"),
+                    {"name": name, "levels": call_levels, "team": team, "id": surgeon_id}
+            )
+            flash("Surgeon updated successfully!")
+            return redirect(url_for('list_surgeons'))
 
     @app.route('/update_all_surgeons', methods=['POST'])
     def update_all_surgeons():
@@ -155,33 +156,33 @@ def create_app():
         """)
 
         with db.begin():
-        for surgeon in surgeons:
-            sid = surgeon['id']
-            name_field = f"name_{sid}"
-            levels_field = f"call_levels_{sid}"
-            nlth_field = f"nlth_{sid}"
-            team_field = f"team_{sid}"
+            for surgeon in surgeons:
+                sid = surgeon['id']
+                name_field = f"name_{sid}"
+                levels_field = f"call_levels_{sid}"
+                nlth_field = f"nlth_{sid}"
+                team_field = f"team_{sid}"
 
-            new_name   = request.form.get(name_field, surgeon['name'])
-            new_levels = request.form.getlist(levels_field)
-            new_levels_str = ",".join(new_levels)
-            new_team = request.form.get(team_field) or None
+                new_name   = request.form.get(name_field, surgeon['name'])
+                new_levels = request.form.getlist(levels_field)
+                new_levels_str = ",".join(new_levels)
+                new_team = request.form.get(team_field) or None
 
-            # Checkbox: if the field is present in form data, checkbox was checked
-            new_nlth = (request.form.get(nlth_field) == 'on')
+                # Checkbox: if the field is present in form data, checkbox was checked
+                new_nlth = (request.form.get(nlth_field) == 'on')
 
-            db.execute(
-                stmt,
-                {
-                    "name":   new_name,
-                    "levels": new_levels_str,
-                    "nlth":   new_nlth,
-                    "team":   new_team,
-                    "id":     sid
-                }
-            )
-        flash("Surgeon updates applied successfully!")
-        return redirect(url_for('list_surgeons'))
+                db.execute(
+                    stmt,
+                    {
+                        "name":   new_name,
+                        "levels": new_levels_str,
+                        "nlth":   new_nlth,
+                        "team":   new_team,
+                        "id":     sid
+                    }
+                )
+            flash("Surgeon updates applied successfully!")
+            return redirect(url_for('list_surgeons'))
 
     #############################################
     # Maximum Calls Configuration Endpoint
@@ -522,10 +523,10 @@ def create_app():
 
         db = get_db()
         with db.begin():
-        exists = db.execute(
-            text("SELECT 1 FROM saved_schedule WHERE year = :y AND month = :m"),
-            {"y": year, "m": month}
-        ).fetchone()
+            exists = db.execute(
+                text("SELECT 1 FROM saved_schedule WHERE year = :y AND month = :m"),
+                {"y": year, "m": month}
+            ).fetchone()
 
         if exists:
             db.execute(
@@ -739,16 +740,16 @@ def create_app():
                 
                 # Insert each date as a separate row.
                 with db.begin():
-                for d in dates_list:
-                    db.execute(
-                        text(
-                            "INSERT INTO surgeon_availability "
-                            "(surgeon_id, request_type, date) "
-                            "VALUES (:sid, :rtype, :dt)"
-                        ),
-                        {"sid": surgeon_id, "rtype": request_type, "dt": d}
-                    )
-                flash("Request submitted successfully!")
+                    for d in dates_list:
+                        db.execute(
+                            text(
+                                "INSERT INTO surgeon_availability "
+                                "(surgeon_id, request_type, date) "
+                                "VALUES (:sid, :rtype, :dt)"
+                            ),
+                            {"sid": surgeon_id, "rtype": request_type, "dt": d}
+                        )
+                    flash("Request submitted successfully!")
             except Exception as e:
                 flash(f"Error processing the dates: {str(e)}")
             return redirect(url_for('availability', surgeon_id=surgeon_id))
@@ -813,34 +814,34 @@ def create_app():
         db = get_db()  # Get the DB connection from your helper
 
         with db.begin():
-        success = True
-        for req in delete_requests:
-            req_type = req.get('reqType')
-            start_date = req.get('start')
-            end_date = req.get('end')
-            if not (req_type and start_date and end_date):
-                continue
-            # Delete all rows within the given date range.
-            query = text("""
-                DELETE FROM surgeon_availability 
-                WHERE surgeon_id = :surgeon_id 
-                AND request_type = :req_type 
-                AND date BETWEEN :start_date AND :end_date
-            """)
-            result = db.execute(query, {
-                "surgeon_id": surgeon_id,
-                "req_type": req_type,
-                "start_date": start_date,
-                "end_date": end_date
-            })
-            if result.rowcount == 0:
-                success = False
-        
-        if success:
-            flash("Selected availability requests deleted successfully.", category="success")
-        else:
-            flash("Some availability requests could not be deleted.", category="warning")
-        
+            success = True
+            for req in delete_requests:
+                req_type = req.get('reqType')
+                start_date = req.get('start')
+                end_date = req.get('end')
+                if not (req_type and start_date and end_date):
+                    continue
+                # Delete all rows within the given date range.
+                query = text("""
+                    DELETE FROM surgeon_availability 
+                    WHERE surgeon_id = :surgeon_id 
+                    AND request_type = :req_type 
+                    AND date BETWEEN :start_date AND :end_date
+                """)
+                result = db.execute(query, {
+                    "surgeon_id": surgeon_id,
+                    "req_type": req_type,
+                    "start_date": start_date,
+                    "end_date": end_date
+                })
+                if result.rowcount == 0:
+                    success = False
+            
+            if success:
+                flash("Selected availability requests deleted successfully.", category="success")
+            else:
+                flash("Some availability requests could not be deleted.", category="warning")
+            
         return redirect(url_for('availability', surgeon_id=surgeon_id))
     
     #############################################
@@ -924,10 +925,10 @@ def create_app():
 
         # Write surgeon names with separator rows preserved
             for s in surgeons:
-            row = surgeon_id_to_row[s['id']]
-            name = s.get('name')
-            team = s.get('team')
-            ws.cell(row=row, column=1, value=f"{team or ''} - {name}")
+                row = surgeon_id_to_row[s['id']]
+                name = s.get('name')
+                team = s.get('team')
+                ws.cell(row=row, column=1, value=f"{team or ''} - {name}")
 
         # Styles
         dark_red = PatternFill(start_color="8B0000", end_color="8B0000", fill_type="solid")
@@ -966,12 +967,12 @@ def create_app():
 
         # Autosize columns
             for col in ws.columns:
-            max_len = 0
+                max_len = 0
                 col_letter = col[0].column_letter
                 for cell in col:
-                if cell.value is not None:
-                    max_len = max(max_len, len(str(cell.value)))
-            ws.column_dimensions[col_letter].width = min(18, max(6, max_len + 2))
+                    if cell.value is not None:
+                        max_len = max(max_len, len(str(cell.value)))
+                ws.column_dimensions[col_letter].width = min(18, max(6, max_len + 2))
 
         # Return file
         out = io.BytesIO()
@@ -994,17 +995,17 @@ def create_app():
         db = get_db()
         with db.begin():
         # First, clean up any related availability records:
-        db.execute(
-            text("DELETE FROM surgeon_availability WHERE surgeon_id = :sid"),
-            {"sid": surgeon_id}
-        )
-        # Then delete the surgeon:
-        db.execute(
-            text("DELETE FROM surgeons WHERE id = :sid"),
-            {"sid": surgeon_id}
-        )
-        flash("Surgeon deleted successfully.", "success")
-        return redirect(url_for('list_surgeons'))
+            db.execute(
+                text("DELETE FROM surgeon_availability WHERE surgeon_id = :sid"),
+                {"sid": surgeon_id}
+            )
+            # Then delete the surgeon:
+            db.execute(
+                text("DELETE FROM surgeons WHERE id = :sid"),
+                {"sid": surgeon_id}
+            )
+            flash("Surgeon deleted successfully.", "success")
+            return redirect(url_for('list_surgeons'))
 
 
     #############################################
@@ -1243,23 +1244,23 @@ def create_app():
                 year, month = today.year, today.month
 
             with db.begin():
-            row = db.execute(
-                text("SELECT id FROM preassignments WHERE year = :year AND month = :month"),
-                {"year": year, "month": month}
-            ).fetchone()
-            if row:
-                row_dict = row._mapping  # Access the row as a mapping object
-                db.execute(
-                    text("UPDATE preassignments SET preassignment_data = :data, date_updated = now() WHERE id = :id"),
-                    {"data": json.dumps(preassignments), "id": row_dict["id"]}
-                )
-            else:
-                db.execute(
-                    text("INSERT INTO preassignments (year, month, preassignment_data) VALUES (:year, :month, :data)"),
-                    {"year": year, "month": month, "data": json.dumps(preassignments)}
-                )
-            flash("Preassignments updated successfully!", "success")
-            return redirect(url_for('preassignment', year=year, month=month))
+                row = db.execute(
+                    text("SELECT id FROM preassignments WHERE year = :year AND month = :month"),
+                    {"year": year, "month": month}
+                ).fetchone()
+                if row:
+                    row_dict = row._mapping  # Access the row as a mapping object
+                    db.execute(
+                        text("UPDATE preassignments SET preassignment_data = :data, date_updated = now() WHERE id = :id"),
+                        {"data": json.dumps(preassignments), "id": row_dict["id"]}
+                    )
+                else:
+                    db.execute(
+                        text("INSERT INTO preassignments (year, month, preassignment_data) VALUES (:year, :month, :data)"),
+                        {"year": year, "month": month, "data": json.dumps(preassignments)}
+                    )
+                flash("Preassignments updated successfully!", "success")
+                return redirect(url_for('preassignment', year=year, month=month))
         else:
             # GET: load the desired year/month and build a table.
             year = request.args.get('year', None, type=int)
