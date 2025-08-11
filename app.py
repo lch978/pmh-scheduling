@@ -337,10 +337,7 @@ def create_app():
     # Schedule Generation and Saving Endpoints
     #############################################
 
-    # Simple public About page with rationale and usage guidance
-    @app.route('/about', methods=['GET'])
-    def about_page():
-        return render_template('about.html')
+    # (About page removed as part of revert)
     def run_solver_job(job_id, days, surgeons, prev_schedule, public_holidays, preassignments, time_limit_seconds: int = 30):
         # we only import the solver function here—never re‑import `app` or `solve_jobs`
         from scheduler import solve_schedule_or_tools
