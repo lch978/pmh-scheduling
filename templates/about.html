@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}About the Scheduler{% endblock %}
+{% block content %}
+  <div style="max-width:900px;margin:0 auto;">
+    <h1 style="margin-bottom:16px;">About the PMH Call Scheduler</h1>
+
+    <h2 style="margin:12px 0;">What this tool does</h2>
+    <p style="margin-bottom:10px;">
+      This application builds monthly call schedules using Google OR-Tools (CP-SAT solver).
+      It balances hard rules (must be respected) and soft preferences (try to satisfy) to
+      produce a fair and practical rota.
+    </p>
+
+    <h2 style="margin:12px 0;">Key logic and rationale</h2>
+    <ul style="margin-left:18px;">
+      <li><b>Hard constraints</b>: Minimum rules the schedule must satisfy — for example:
+        <ul style="margin-left:18px;">
+          <li>Level-2 supervision structure (2A/2B logic) as configured.</li>
+          <li>Forbid impossible assignments (NLTH rules, domain pruning by availability).</li>
+          <li>Force critical roles on weekends/holidays (e.g., 1B) when enabled.</li>
+        </ul>
+      </li>
+      <li><b>Soft objectives</b>: Fairness and preferences, weighted by sliders in Global Config / Constraint Weights — for example:
+        <ul style="margin-left:18px;">
+          <li>Overall fairness: equalize total calls across surgeons.</li>
+          <li>No‑call and unavailability penalties: discourage violating requests.</li>
+          <li>Spacing: avoid calls too close together for the same person.</li>
+          <li>Weekend fairness and team diversity: spread weekend load and teams.</li>
+          <li>Unavailability credit: each N days off reduces expected calls.</li>
+        </ul>
+      </li>
+    </ul>
+
+    <h2 style="margin:12px 0;">How to use</h2>
+    <ol style="margin-left:18px;">
+      <li>Go to <b>Surgeon Management</b> to review/maintain surgeon list, levels, and teams.</li>
+      <li>Use <b>Availability</b> to record unavailability and no‑call requests.</li>
+      <li>Optionally set <b>Preassignment</b> for fixed assignments in a month.</li>
+      <li>Open <b>Global Config</b> and/or <b>Constraint Weights</b> to tune constraint toggles and weights.
+          Sliders show live values; helper text explains each control.</li>
+      <li>Go to <b>New Schedule</b>:
+        <ul style="margin-left:18px;">
+          <li>Select year/month.</li>
+          <li>Click <b>Generate (30s)</b> or <b>Generate (120s)</b>. The solver will search for a good solution within the time limit.</li>
+          <li>When done, review the table. You can <b>Save</b> the schedule for the selected month.</li>
+        </ul>
+      </li>
+      <li>Use <b>Export</b> buttons to download the schedule or requests matrix (unavailability / no‑call) in Excel format.</li>
+    </ol>
+
+    <h2 style="margin:12px 0;">Tips</h2>
+    <ul style="margin-left:18px;">
+      <li>If results look imbalanced, increase fairness/spacing sliders a bit and re‑run.</li>
+      <li>If feasibility is hard to achieve, relax/disable some toggles temporarily (e.g., consecutive‑weekend penalty) and try again.</li>
+      <li>Increasing the time limit (120s) usually improves solution quality.</li>
+    </ul>
+
+    <p style="margin-top:16px;color:#666;">This page is informational only; you can change settings in Global Config and Constraint Weights.</p>
+  </div>
+{% endblock %}
+
+
