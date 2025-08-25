@@ -522,30 +522,31 @@ def create_app():
             return redirect(url_for('new_schedule', year=year, month=month))
 
         db = get_db()
+        # Perform existence check and write within a single transaction so changes commit
         with db.begin():
             exists = db.execute(
                 text("SELECT 1 FROM saved_schedule WHERE year = :y AND month = :m"),
                 {"y": year, "m": month}
             ).fetchone()
 
-        if exists:
-            db.execute(
-                text(
-                    "UPDATE saved_schedule "
-                    "SET schedule_data = :sched, date_saved = now() "
-                    "WHERE year = :y AND month = :m"
-                ),
-                {"sched": data, "y": year, "m": month}
-            )
-        else:
-            db.execute(
-                text(
-                    "INSERT INTO saved_schedule "
-                    "(year, month, schedule_data, date_saved) "
-                    "VALUES (:y, :m, :sched, now())"
-                ),
-                {"y": year, "m": month, "sched": data}
-            )
+            if exists:
+                db.execute(
+                    text(
+                        "UPDATE saved_schedule "
+                        "SET schedule_data = CAST(:sched AS JSONB), date_saved = now() "
+                        "WHERE year = :y AND month = :m"
+                    ),
+                    {"sched": data, "y": year, "m": month}
+                )
+            else:
+                db.execute(
+                    text(
+                        "INSERT INTO saved_schedule "
+                        "(year, month, schedule_data, date_saved) "
+                        "VALUES (:y, :m, CAST(:sched AS JSONB), now())"
+                    ),
+                    {"y": year, "m": month, "sched": data}
+                )
         flash("Schedule saved.", "success")
         return redirect(url_for('new_schedule', year=year, month=month))
 
