@@ -89,12 +89,13 @@ def create_app():
             call_levels = ','.join(call_levels_list)
             team  = request.form['team']
             db = get_db()
-            db.execute(
-                text(
-                    "INSERT INTO surgeons (name, call_levels, team) VALUES (:name, :levels, :team)"
-                ),
-                {"name": name, "levels": call_levels, "team": team}
-)
+            with db.begin():
+                db.execute(
+                    text(
+                        "INSERT INTO surgeons (name, call_levels, team) VALUES (:name, :levels, :team)"
+                    ),
+                    {"name": name, "levels": call_levels, "team": team}
+                )
             flash("Surgeon added successfully!")
             return redirect(url_for('list_surgeons'))
     # Pass a default surgeon dict with "call_levels" defined so the template doesn't error out.
@@ -118,7 +119,7 @@ def create_app():
             team = request.form['team']
             with db.begin():
                 db.execute(
-                    text("UPDATE surgeons SET name = :name, call_levels = :levels, team = team WHERE id = :id"),
+                    text("UPDATE surgeons SET name = :name, call_levels = :levels, team = :team WHERE id = :id"),
                     {"name": name, "levels": call_levels, "team": team, "id": surgeon_id}
                 )
                 flash("Surgeon updated successfully!")
@@ -135,7 +136,7 @@ def create_app():
         db = get_db()
         with db.begin():
             db.execute(
-                    text("UPDATE surgeons SET name = :name, call_levels = :levels, team = team WHERE id = :id"),
+                    text("UPDATE surgeons SET name = :name, call_levels = :levels, team = :team WHERE id = :id"),
                     {"name": name, "levels": call_levels, "team": team, "id": surgeon_id}
             )
             flash("Surgeon updated successfully!")
@@ -166,7 +167,7 @@ def create_app():
                 new_name   = request.form.get(name_field, surgeon['name'])
                 new_levels = request.form.getlist(levels_field)
                 new_levels_str = ",".join(new_levels)
-                new_team = request.form.get(team_field) or None
+                new_team = request.form.get(team_field) or ""
 
                 # Checkbox: if the field is present in form data, checkbox was checked
                 new_nlth = (request.form.get(nlth_field) == 'on')
@@ -252,6 +253,8 @@ def create_app():
                 "enable_weekend_consecutive_penalty": cb("enable_weekend_consecutive_penalty"),
                 "enable_weekend_team_diversity_enable": cb("enable_weekend_team_diversity_enable"),
                 "enable_team_day_prefs": cb("enable_team_day_prefs"),
+                "enable_2b_usage_penalty": cb("enable_2b_usage_penalty"),
+                "enable_fairness_l2_groups": cb("enable_fairness_l2_groups"),
             }
             update_global_config({
                 "no_call_hard": no_call_hard_val,
@@ -265,6 +268,8 @@ def create_app():
                 "gamma_weekend_balance": gamma_weekend_balance,
                 "gamma_consec_weekend": gamma_consec_weekend,
                 "gamma_weekend_team_diversity": gamma_weekend_team_diversity,
+                "gamma_2b_usage": request.form.get("gamma_2b_usage", "0"),
+                "gamma_fairness_l2_groups": request.form.get("gamma_fairness_l2_groups", "500"),
                 **flags
             })
             flash("Global configuration saved.", "success")
@@ -339,7 +344,7 @@ def create_app():
     #############################################
 
     # (About page removed as part of revert)
-    def run_solver_job(job_id, days, surgeons, prev_schedule, public_holidays, preassignments, time_limit_seconds: int = 30):
+    def run_solver_job(job_id, days, surgeons, prev_schedule, public_holidays, preassignments, time_limit_seconds: int = 30, allow_empty: bool = False):
         # we only import the solver function here—never re‑import `app` or `solve_jobs`
         from scheduler import solve_schedule_or_tools
 
@@ -355,17 +360,21 @@ def create_app():
         with app.app_context():
             sched, cost = solve_schedule_or_tools(
                 days, surgeons, prev_schedule, public_holidays, preassignments,
-                time_limit_seconds=time_limit_seconds
+                time_limit_seconds=time_limit_seconds,
+                allow_empty=allow_empty
             )
 
-            if sched is not None:
+            if sched is not None and not (isinstance(sched, dict) and 'errors' in sched):
                 solve_jobs[job_id].update({
                     'status':   'done',
                     'solution': sched,
                     'best':     cost
                 })
             else:
-                solve_jobs[job_id]['status'] = 'failed'
+                solve_jobs[job_id].update({
+                    'status': 'failed',
+                    'solution': sched
+                })
 
     @app.route('/new_schedule', methods=['GET'])
     @basic_auth.required
@@ -1122,6 +1131,7 @@ def create_app():
         data = request.get_json()
         year, month = int(data['year']), int(data['month'])
         time_limit_seconds = int(data.get('time_limit_seconds', 30))
+        allow_empty = bool(data.get('allow_empty', False))
 
         # Build days list
         days = [
@@ -1181,7 +1191,7 @@ def create_app():
         job_id = uuid.uuid4().hex
         threading.Thread(
             target=run_solver_job,
-            args=(job_id, days, surgeons, prev_schedule, public_holidays, preassignments, time_limit_seconds),
+            args=(job_id, days, surgeons, prev_schedule, public_holidays, preassignments, time_limit_seconds, allow_empty),
             daemon=True
         ).start()
         
@@ -1199,6 +1209,8 @@ def create_app():
         }
         if job['status'] == 'done':
             resp['solution'] = job['solution']
+        elif job['status'] == 'failed':
+            resp['errors'] = job.get('solution', {}).get('errors') if isinstance(job.get('solution'), dict) else None
         return jsonify(resp)
 
     # --- Route to cancel a running job ---

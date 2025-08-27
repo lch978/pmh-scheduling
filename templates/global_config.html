@@ -31,6 +31,9 @@
       <label style="display:block;margin:6px 0;"><input type="checkbox" name="enable_weekend_consecutive_penalty" value="1" {% if config.enable_weekend_consecutive_penalty != '0' %}checked{% endif %}> Penalize consecutive weekend days</label>
       <label style="display:block;margin:6px 0;"><input type="checkbox" name="enable_weekend_team_diversity_enable" value="1" {% if config.enable_weekend_team_diversity_enable != '0' %}checked{% endif %}> Weekend team diversity</label>
       <label style="display:block;margin:6px 0;"><input type="checkbox" name="enable_team_day_prefs" value="1" {% if config.enable_team_day_prefs != '0' %}checked{% endif %}> Team day preferences</label>
+      <hr>
+      <label style="display:block;margin:6px 0;"><input type="checkbox" name="enable_2b_usage_penalty" value="1" {% if config.enable_2b_usage_penalty != '0' %}checked{% endif %}> Enable 2B usage penalty</label>
+      <label style="display:block;margin:6px 0;"><input type="checkbox" name="enable_fairness_l2_groups" value="1" {% if config.enable_fairness_l2_groups != '0' %}checked{% endif %}> Balance 2A+2B calls within L2 groups (1/2/3)</label>
     </div>
 
     <div style="border:1px solid #ddd;border-radius:8px;padding:12px;">
@@ -44,6 +47,21 @@
       </div>
       <div style="font-size:12px; font-style:italic; color:#666;">Higher values push total calls to be more equal across all surgeons.</div>
       <div style="height:10px"></div>
+
+      <div style="width:80%; display:flex; justify-content:space-between; align-items:center; gap:8px;">
+        <label for="gamma_2b_usage" style="margin:0;">Penalty for using 2B (supervisor load):</label>
+        <span id="gamma_2b_usageOut">{{ config.get('gamma_2b_usage', '0') }}</span>
+      </div>
+      <input type="range" id="gamma_2b_usage" name="gamma_2b_usage" min="0" max="500" value="{{ config.get('gamma_2b_usage', '0') }}" style="width:80%;" oninput="gamma_2b_usageOut.textContent = this.value">
+      <div style="font-size:12px; font-style:italic; color:#666;">Softly discourages assigning 2B to reduce supervisor overuse when not required.</div>
+
+      <div style="height:10px"></div>
+      <div style="width:80%; display:flex; justify-content:space-between; align-items:center; gap:8px;">
+        <label for="gamma_fairness_l2_groups" style="margin:0;">Fairness for 2A+2B within L2 groups:</label>
+        <span id="gamma_fairness_l2_groupsOut">{{ config.get('gamma_fairness_l2_groups', '500') }}</span>
+      </div>
+      <input type="range" id="gamma_fairness_l2_groups" name="gamma_fairness_l2_groups" min="0" max="20000" value="{{ config.get('gamma_fairness_l2_groups', '500') }}" style="width:80%;" oninput="gamma_fairness_l2_groupsOut.textContent = this.value">
+      <div style="font-size:12px; font-style:italic; color:#666;">Balances total 2A+2B calls across surgeons within each of groups 1, 2, and 3.</div>
 
       <div style="width:80%; display:flex; justify-content:space-between; align-items:center; gap:8px;">
         <label for="gamma_no_call" style="margin:0;">Penalty for ignoring “No‑call” requests:</label>
@@ -178,24 +196,5 @@
     <button type="submit" style="padding: 10px 20px; font-size: 16px; cursor: pointer;">Update Global Configuration</button>
   </form>
 
-  <script>
-    document.getElementById('fairness_weight').addEventListener('input', function() {
-      document.getElementById('fw_display').innerText = this.value;
-    });
-    document.getElementById('gamma_no_call').addEventListener('input', function() {
-      document.getElementById('gnc_display').innerText = this.value;
-    });
-    document.getElementById('gamma_unavail_prev').addEventListener('input', function() {
-      document.getElementById('gup_display').innerText = this.value;
-    });
-    document.getElementById('gamma_1B').addEventListener('input', function() {
-      document.getElementById('g1b_display').innerText = this.value;
-    });
-    document.getElementById('gamma_spacing').addEventListener('input', e => 
-      document.getElementById('gs_display').innerText = e.target.value);
-    });
-    document.getElementById('spacing_threshold').addEventListener('input', e => 
-      document.getElementById('st_display').innerText = e.target.value);
-    });
-  </script>
+  
 {% endblock %}

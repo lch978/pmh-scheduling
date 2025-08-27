@@ -9,7 +9,7 @@ import sys
 # OR‑Tools Scheduling Function (with Availability Constraints)
 #############################################
 
-def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=None, preassignments=None, time_limit_seconds: int = 30):
+def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=None, preassignments=None, time_limit_seconds: int = 30, allow_empty: bool = False):
 
     from helper import (
         get_max_calls_config,
@@ -21,6 +21,7 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
     )
     model = cp_model.CpModel()
     constraint_mapping = {}
+    diagnostics = []
     # Helper to wrap hard constraint additions.
     def add_named_constraint(name, add_function, *args, **kwargs):
         c = add_function(*args, **kwargs)
@@ -44,11 +45,29 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
     gamma_spacing = int(global_config.get("gamma_spacing", "10"))
     spacing_threshold = int(global_config.get("spacing_threshold", "7"))
     max_calls_level1 = int(global_config.get("max_calls_level1", "10"))
+
+    # Strengthen call-number fairness so it's the strongest soft objective (besides empty-slot penalty).
+    other_soft_weights = [
+        int(global_config.get("gamma_no_call", "10")),
+        int(global_config.get("gamma_unavail_prev", "5")),
+        int(global_config.get("gamma_spacing", "10")),
+        int(global_config.get("gamma_weekend_balance", "50")),
+        int(global_config.get("gamma_consec_weekend", "20")),
+        int(global_config.get("gamma_weekend_team_diversity", "50")),
+        int(global_config.get("gamma_unavail_credit", "50")),
+    ]
+    base_max_soft = max([w for w in other_soft_weights if isinstance(w, int)], default=1)
+    # Heavier scaling in allow-empty mode; still keep empty-slot penalty highest elsewhere in objective.
+    fairness_scale = 200 if allow_empty else 100
+    fairness_weight = max(fairness_weight, base_max_soft * fairness_scale)
+    gamma_balance   = max(gamma_balance,   base_max_soft * fairness_scale)
     gamma_weekend_balance = int(global_config.get("gamma_weekend_balance", "50"))
     gamma_consec_weekend = int(global_config.get("gamma_consec_weekend", "20"))
     gamma_team_pref = int(global_config.get("gamma_team_pref", "10"))
     # New: encourage balanced team presence on weekends (more diverse teams across weekends)
     gamma_weekend_team_diversity = int(global_config.get("gamma_weekend_team_diversity", "50"))
+    gamma_2b_usage = int(global_config.get("gamma_2b_usage", "0"))
+    gamma_fairness_l2_groups = int(global_config.get("gamma_fairness_l2_groups", "500"))
     # New: credit for unavailability (each k days → 1 fewer call, soft)
     gamma_unavail_credit = int(global_config.get("gamma_unavail_credit", "50"))
     unavail_credit_days = int(global_config.get("unavail_credit_days", "7")) or 7
@@ -69,6 +88,8 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
     enable_weekend_balance           = is_enabled("enable_weekend_balance")
     enable_weekend_team_diversity    = is_enabled("enable_weekend_team_diversity_enable")
     enable_team_day_prefs            = is_enabled("enable_team_day_prefs")
+    enable_2b_usage_penalty          = is_enabled("enable_2b_usage_penalty", "0")  # kept for compatibility, not required if gamma>0
+    enable_fairness_l2_groups        = is_enabled("enable_fairness_l2_groups", "1")
     enable_unavail_prev_penalty      = is_enabled("enable_availability_unavail_prev_penalty")
     enable_nocall_penalty            = is_enabled("enable_availability_nocall_penalty")
     enable_spacing_penalty           = is_enabled("enable_spacing_penalty")
@@ -122,6 +143,13 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
         d: { lvl: list(base_domains[lvl]) for lvl in base_domains }
         for d in range(num_days)
     }
+
+    # If allow_empty is requested, ensure every slot can be left empty by including -1 in its domain
+    if allow_empty:
+        for d in range(num_days):
+            for lvl in all_levels:
+                if -1 not in domains_by_day[d][lvl]:
+                    domains_by_day[d][lvl].append(-1)
 
     availability = get_availability_requests()
     for d, day_str in enumerate(days):
@@ -229,6 +257,55 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
             print(f"  {lvl:>3}: {domains_by_day[d][lvl]}")
     print("=== end of domain dump ===\n")
 
+    # --- Preflight feasibility checks to produce helpful diagnostics ---
+    # 1) Empty domain checks (post-pruning)
+    for d, day_str in enumerate(days):
+        for lvl in all_levels:
+            candidates = [sid for sid in domains_by_day[d][lvl] if sid != -1]
+            if not candidates:
+                diagnostics.append(f"No eligible surgeon for level {lvl} on {day_str}.")
+
+    # 2) Weekend/holiday 1B requirement if enabled
+    try:
+        is_weekend_day = [datetime.datetime.strptime(day, "%Y-%m-%d").weekday() >= 5 for day in days]
+    except Exception:
+        is_weekend_day = [False for _ in days]
+    is_holiday_day = [bool(public_holidays and (day in public_holidays)) for day in days]
+    if global_config.get("enable_force_1B_weekend", "1") == "1":
+        for d, day_str in enumerate(days):
+            if is_weekend_day[d] or is_holiday_day[d]:
+                cand_1b = [sid for sid in domains_by_day[d]["1B"] if sid != -1]
+                if not cand_1b:
+                    diagnostics.append(f"1B must be filled on {day_str} (weekend/holiday) but no eligible 1B candidate.")
+
+    # 3) Supervision logic: if 2A can only be Group1 (needs supervisor) but 2B has no supervisors
+    # Determine supervision groups again for clarity
+    g1 = [s["id"] for s in surgeons if get_level2_group(s) == 1]
+    g2 = [s["id"] for s in surgeons if get_level2_group(s) == 2]
+    g3 = [s["id"] for s in surgeons if get_level2_group(s) == 3]
+    g4 = [s["id"] for s in surgeons if get_level2_group(s) == 4]
+    supervisors = set(g3 + g4)
+    for d, day_str in enumerate(days):
+        cand_2a = set([sid for sid in domains_by_day[d]["2A"] if sid != -1])
+        cand_2b = set([sid for sid in domains_by_day[d]["2B"] if sid != -1])
+        if cand_2a and (cand_2a.issubset(set(g1))) and not (cand_2b & supervisors):
+            diagnostics.append(f"2A on {day_str} requires a 2B supervisor, but none available.")
+
+    # 4) Preassignment conflicts: specified surgeon not in domain
+    if preassignments:
+        for d, day_str in enumerate(days):
+            if day_str in preassignments:
+                for level, surgeon_id in preassignments[day_str].items():
+                    if surgeon_id in [None, ""]:
+                        continue
+                    try:
+                        assigned_id = int(surgeon_id)
+                    except Exception:
+                        continue
+                    dom = domains_by_day[d].get(level, [])
+                    if assigned_id not in dom:
+                        diagnostics.append(f"Preassignment conflict on {day_str} {level}: surgeon {assigned_id} not eligible.")
+
     # --- Decision Variables ---
     X = {}
 
@@ -330,7 +407,7 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
         indicator_1B[d] = b1B
 
     # --- Force 1B to be filled on weekends and public holidays (toggle) ---
-    if enable_force_1B_weekend:
+    if enable_force_1B_weekend and not allow_empty:
         for d, day_str in enumerate(days):
             dt = datetime.datetime.strptime(day_str, "%Y-%m-%d").date()
             is_weekend_day = dt.weekday() >= 5
@@ -426,6 +503,33 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                 model.Add, c1 == sum(indicators[(d, "1A", s_id)] + indicators[(d, "1B", s_id)] for d in range(num_days)))
             add_named_constraint(f"Max 1A+1B calls for surgeon {s_id}",
                 model.Add, c1 <= max_calls_level1)
+
+    # --- Fairness within Level-2 groups: balance 2A+2B among surgeons in groups 1, 2, 3 ---
+    l2_fairness_diffs = []
+    if enable_fairness_l2_groups and gamma_fairness_l2_groups > 0:
+        # Build per-surgeon 2A+2B counts
+        l2_counts = {s: model.NewIntVar(0, num_days * 2, f"l2_count_{s}") for s in all_surgeon_ids}
+        for s in all_surgeon_ids:
+            add_named_constraint(f"2A+2B count for surgeon {s}",
+                model.Add, l2_counts[s] == sum(indicators[(d, lvl, s)] for d in range(num_days) for lvl in ["2A","2B"]))
+
+        # For each L2 group 1/2/3 (exclude group 4 supervisors from fairness scope)
+        groups = {
+            1: [s for s in all_surgeon_ids if s in group1_ids],
+            2: [s for s in all_surgeon_ids if s in group2_ids],
+            3: [s for s in all_surgeon_ids if s in group3_ids],
+        }
+        for gid, members in groups.items():
+            members = [m for m in members if m not in nlth_ids]
+            if len(members) <= 1:
+                continue
+            gmax = model.NewIntVar(0, num_days * 2, f"l2_g{gid}_max")
+            gmin = model.NewIntVar(0, num_days * 2, f"l2_g{gid}_min")
+            add_named_constraint(f"L2 group {gid} max", model.AddMaxEquality, gmax, [l2_counts[m] for m in members])
+            add_named_constraint(f"L2 group {gid} min", model.AddMinEquality, gmin, [l2_counts[m] for m in members])
+            gdiff = model.NewIntVar(0, num_days * 2, f"l2_g{gid}_diff")
+            add_named_constraint(f"L2 group {gid} diff", model.Add, gdiff == gmax - gmin)
+            l2_fairness_diffs.append(gdiff)
     
     non_nlth_surgeons = [s for s in all_surgeon_ids if s not in nlth_ids]
     max_all = model.NewIntVar(0, num_days * len(all_levels), 'max_all')
@@ -700,6 +804,22 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
     else:
         add_named_constraint("Penalty spacing zero", model.Add, penalty_spacing == 0)
     
+    # --- Strongly discourage empty slots; only use when necessary (allow_empty mode) ---
+    empty_indicators = []
+    if allow_empty:
+        for d in range(num_days):
+            for lvl in all_levels:
+                if lvl == "2B":
+                    continue  # do not penalize empty 2B slots
+                b = model.NewBoolVar(f"empty_{d}_{lvl}")
+                add_named_constraint(f"Empty slot on day {days[d]} level {lvl}",
+                    model.Add, X[(d, lvl)] == -1
+                ).OnlyEnforceIf(b)
+                add_named_constraint(f"Non-empty slot on day {days[d]} level {lvl}",
+                    model.Add, X[(d, lvl)] != -1
+                ).OnlyEnforceIf(b.Not())
+                empty_indicators.append(b)
+    
     objective_terms = []
     if enable_fairness_diff_all:
         objective_terms.append(fairness_weight * diff_all)
@@ -722,6 +842,37 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
     # team day preferences
     if enable_team_day_prefs and td_terms:
         objective_terms += [- coef * b for coef, b in td_terms]
+
+    # Add Level-2 group fairness terms
+    if enable_fairness_l2_groups and gamma_fairness_l2_groups > 0 and l2_fairness_diffs:
+        objective_terms.extend([gamma_fairness_l2_groups * diff for diff in l2_fairness_diffs])
+
+    # --- Soft penalty for using 2B (reduce supervisor overload when not required) ---
+    # Apply whenever gamma_2b_usage > 0 (toggle is optional)
+    if gamma_2b_usage > 0:
+        two_b_usage_terms = []
+        for d in range(num_days):
+            # Penalize any non-empty 2B assignment
+            b = model.NewBoolVar(f"use_2B_d{d}")
+            add_named_constraint(f"2B used on day {days[d]}", model.Add, X[(d, "2B")] != -1).OnlyEnforceIf(b)
+            add_named_constraint(f"2B not used on day {days[d]}", model.Add, X[(d, "2B")] == -1).OnlyEnforceIf(b.Not())
+            two_b_usage_terms.append(b)
+        objective_terms.append(gamma_2b_usage * sum(two_b_usage_terms))
+    # Penalize empty slots heavily so they are used only if necessary
+    if allow_empty and empty_indicators:
+        empty_weight_candidates = [
+            fairness_weight,
+            gamma_no_call,
+            gamma_unavail_prev,
+            gamma_balance,
+            gamma_unavail_credit,
+            gamma_spacing,
+            gamma_weekend_balance,
+            gamma_consec_weekend,
+            gamma_weekend_team_diversity,
+        ]
+        empty_penalty_weight = max([w for w in empty_weight_candidates if isinstance(w, int)], default=1) * 10000
+        objective_terms.append(empty_penalty_weight * sum(empty_indicators))
     add_named_constraint("Objective", model.Minimize, sum(objective_terms) if objective_terms else 0)
     add_named_constraint("Objective", model.Minimize, sum(objective_terms))
     
@@ -748,4 +899,7 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
         print("\nModel is INFEASIBLE. Hard constraint summary:")
         for name in constraint_mapping:
             print("  ", name)
-        return None, None
+        # Return diagnostics to the caller so the UI can display them
+        if not diagnostics:
+            diagnostics.append("No feasible assignment exists under current constraints. Try relaxing constraints or adding eligible surgeons.")
+        return {"errors": diagnostics}, None

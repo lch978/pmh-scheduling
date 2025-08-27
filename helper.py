@@ -293,11 +293,15 @@ def get_global_config():
 def update_global_config(new_config):
     db = get_db()
     with db.begin():
+        upsert_stmt = text(
+            """
+            INSERT INTO global_config (key, value)
+            VALUES (:key, :value)
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+            """
+        )
         for key, value in new_config.items():
-            db.execute(
-                text("UPDATE global_config SET value = :value WHERE key = :key"),
-                {"key": key, "value": str(value)}
-            )
+            db.execute(upsert_stmt, {"key": key, "value": str(value)})
 
 def get_all_surgeons():
     db = get_db()

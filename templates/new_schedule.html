@@ -105,6 +105,8 @@
     <button type="button" id="btnLoad" style="padding:10px 15px; font-size:14px; margin: 5px;">Load Saved Schedule</button>
     <button type="button" id="btnGen30" style="padding:10px 15px; font-size:14px; margin: 5px;">Generate New Schedule (30s)</button>
     <button type="button" id="btnGen120" style="padding:10px 15px; font-size:14px; margin: 5px;">Generate New Schedule (120s)</button>
+    <button type="button" id="btnGenAllowEmpty30" style="padding:10px 15px; font-size:14px; margin: 5px; background-color:#8a6d3b;">Generate Allow-Empty (30s)</button>
+    <button type="button" id="btnGenAllowEmpty120" style="padding:10px 15px; font-size:14px; margin: 5px; background-color:#8a6d3b;">Generate Allow-Empty (120s)</button>
     <button type="button" id="btnStop" disabled style="padding:10px 15px; font-size:14px; margin: 5px;">Stop</button>
     
     <form method="post" action="{{ url_for('save_schedule') }}" style="display:inline;">
@@ -130,6 +132,7 @@
 <div id="progress" style="text-align:center; margin-top:10px;">
   <p>Status: <span id="status">idle</span></p>
   <p>Best Objective So Far: <span id="best">n/a</span></p>
+  <div id="errors" style="color:#b00020; margin-top:8px;"></div>
 </div>
 <!-- Loading Modal -->
 <div id="loadingModal"
@@ -196,6 +199,8 @@
     const bar     = document.getElementById('modalLoadingBar');
     const btnGen30  = document.getElementById('btnGen30');
     const btnGen120 = document.getElementById('btnGen120');
+    const btnGenAllowEmpty30 = document.getElementById('btnGenAllowEmpty30');
+    const btnGenAllowEmpty120 = document.getElementById('btnGenAllowEmpty120');
     const btnLoad = document.getElementById('btnLoad');
     const btnStop = document.getElementById('btnStop');
     let   currentJob = null;
@@ -287,6 +292,16 @@
           btnStop.disabled = true;
           if (data.status === 'done') {
             renderSchedule(data.solution);
+            document.getElementById('errors').innerHTML = '';
+          } else if (data.status === 'failed') {
+            const errBox = document.getElementById('errors');
+            const errs = Array.isArray(data.errors) ? data.errors : [];
+            if (errs.length) {
+              errBox.innerHTML = '<ul style="text-align:left; display:inline-block;">' +
+                errs.map(e => `<li>${e}</li>`).join('') + '</ul>';
+            } else {
+              errBox.textContent = 'No feasible schedule found. Try relaxing constraints or adjusting surgeon eligibility.';
+            }
           }
         }
       } catch (err) {
@@ -304,14 +319,14 @@
       window.location = `?year=${y}&month=${m}`;
     });
 
-    async function startSolve(timeLimitMs) {
+    async function startSolve(timeLimitMs, allowEmpty = false) {
       showPopupProgress(timeLimitMs + 15000);
       const y = +document.getElementById('year').value;
       const m = +document.getElementById('month').value;
       const res = await fetch('/start_solve', {
         method: 'POST',
         headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ year: y, month: m, time_limit_seconds: Math.floor(timeLimitMs/1000) })
+        body: JSON.stringify({ year: y, month: m, time_limit_seconds: Math.floor(timeLimitMs/1000), allow_empty: allowEmpty })
       });
       const { job_id } = await res.json();
       currentJob = job_id;
@@ -322,6 +337,8 @@
 
     btnGen30.addEventListener('click', () => startSolve(30000));
     btnGen120.addEventListener('click', () => startSolve(120000));
+    btnGenAllowEmpty30.addEventListener('click', () => startSolve(30000, true));
+    btnGenAllowEmpty120.addEventListener('click', () => startSolve(120000, true));
 
     btnStop.addEventListener('click', () => {
       if (!currentJob) return;
