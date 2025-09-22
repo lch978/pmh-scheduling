@@ -113,7 +113,6 @@ def init_db():
 
         # ── 1b) Ensure surgeons table has required columns/constraints ──
         # Add columns if they are missing
-$
         db.exec_driver_sql(
             """
             ALTER TABLE surgeons
