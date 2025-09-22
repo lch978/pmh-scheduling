@@ -22,14 +22,16 @@
       color: #333;
       margin-bottom: 10px;
     }
+    /* Allow calendar to size itself without clipping */
     #calendar .fc-scroller, #existing-calendar .fc-scroller {
-      overflow: hidden !important;
+      overflow: visible !important;
     }
     /* Improved calendar container styling */
     .calendar-container {
-      max-width: 900px;    
+      width: 100%;
+      max-width: 1200px;    
       margin: 20px auto;
-      overflow: hidden;
+      overflow: visible;
       background: #fff;
       border-radius: 8px;
       box-shadow: 0 4px 8px rgba(0,0,0,0.1);
@@ -153,7 +155,9 @@
           center: 'title',
           right: 'next'
         },
-        height: document.documentElement.clientHeight * 0.7,
+        height: 'auto',
+        contentHeight: 'auto',
+        expandRows: true,
         dateClick: function(info) {
           var clickedDate = info.dateStr;
           var index = selectedDates.indexOf(clickedDate);
@@ -177,10 +181,6 @@
           }
           // Update the hidden field with the JSON array of selected dates.
           document.getElementById('start_date').value = JSON.stringify(selectedDates);
-        },
-        windowResize: function() {
-          var newHeight = document.documentElement.clientHeight * 0.7;
-          calendar.setOption('height', newHeight);
         }
       });
       calendar.render();
@@ -230,7 +230,9 @@
             center: 'title',
             right: 'next'
           },
-          height: document.documentElement.clientHeight * 0.7,
+          height: 'auto',
+          contentHeight: 'auto',
+          expandRows: true,
           events: existingEvents,
           eventClick: function(info) {
             var event = info.event;
