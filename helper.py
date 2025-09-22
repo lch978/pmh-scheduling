@@ -111,6 +111,27 @@ def init_db():
             # exec_driver_sql allows raw SQL strings
             db.exec_driver_sql(ddl)
 
+        # ── 1b) Ensure surgeons table has required columns/constraints ──
+        # Add columns if they are missing
+$
+        db.exec_driver_sql(
+            """
+            ALTER TABLE surgeons
+            ADD COLUMN IF NOT EXISTS nlth BOOLEAN DEFAULT FALSE
+            """
+        )
+        db.exec_driver_sql(
+            """
+            ALTER TABLE surgeons
+            ADD COLUMN IF NOT EXISTS team TEXT DEFAULT ''
+            """
+        )
+        # Backfill NULLs, then enforce NOT NULL
+        db.exec_driver_sql("UPDATE surgeons SET nlth = FALSE WHERE nlth IS NULL")
+        db.exec_driver_sql("UPDATE surgeons SET team = '' WHERE team IS NULL")
+        db.exec_driver_sql("ALTER TABLE surgeons ALTER COLUMN nlth SET NOT NULL")
+        db.exec_driver_sql("ALTER TABLE surgeons ALTER COLUMN team SET NOT NULL")
+
         # ── 2) Seed global_config defaults ──
         defaults = {
             "no_call_hard":          "1",
