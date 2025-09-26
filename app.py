@@ -107,7 +107,7 @@ def create_app():
         row = db.execute(
             text("SELECT * FROM surgeons WHERE id = :id"),
             {"id": surgeon_id}
-        ).fetchone()
+        ).mappings().fetchone()
         if not row:
             flash("Surgeon not found!")
             return redirect(url_for('list_surgeons'))
