@@ -114,17 +114,23 @@ def create_app():
             return redirect(url_for('list_surgeons'))
         surgeon = dict(row)
         if request.method == 'POST':
-            name = request.form['name']
-            call_levels_list = request.form.getlist('call_levels')
-            call_levels = ','.join(call_levels_list)
-            team = request.form['team']
-            with db.begin():
-                db.execute(
-                    text("UPDATE surgeons SET name = :name, call_levels = :levels, team = :team WHERE id = :id"),
-                    {"name": name, "levels": call_levels, "team": team, "id": surgeon_id}
-                )
+            try:
+                name = request.form.get('name', '').strip()
+                call_levels_list = request.form.getlist('call_levels')
+                call_levels = ','.join(call_levels_list)
+                team = request.form.get('team', '')
+                with db.begin():
+                    db.execute(
+                        text("UPDATE surgeons SET name = :name, call_levels = :levels, team = :team WHERE id = :id"),
+                        {"name": name, "levels": call_levels, "team": team, "id": surgeon_id}
+                    )
                 flash("Surgeon updated successfully!")
                 return redirect(url_for('list_surgeons'))
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                flash(f"Failed to update surgeon: {e}", "error")
+                return redirect(url_for('edit_surgeon', surgeon_id=surgeon_id))
         return render_template('surgeon_form.html', surgeon=surgeon, action="Edit")
 
     @app.route('/surgeons/update/<int:surgeon_id>', methods=['POST'])
@@ -157,34 +163,39 @@ def create_app():
             WHERE id         = :id
         """)
 
-        with db.begin():
-            for surgeon in surgeons:
-                sid = surgeon['id']
-                name_field = f"name_{sid}"
-                levels_field = f"call_levels_{sid}"
-                nlth_field = f"nlth_{sid}"
-                team_field = f"team_{sid}"
+        try:
+            with db.begin():
+                for surgeon in surgeons:
+                    sid = surgeon['id']
+                    name_field = f"name_{sid}"
+                    levels_field = f"call_levels_{sid}"
+                    nlth_field = f"nlth_{sid}"
+                    team_field = f"team_{sid}"
 
-                new_name   = request.form.get(name_field, surgeon['name'])
-                new_levels = request.form.getlist(levels_field)
-                new_levels_str = ",".join(new_levels)
-                new_team = request.form.get(team_field) or ""
+                    new_name   = request.form.get(name_field, surgeon['name'])
+                    new_levels = request.form.getlist(levels_field)
+                    new_levels_str = ",".join(new_levels)
+                    new_team = request.form.get(team_field) or ""
 
-                # Checkbox: if the field is present in form data, checkbox was checked
-                new_nlth = (request.form.get(nlth_field) == 'on')
+                    # Checkbox: if the field is present in form data, checkbox was checked
+                    new_nlth = (request.form.get(nlth_field) == 'on')
 
-                db.execute(
-                    stmt,
-                    {
-                        "name":   new_name,
-                        "levels": new_levels_str,
-                        "nlth":   new_nlth,
-                        "team":   new_team,
-                        "id":     sid
-                    }
-                )
+                    db.execute(
+                        stmt,
+                        {
+                            "name":   new_name,
+                            "levels": new_levels_str,
+                            "nlth":   new_nlth,
+                            "team":   new_team,
+                            "id":     sid
+                        }
+                    )
             flash("Surgeon updates applied successfully!")
-            return redirect(url_for('list_surgeons'))
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            flash(f"Failed to update surgeons: {e}", "error")
+        return redirect(url_for('list_surgeons'))
 
     #############################################
     # Maximum Calls Configuration Endpoint
