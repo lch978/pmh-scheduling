@@ -246,6 +246,8 @@ def create_app():
             gamma_weekend_balance = request.form.get("gamma_weekend_balance", "50")
             gamma_consec_weekend = request.form.get("gamma_consec_weekend", "20")
             gamma_weekend_team_diversity = request.form.get("gamma_weekend_team_diversity", "50")
+            max_weekend_calls = request.form.get("max_weekend_calls", "3")
+            min_calls_nlth = request.form.get("min_calls_nlth", "3")
             # checkboxes
             def cb(name):
                 return '1' if request.form.get(name) == '1' else '0'
@@ -280,6 +282,8 @@ def create_app():
                 "gamma_weekend_balance": gamma_weekend_balance,
                 "gamma_consec_weekend": gamma_consec_weekend,
                 "gamma_weekend_team_diversity": gamma_weekend_team_diversity,
+                "max_weekend_calls": max_weekend_calls,
+                "min_calls_nlth": min_calls_nlth,
                 "gamma_2b_usage": request.form.get("gamma_2b_usage", "0"),
                 "gamma_fairness_l2_groups": request.form.get("gamma_fairness_l2_groups", "500"),
                 **flags
@@ -419,28 +423,12 @@ def create_app():
             if d.year == year_sel and d.month == month_sel
         }
 
-        # ── 5) Load previous month (for 3‑day spacing) ──
+        # ── 5) Compute previous month references (for labels/UI) ──
         if month_sel == 1:
             prev_year, prev_month = year_sel - 1, 12
         else:
             prev_year, prev_month = year_sel, month_sel - 1
         db = get_db()
-        stmt = text(
-            "SELECT schedule_data FROM saved_schedule "
-            "WHERE year = :year AND month = :month"
-        )
-        result = db.execute(stmt, {"year": prev_year, "month": prev_month})
-        prev_row = result.mappings().fetchone()
-        if prev_row:
-            raw = prev_row['schedule_data']
-            # if Postgres gave us a dict, use it directly; otherwise parse the JSON text
-            if isinstance(raw, dict):
-                prev_schedule = raw
-            else:
-                prev_schedule = json.loads(raw)
-        else:
-            prev_schedule = None
-
         # compute the last two dates of previous month for display/overlay
         prev_month_num_days = calendar.monthrange(prev_year, prev_month)[1]
         prev_day_minus_2 = datetime.date(prev_year, prev_month, prev_month_num_days - 1).isoformat()
@@ -482,10 +470,19 @@ def create_app():
         generate_flag = request.args.get('generate')
         if generate_flag:
             # ▶︎ Preview only; do *not* save
+            # Build prev_schedule ONLY from saved prior-last-two for pruning
+            saved_prior = get_prior_last_two(year_sel, month_sel)
+            id_to_name = {s['id']: s['name'] for s in surgeons}
+            prev_from_prior = {}
+            if saved_prior.get('m2'):
+                prev_from_prior[prev_day_minus_2] = {lev: id_to_name.get(int(sid)) for lev, sid in saved_prior['m2'].items() if id_to_name.get(int(sid))}
+            if saved_prior.get('m1'):
+                prev_from_prior[prev_day_minus_1] = {lev: id_to_name.get(int(sid)) for lev, sid in saved_prior['m1'].items() if id_to_name.get(int(sid))}
+
             sched, cost = solve_schedule_or_tools(
                 days_sel,
                 surgeons,
-                prev_schedule=prev_schedule,
+                prev_schedule=prev_from_prior or None,
                 public_holidays=public_holidays,
                 preassignments=preassignments
             )
@@ -1201,15 +1198,8 @@ def create_app():
         )
         result = db.execute(stmt, {"y": prev_year, "m": prev_month})
         prev_row = result.mappings().fetchone()
-        # Safely parse previous schedule whether it's stored as dict or JSON string
-        if prev_row:
-            raw_data = prev_row['schedule_data']
-            if isinstance(raw_data, dict):
-                prev_schedule = raw_data
-            else:
-                prev_schedule = json.loads(raw_data)
-        else:
-            prev_schedule = None
+        # Ignore saved previous schedules; rely only on user-provided prior_last_two
+        prev_schedule = None
 
 
         # Compute HK public holidays
@@ -1235,7 +1225,7 @@ def create_app():
             preassignments = {}
 
         surgeons = get_all_surgeons()
-        # Overlay prior_last_two selections into prev_schedule for carry-over spacing
+        # Build prev_schedule only from prior_last_two for carry-over spacing
         if prior_last_two:
             # Build date strings for last two days of the previous month
             import calendar as _cal

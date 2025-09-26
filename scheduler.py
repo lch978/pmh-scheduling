@@ -62,6 +62,8 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
     fairness_weight = max(fairness_weight, base_max_soft * fairness_scale)
     gamma_balance   = max(gamma_balance,   base_max_soft * fairness_scale)
     gamma_weekend_balance = int(global_config.get("gamma_weekend_balance", "50"))
+    max_weekend_calls_cfg = int(global_config.get("max_weekend_calls", "3"))
+    min_calls_nlth_cfg = int(global_config.get("min_calls_nlth", "3"))
     gamma_consec_weekend = int(global_config.get("gamma_consec_weekend", "20"))
     gamma_team_pref = int(global_config.get("gamma_team_pref", "10"))
     # New: encourage balanced team presence on weekends (more diverse teams across weekends)
@@ -261,6 +263,9 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
     # 1) Empty domain checks (post-pruning)
     for d, day_str in enumerate(days):
         for lvl in all_levels:
+            # Skip diagnostics for 2B; 2B is optional in this model
+            if lvl == "2B":
+                continue
             candidates = [sid for sid in domains_by_day[d][lvl] if sid != -1]
             if not candidates:
                 diagnostics.append(f"No eligible surgeon for level {lvl} on {day_str}.")
@@ -323,6 +328,8 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
     # ----- Apply Preassignment Constraints -----
     # If preassignments is provided, force the variable to match the assigned surgeon.
     # Expected format: { "YYYY-MM-DD": { "1A": surgeon_id, "3": surgeon_id, ... }, ... }
+    # Track fixed preassignments for later rules to respect (override)
+    preassigned_fixed = {}
     if preassignments:
         for d, day_str in enumerate(days):
             if day_str in preassignments:
@@ -334,6 +341,7 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                     except Exception:
                         print(f"Error converting surgeon id {surgeon_id} on {day_str} at level {level}")
                         continue
+                    preassigned_fixed[(d, level)] = assigned_id
                     # Debug print: show available domain for that slot.
                     print(f"Day {day_str} level {level} domain: {domains_by_day[d][level]}, preassigned: {assigned_id}")
                     add_named_constraint(f"Preassignment: {day_str} level {level} fixed to surgeon {assigned_id}",
@@ -504,6 +512,12 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
             add_named_constraint(f"Max 1A+1B calls for surgeon {s_id}",
                 model.Add, c1 <= max_calls_level1)
 
+    # --- Hard minimum total calls for NLTH surgeons ---
+    if min_calls_nlth_cfg > 0 and nlth_ids:
+        for s in nlth_ids:
+            add_named_constraint(f"Min total calls for NLTH surgeon {s}",
+                model.Add, call_count_overall[s] >= min_calls_nlth_cfg)
+
     # --- Fairness within Level-2 groups: balance 2A+2B among surgeons in groups 1, 2, 3 ---
     l2_fairness_diffs = []
     if enable_fairness_l2_groups and gamma_fairness_l2_groups > 0:
@@ -565,6 +579,10 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
             if not allow_nlth:
                 for lvl in all_levels:
                     for s_id in nlth_ids:
+                        # If this (day, level) is preassigned to this NLTH surgeon, allow override
+                        fixed_id = preassigned_fixed.get((d, lvl))
+                        if fixed_id is not None and fixed_id == s_id:
+                            continue
                         add_named_constraint(f"NLTH ban: Day {days[d]}, level {lvl} cannot be surgeon {s_id}",
                             model.Add, X[(d, lvl)] != s_id)
     
@@ -590,8 +608,9 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
         add_named_constraint(f"Count weekend calls for surgeon {s}",
             model.Add, wc == sum(w_call[(s,d)] for d in range(num_days)))
         weekend_count[s] = wc
-        if enable_weekend_balance:
-            add_named_constraint(f"Max weekend calls for surgeon {s}", model.Add, wc <= 3)
+        # Hard cap for non-NLTH only, using configurable value
+        if enable_weekend_balance and s not in nlth_ids:
+            add_named_constraint(f"Max weekend calls for surgeon {s}", model.Add, wc <= max_weekend_calls_cfg)
     
     consec_penalties = []
     if enable_weekend_consecutive_pen:
@@ -621,6 +640,7 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
         ("grp3", [s["id"] for s in surgeons if "3" in parse_call_levels(s.get("call_levels",""))]),
         ("grp4", [s["id"] for s in surgeons if "4" in parse_call_levels(s.get("call_levels",""))])
     ], start=1):
+        # Exclude NLTH surgeons from the fairness group
         grp_clean = [s for s in grp if s not in nlth_ids]
         if len(grp_clean) > 1:
             max_w = model.NewIntVar(0, num_days, f"max_wknd_grp{i}")
