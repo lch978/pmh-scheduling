@@ -13,6 +13,7 @@ from sqlalchemy import text
 from flask_basicauth import BasicAuth
 from dotenv import load_dotenv
 from helper import *
+from helper import save_prior_last_two as save_prior_last_two_db
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, g, session, send_file, abort
 
 def create_app():
@@ -429,6 +430,11 @@ def create_app():
         else:
             prev_schedule = None
 
+        # compute the last two dates of previous month for display/overlay
+        prev_month_num_days = calendar.monthrange(prev_year, prev_month)[1]
+        prev_day_minus_2 = datetime.date(prev_year, prev_month, prev_month_num_days - 1).isoformat()
+        prev_day_minus_1 = datetime.date(prev_year, prev_month, prev_month_num_days).isoformat()
+
         # ── Load preassignments for the current month ──
         stmt_pre = text(
             "SELECT preassignment_data FROM preassignments WHERE year = :year AND month = :month"
@@ -456,10 +462,15 @@ def create_app():
             {"y": year_sel, "m": month_sel}
         ).fetchone()
 
+        # Build candidates per level for UI selects
+        surgeons = get_all_surgeons()
+        def candidates_for(level: str):
+            return [s for s in surgeons if level in parse_call_levels(s.get("call_levels", ""))]
+        candidates = {lvl: sorted(candidates_for(lvl), key=lambda s: s["name"]) for lvl in ["1A","1B","2A","2B","3","4"]}
+
         generate_flag = request.args.get('generate')
         if generate_flag:
             # ▶︎ Preview only; do *not* save
-            surgeons = get_all_surgeons()
             sched, cost = solve_schedule_or_tools(
                 days_sel,
                 surgeons,
@@ -499,6 +510,8 @@ def create_app():
         }
 
         # ── 8) Render in both cases ──
+        # load any saved prior-last-two for this (year, month)
+        saved_prior = get_prior_last_two(year_sel, month_sel)
         return render_template(
             'new_schedule.html',
             schedule=sched,
@@ -506,7 +519,11 @@ def create_app():
             weekend_set=weekend_set,
             public_holidays=public_holidays,
             year=year_sel,
-            month=month_sel
+            month=month_sel,
+            candidates=candidates,
+            prev_day_minus_2=prev_day_minus_2,
+            prev_day_minus_1=prev_day_minus_1,
+            saved_prior=saved_prior
         )
 
     @app.route('/save_schedule', methods=['POST'])
@@ -588,6 +605,25 @@ def create_app():
         weekend_set = {d for d in days_sel if datetime.date.fromisoformat(d).weekday() >= 5}
         return render_template('saved_schedule.html', schedule=sched, weekend_set=weekend_set,
                             year=year_sel, month=month_sel)
+
+    @app.route('/save_prior_last_two', methods=['POST'])
+    def save_prior_last_two():
+        data = request.get_json()
+        try:
+            year = int(data.get('year'))
+            month = int(data.get('month'))
+        except Exception:
+            return jsonify({'error': 'Invalid year/month'}), 400
+        m2 = data.get('m2') or {}
+        m1 = data.get('m1') or {}
+        # sanitize: keys are levels, values are ints
+        try:
+            m2 = {k: int(v) for k, v in m2.items()}
+            m1 = {k: int(v) for k, v in m1.items()}
+        except Exception:
+            return jsonify({'error': 'Invalid payload'}), 400
+        save_prior_last_two_db(year, month, m2, m1)
+        return jsonify({'ok': True})
 
     @app.route('/export_schedule', methods=['POST'])
     def export_schedule():
@@ -1132,6 +1168,7 @@ def create_app():
         year, month = int(data['year']), int(data['month'])
         time_limit_seconds = int(data.get('time_limit_seconds', 30))
         allow_empty = bool(data.get('allow_empty', False))
+        prior_last_two = data.get('prior_last_two') or {}
 
         # Build days list
         days = [
@@ -1187,6 +1224,34 @@ def create_app():
             preassignments = {}
 
         surgeons = get_all_surgeons()
+        # Overlay prior_last_two selections into prev_schedule for carry-over spacing
+        if prior_last_two:
+            # Build date strings for last two days of the previous month
+            import calendar as _cal
+            last_day = _cal.monthrange(year if month>1 else year-1, month-1 if month>1 else 12)[1]
+            p_year = year if month>1 else year-1
+            p_month = month-1 if month>1 else 12
+            day_m2 = datetime.date(p_year, p_month, max(1, last_day-1)).isoformat()
+            day_m1 = datetime.date(p_year, p_month, last_day).isoformat()
+            # ensure dict
+            if prev_schedule is None:
+                prev_schedule = {}
+            # convert ids→names for the solver's prev_schedule format
+            id_to_name = {s['id']: s['name'] for s in surgeons}
+            m2 = prior_last_two.get('m2') or {}
+            m1 = prior_last_two.get('m1') or {}
+            if m2:
+                prev_schedule.setdefault(day_m2, {})
+                for lev, sid in m2.items():
+                    name = id_to_name.get(int(sid))
+                    if name:
+                        prev_schedule[day_m2][lev] = name
+            if m1:
+                prev_schedule.setdefault(day_m1, {})
+                for lev, sid in m1.items():
+                    name = id_to_name.get(int(sid))
+                    if name:
+                        prev_schedule[day_m1][lev] = name
 
         job_id = uuid.uuid4().hex
         threading.Thread(

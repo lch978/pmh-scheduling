@@ -1,4 +1,5 @@
 import datetime
+import json
 import flask
 from dateutil.parser import parse
 from flask import g, request
@@ -103,6 +104,19 @@ def init_db():
                 month INTEGER,
                 preassignment_data JSONB,
                 date_updated TIMESTAMP WITHOUT TIME ZONE DEFAULT now(),
+                UNIQUE (year, month)
+            );
+            """
+            ,
+            # Stores prior-month last two day assignments per current (year, month)
+            """
+            CREATE TABLE IF NOT EXISTS prior_last_two (
+                id SERIAL PRIMARY KEY,
+                year INTEGER NOT NULL,
+                month INTEGER NOT NULL,
+                m2 JSONB,
+                m1 JSONB,
+                updated_at TIMESTAMP WITHOUT TIME ZONE DEFAULT now(),
                 UNIQUE (year, month)
             );
             """
@@ -359,3 +373,36 @@ def get_availability_requests():
             'request_type': mapping['request_type']
         })
     return requests
+
+#############################################
+# Prior last-two storage
+#############################################
+
+def get_prior_last_two(year: int, month: int):
+    db = get_db()
+    row = db.execute(text("SELECT m2, m1 FROM prior_last_two WHERE year = :y AND month = :m"), {"y": year, "m": month}).mappings().fetchone()
+    if not row:
+        return {"m2": {}, "m1": {}}
+    def to_dict(val):
+        if isinstance(val, dict):
+            return val
+        if val is None:
+            return {}
+        try:
+            return json.loads(val)
+        except Exception:
+            return {}
+    return {"m2": to_dict(row["m2"]), "m1": to_dict(row["m1"]) }
+
+def save_prior_last_two(year: int, month: int, m2: dict, m1: dict):
+    db = get_db()
+    with db.begin():
+        stmt = text(
+            """
+            INSERT INTO prior_last_two (year, month, m2, m1, updated_at)
+            VALUES (:y, :m, CAST(:m2 AS JSONB), CAST(:m1 AS JSONB), now())
+            ON CONFLICT (year, month) DO UPDATE
+            SET m2 = EXCLUDED.m2, m1 = EXCLUDED.m1, updated_at = now()
+            """
+        )
+        db.execute(stmt, {"y": year, "m": month, "m2": json.dumps(m2 or {}), "m1": json.dumps(m1 or {})})

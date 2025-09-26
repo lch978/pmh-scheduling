@@ -84,6 +84,35 @@
   <div class="schedule-header">
     <h1>Schedule for {{ year }}-{{ '%02d'|format(month) }}</h1>
   </div>
+  <!-- Prior-month last two days assignment inputs -->
+  <div style="margin: 20px 0; padding: 12px; border: 1px solid #ddd; border-radius: 6px;">
+    <div style="margin-bottom: 12px; font-weight: bold;">Previous Month On-Call (for 3-day rule)</div>
+    <div style="display: grid; grid-template-columns: 180px repeat(6, 1fr); gap: 8px; align-items: center; margin-bottom: 8px;">
+      <div>{{ prev_day_minus_2 }} (2nd last day)</div>
+      {% for lev in ['1A','1B','2A','2B','3','4'] %}
+        <select id="prev_m2_{{ lev }}" data-day="-2" data-level="{{ lev }}">
+          <option value="">— {{ lev }} —</option>
+          {% for s in candidates[lev] %}
+            <option value="{{ s.id }}" {% if saved_prior.m2.get(lev) == s.id %}selected{% endif %}>{{ s.name }}</option>
+          {% endfor %}
+        </select>
+      {% endfor %}
+    </div>
+    <div style="display: grid; grid-template-columns: 180px repeat(6, 1fr); gap: 8px; align-items: center;">
+      <div>{{ prev_day_minus_1 }} (last day)</div>
+      {% for lev in ['1A','1B','2A','2B','3','4'] %}
+        <select id="prev_m1_{{ lev }}" data-day="-1" data-level="{{ lev }}">
+          <option value="">— {{ lev }} —</option>
+          {% for s in candidates[lev] %}
+            <option value="{{ s.id }}" {% if saved_prior.m1.get(lev) == s.id %}selected{% endif %}>{{ s.name }}</option>
+          {% endfor %}
+        </select>
+      {% endfor %}
+    </div>
+    <div style="margin-top: 12px; text-align: right;">
+      <button type="button" id="btnSavePrior" style="padding:8px 12px; font-size:14px; border:none; border-radius:4px; background-color:#5cb85c; color:#fff;">Save Prior On-Call</button>
+    </div>
+  </div>
 <div class="schedule-form" style="text-align: center; margin-bottom: 10px;">
     <!-- Row 1: Year/Month selection -->
   <div style="margin-bottom: 10px;">
@@ -203,6 +232,7 @@
     const btnGenAllowEmpty120 = document.getElementById('btnGenAllowEmpty120');
     const btnLoad = document.getElementById('btnLoad');
     const btnStop = document.getElementById('btnStop');
+    const btnSavePrior = document.getElementById('btnSavePrior');
     let   currentJob = null;
 
     // initialize both hidden JSON fields
@@ -323,10 +353,18 @@
       showPopupProgress(timeLimitMs + 15000);
       const y = +document.getElementById('year').value;
       const m = +document.getElementById('month').value;
+      // collect prior-month selections
+      const prior = { m2: {}, m1: {} };
+      for (const lev of ['1A','1B','2A','2B','3','4']) {
+        const v2 = document.getElementById(`prev_m2_${lev}`).value;
+        const v1 = document.getElementById(`prev_m1_${lev}`).value;
+        if (v2) prior.m2[lev] = parseInt(v2, 10);
+        if (v1) prior.m1[lev] = parseInt(v1, 10);
+      }
       const res = await fetch('/start_solve', {
         method: 'POST',
         headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ year: y, month: m, time_limit_seconds: Math.floor(timeLimitMs/1000), allow_empty: allowEmpty })
+        body: JSON.stringify({ year: y, month: m, time_limit_seconds: Math.floor(timeLimitMs/1000), allow_empty: allowEmpty, prior_last_two: prior })
       });
       const { job_id } = await res.json();
       currentJob = job_id;
@@ -348,6 +386,32 @@
           btnStop.disabled = true;
         });
       document.getElementById('status').innerText = 'cancelling';
+    });
+
+    btnSavePrior.addEventListener('click', async () => {
+      const y = +document.getElementById('year').value;
+      const m = +document.getElementById('month').value;
+      const m2 = {}, m1 = {};
+      for (const lev of ['1A','1B','2A','2B','3','4']) {
+        const v2 = document.getElementById(`prev_m2_${lev}`).value;
+        const v1 = document.getElementById(`prev_m1_${lev}`).value;
+        if (v2) m2[lev] = parseInt(v2, 10);
+        if (v1) m1[lev] = parseInt(v1, 10);
+      }
+      try {
+        const res = await fetch('/save_prior_last_two', {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ year: y, month: m, m2, m1 })
+        });
+        if (res.ok) {
+          alert('Saved prior on-call selections.');
+        } else {
+          alert('Failed to save.');
+        }
+      } catch (e) {
+        alert('Failed to save.');
+      }
     });
   });
 </script>
