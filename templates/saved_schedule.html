@@ -39,7 +39,10 @@
       background-color: #f2f2f2;
     }
     .weekend {
-      background-color: #d3d3d3;
+      background-color: #f9f2f4;
+    }
+    .holiday {
+      background-color: #eef9ff;
     }
     .button-group {
       text-align: center;
@@ -101,7 +104,10 @@
       </thead>
       <tbody>
         {% for day, assignments in schedule.items() %}
-        <tr class="{{ 'weekend' if day in weekend_set else '' }}">
+        {% set classes = [] %}
+        {% if day in weekend_set %}{% set _=classes.append('weekend') %}{% endif %}
+        {% if day in public_holidays %}{% set _=classes.append('holiday') %}{% endif %}
+        <tr class="{{ classes|join(' ') }}">
           <td>{{ day }}</td>
           {% for level in ['1A','1B','2A','2B','3','4'] %}
             <td>{{ assignments[level] if assignments[level] else '' }}</td>

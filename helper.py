@@ -120,6 +120,20 @@ def init_db():
                 UNIQUE (year, month)
             );
             """
+            ,
+            # Versioned saved schedules
+            """
+            CREATE TABLE IF NOT EXISTS saved_schedule_versions (
+                id SERIAL PRIMARY KEY,
+                year INTEGER NOT NULL,
+                month INTEGER NOT NULL,
+                version INTEGER NOT NULL,
+                schedule_data JSONB NOT NULL,
+                published BOOLEAN NOT NULL DEFAULT FALSE,
+                updated_at TIMESTAMP WITHOUT TIME ZONE DEFAULT now(),
+                UNIQUE (year, month, version)
+            );
+            """
         ]
         for ddl in ddl_statements:
             # exec_driver_sql allows raw SQL strings

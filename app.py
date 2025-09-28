@@ -105,14 +105,6 @@ def create_app():
     @app.route('/surgeons/edit/<int:surgeon_id>', methods=['GET', 'POST'])
     def edit_surgeon(surgeon_id):
         db = get_db()
-        row = db.execute(
-            text("SELECT * FROM surgeons WHERE id = :id"),
-            {"id": surgeon_id}
-        ).mappings().fetchone()
-        if not row:
-            flash("Surgeon not found!")
-            return redirect(url_for('list_surgeons'))
-        surgeon = dict(row)
         if request.method == 'POST':
             try:
                 name = request.form.get('name', '').strip()
@@ -131,6 +123,15 @@ def create_app():
                 traceback.print_exc()
                 flash(f"Failed to update surgeon: {e}", "error")
                 return redirect(url_for('edit_surgeon', surgeon_id=surgeon_id))
+        # GET path
+        row = db.execute(
+            text("SELECT * FROM surgeons WHERE id = :id"),
+            {"id": surgeon_id}
+        ).mappings().fetchone()
+        if not row:
+            flash("Surgeon not found!")
+            return redirect(url_for('list_surgeons'))
+        surgeon = dict(row)
         return render_template('surgeon_form.html', surgeon=surgeon, action="Edit")
 
     @app.route('/surgeons/update/<int:surgeon_id>', methods=['POST'])
@@ -152,7 +153,6 @@ def create_app():
     @app.route('/update_all_surgeons', methods=['POST'])
     def update_all_surgeons():
         db = get_db()
-        surgeons = get_all_surgeons()
         # Prepare a single text‐Clause for performance
         stmt = text("""
             UPDATE surgeons
@@ -165,6 +165,8 @@ def create_app():
 
         try:
             with db.begin():
+                # Fetch within the same transaction to avoid nested begin/autobegin conflicts
+                surgeons = db.execute(text("SELECT * FROM surgeons")).mappings().all()
                 for surgeon in surgeons:
                     sid = surgeon['id']
                     name_field = f"name_{sid}"
@@ -581,6 +583,11 @@ def create_app():
                     ),
                     {"y": year, "m": month, "sched": data}
                 )
+        # Also save as a new version in versioned table
+        with db.begin():
+            ver_row = db.execute(text("SELECT COALESCE(MAX(version),0) AS maxv FROM saved_schedule_versions WHERE year=:y AND month=:m"), {"y": year, "m": month}).mappings().fetchone()
+            next_ver = (ver_row['maxv'] or 0) + 1
+            db.execute(text("INSERT INTO saved_schedule_versions (year, month, version, schedule_data, published) VALUES (:y, :m, :v, CAST(:d AS JSONB), FALSE)"), {"y": year, "m": month, "v": next_ver, "d": data})
         flash("Schedule saved.", "success")
         return redirect(url_for('new_schedule', year=year, month=month))
 
@@ -592,26 +599,24 @@ def create_app():
                     for d in range(1, calendar.monthrange(year_sel, month_sel)[1] + 1)]
         
         db = get_db()
-        stmt = text(
-            "SELECT schedule_data FROM saved_schedule "
-            "WHERE year = :year AND month = :month"
-        )
-        result = db.execute(stmt, {"year": year_sel, "month": month_sel})
-        row = result.mappings().fetchone()
-        if row:
-            data = row['schedule_data']
-            # if Postgres gave us a dict, use it directly; otherwise parse the JSON string
-            if isinstance(data, dict):
-                sched = data
-            else:
-                sched = json.loads(data)
+        # Prefer published versioned schedule if available
+        row_pub = db.execute(
+            text("SELECT schedule_data FROM saved_schedule_versions WHERE year=:y AND month=:m AND published=TRUE ORDER BY version DESC LIMIT 1"),
+            {"y": year_sel, "m": month_sel}
+        ).mappings().fetchone()
+        if row_pub:
+            data = row_pub['schedule_data']
+            sched = data if isinstance(data, dict) else json.loads(data)
         else:
-            flash("No saved schedule found for the selected period.")
+            # Fallback: show message and empty content (do not show unpublished)
+            flash("No published schedule for the selected month.", "warning")
             sched = {}
 
-        # Use the locally computed days_sel to determine weekend_set.
+        # Use the locally computed days_sel to determine weekend_set and public holidays.
         weekend_set = {d for d in days_sel if datetime.date.fromisoformat(d).weekday() >= 5}
-        return render_template('saved_schedule.html', schedule=sched, weekend_set=weekend_set,
+        hk_h = holidays.HK(years=[year_sel])
+        public_holidays = {d.isoformat() for d in hk_h if d.year == year_sel and d.month == month_sel}
+        return render_template('saved_schedule.html', schedule=sched, weekend_set=weekend_set, public_holidays=public_holidays,
                             year=year_sel, month=month_sel)
 
     @app.route('/save_prior_last_two', methods=['POST'])
@@ -1040,6 +1045,90 @@ def create_app():
             mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
+    @app.route('/eligible_for_day')
+    @basic_auth.required
+    def eligible_for_day():
+        # Return per-level eligible candidate lists for the given date based on availability/no_call only
+        day = request.args.get('day')
+        try:
+            target = datetime.date.fromisoformat(day)
+        except Exception:
+            return jsonify({"error": "Invalid day"}), 400
+        surgeons = get_all_surgeons()
+        availability = get_availability_requests()
+        # parse levels
+        def has_level(s, lvl):
+            return lvl in parse_call_levels(s.get('call_levels',''))
+        result = {lvl: [] for lvl in ["1A","1B","2A","2B","3","4"]}
+        for lvl in result.keys():
+            for s in surgeons:
+                if not has_level(s, lvl):
+                    continue
+                sid = s['id']
+                # exclude if unavailable/no_call exactly on target day
+                bad = False
+                for req in availability.get(sid, []):
+                    raw = req.get('date')
+                    d = raw if isinstance(raw, datetime.date) else None
+                    if not d:
+                        try:
+                            d = datetime.date.fromisoformat(raw)
+                        except Exception:
+                            continue
+                    if d == target and req.get('request_type') in ('unavailable','no_call'):
+                        bad = True
+                        break
+                if not bad:
+                    result[lvl].append({"id": sid, "name": s['name']})
+        return jsonify(result)
+
+    @app.route('/eligible_for_month')
+    @basic_auth.required
+    def eligible_for_month():
+        try:
+            year = int(request.args.get('year'))
+            month = int(request.args.get('month'))
+        except Exception:
+            return jsonify({"error": "Invalid parameters"}), 400
+        import calendar as _cal
+        num_days = _cal.monthrange(year, month)[1]
+        days = [datetime.date(year, month, d) for d in range(1, num_days + 1)]
+        surgeons = get_all_surgeons()
+        availability = get_availability_requests()
+        # Precompute blocked days per surgeon (unavailable or no_call in this month)
+        blocked = {}
+        for s in surgeons:
+            sid = s['id']
+            bset = set()
+            for req in availability.get(sid, []):
+                raw = req.get('date')
+                d = raw if isinstance(raw, datetime.date) else None
+                if not d:
+                    try:
+                        d = datetime.date.fromisoformat(raw)
+                    except Exception:
+                        continue
+                if d.year == year and d.month == month and req.get('request_type') in ('unavailable', 'no_call'):
+                    bset.add(d)
+            blocked[sid] = bset
+        # Precompute level eligibility per surgeon
+        def has_level(s, lvl):
+            return lvl in parse_call_levels(s.get('call_levels',''))
+        levels = ["1A","1B","2A","2B","3","4"]
+        base_by_level = {lvl: [s for s in surgeons if has_level(s, lvl)] for lvl in levels}
+        # Build response map
+        res = {}
+        for d in days:
+            dkey = d.isoformat()
+            res[dkey] = {}
+            for lvl in levels:
+                elig = []
+                for s in base_by_level[lvl]:
+                    if d not in blocked.get(s['id'], set()):
+                        elig.append({"id": s['id'], "name": s['name']})
+                res[dkey][lvl] = elig
+        return jsonify(res)
+
     #############################################
     # Delete Surgeon Endpoint
     #############################################
@@ -1164,6 +1253,111 @@ def create_app():
             end_year=end_year,
             end_month=end_month
         )
+
+    #############################################
+    # Edit and Publish (Versioned schedules)
+    #############################################
+
+    @app.route('/edit_publish', methods=['GET'])
+    @basic_auth.required
+    def edit_publish():
+        year_sel, month_sel = get_year_month()
+        db = get_db()
+        versions = db.execute(text("SELECT version, published FROM saved_schedule_versions WHERE year=:y AND month=:m ORDER BY version"), {"y": year_sel, "m": month_sel}).mappings().all()
+        if not versions:
+            # Seed v1 from existing saved_schedule if present; otherwise create empty skeleton
+            row = db.execute(text("SELECT schedule_data FROM saved_schedule WHERE year=:y AND month=:m"), {"y": year_sel, "m": month_sel}).mappings().fetchone()
+            if row:
+                data = row['schedule_data'] if isinstance(row['schedule_data'], dict) else json.loads(row['schedule_data'])
+            else:
+                # build empty schedule for the month
+                import calendar as _cal
+                num_days = _cal.monthrange(year_sel, month_sel)[1]
+                levels = ["1A","1B","2A","2B","3","4"]
+                data = { datetime.date(year_sel, month_sel, d).isoformat(): {lvl: None for lvl in levels} for d in range(1, num_days+1) }
+            with db.begin():
+                db.execute(text("INSERT INTO saved_schedule_versions (year, month, version, schedule_data, published) VALUES (:y, :m, 1, CAST(:d AS JSONB), FALSE)"), {"y": year_sel, "m": month_sel, "d": json.dumps(data)})
+            versions = db.execute(text("SELECT version, published FROM saved_schedule_versions WHERE year=:y AND month=:m ORDER BY version"), {"y": year_sel, "m": month_sel}).mappings().all()
+        # latest published
+        pub_ver = next((v['version'] for v in versions if v['published']), None)
+        return render_template('edit_publish.html', year=year_sel, month=month_sel, versions=versions, published_version=pub_ver)
+
+    @app.route('/list_schedule_versions')
+    @basic_auth.required
+    def list_schedule_versions():
+        try:
+            year = int(request.args.get('year'))
+            month = int(request.args.get('month'))
+        except Exception:
+            return jsonify({"error": "Invalid parameters"}), 400
+        db = get_db()
+        rows = db.execute(text("SELECT version, published FROM saved_schedule_versions WHERE year=:y AND month=:m ORDER BY version"), {"y": year, "m": month}).mappings().all()
+        if not rows:
+            # Seed v1 like the page handler does
+            row = db.execute(text("SELECT schedule_data FROM saved_schedule WHERE year=:y AND month=:m"), {"y": year, "m": month}).mappings().fetchone()
+            if row:
+                data = row['schedule_data'] if isinstance(row['schedule_data'], dict) else json.loads(row['schedule_data'])
+            else:
+                import calendar as _cal
+                num_days = _cal.monthrange(year, month)[1]
+                levels = ["1A","1B","2A","2B","3","4"]
+                data = { datetime.date(year, month, d).isoformat(): {lvl: None for lvl in levels} for d in range(1, num_days+1) }
+            with db.begin():
+                db.execute(text("INSERT INTO saved_schedule_versions (year, month, version, schedule_data, published) VALUES (:y, :m, 1, CAST(:d AS JSONB), FALSE)"), {"y": year, "m": month, "d": json.dumps(data)})
+            rows = db.execute(text("SELECT version, published FROM saved_schedule_versions WHERE year=:y AND month=:m ORDER BY version"), {"y": year, "m": month}).mappings().all()
+        return jsonify({"versions": [{"version": r['version'], "published": bool(r['published'])} for r in rows]})
+
+    @app.route('/load_schedule_version')
+    @basic_auth.required
+    def load_schedule_version():
+        try:
+            year = int(request.args.get('year'))
+            month = int(request.args.get('month'))
+            version = int(request.args.get('version'))
+        except Exception:
+            return jsonify({"error": "Invalid parameters"}), 400
+        db = get_db()
+        row = db.execute(text("SELECT schedule_data FROM saved_schedule_versions WHERE year=:y AND month=:m AND version=:v"), {"y": year, "m": month, "v": version}).mappings().fetchone()
+        if not row:
+            return jsonify({"error": "Not found"}), 404
+        data = row['schedule_data'] if isinstance(row['schedule_data'], dict) else json.loads(row['schedule_data'])
+        return jsonify({"schedule": data})
+
+    @app.route('/save_schedule_version', methods=['POST'])
+    @basic_auth.required
+    def save_schedule_version():
+        data = request.get_json()
+        try:
+            year = int(data.get('year'))
+            month = int(data.get('month'))
+            schedule = data.get('schedule') or {}
+            publish = bool(data.get('publish', False))
+        except Exception:
+            return jsonify({"error": "Invalid payload"}), 400
+        db = get_db()
+        # Convert ID-based schedule to name-based before saving, for display consistency
+        surgeons = get_all_surgeons()
+        id_to_name = {s['id']: s['name'] for s in surgeons}
+        sched_by_name = {}
+        for day, assigns in schedule.items():
+            sched_by_name[day] = {}
+            for lvl, val in assigns.items():
+                if val in [None, ""]:
+                    sched_by_name[day][lvl] = None
+                else:
+                    try:
+                        sid = int(val)
+                        sched_by_name[day][lvl] = id_to_name.get(sid)
+                    except Exception:
+                        sched_by_name[day][lvl] = val
+        # compute next version
+        row = db.execute(text("SELECT COALESCE(MAX(version),0) AS maxv FROM saved_schedule_versions WHERE year=:y AND month=:m"), {"y": year, "m": month}).mappings().fetchone()
+        next_ver = (row['maxv'] or 0) + 1
+        with db.begin():
+            db.execute(text("INSERT INTO saved_schedule_versions (year, month, version, schedule_data, published) VALUES (:y, :m, :v, CAST(:d AS JSONB), :p)"), {"y": year, "m": month, "v": next_ver, "d": json.dumps(sched_by_name), "p": publish})
+            if publish:
+                db.execute(text("UPDATE saved_schedule_versions SET published = FALSE WHERE year=:y AND month=:m AND version <> :v"), {"y": year, "m": month, "v": next_ver})
+        return jsonify({"version": next_ver, "published": publish})
 
     #############################################
     # Start, poll, cancel endpoints

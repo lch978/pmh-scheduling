@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+{% block title %}Edit and Publish{% endblock %}
+{% block content %}
+<div class="schedule-container" style="max-width:1000px;margin:auto;background:#fff;padding:20px;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,0.1);">
+  <h1 style="text-align:center;margin-bottom:12px;">Edit and Publish</h1>
+  <div style="text-align:center;margin-bottom:12px;">
+    <label>Year:</label>
+    <select id="year">
+      {% for y in range(2020, 2031) %}
+        <option value="{{ y }}" {% if y==year %}selected{% endif %}>{{ y }}</option>
+      {% endfor %}
+    </select>
+    <label>Month:</label>
+    <select id="month">
+      {% for m in range(1,13) %}
+        <option value="{{ m }}" {% if m==month %}selected{% endif %}>{{ m }}</option>
+      {% endfor %}
+    </select>
+    <label>Version:</label>
+    <select id="version"></select>
+    <button id="btnLoad">Load Schedule</button>
+  </div>
+
+  <div id="errors" style="color:#b00020;text-align:center;margin:8px 0;"></div>
+  <div id="tableContainer"></div>
+
+  <div style="text-align:right;margin-top:12px;">
+    <button id="btnSave">Save New Version</button>
+    <button id="btnPublish" style="background:#2e7d32;color:#fff;border:none;border-radius:4px;padding:8px 12px;">Save and Publish</button>
+  </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  const btnLoad = document.getElementById('btnLoad');
+  const btnSave = document.getElementById('btnSave');
+  const btnPublish = document.getElementById('btnPublish');
+  const container = document.getElementById('tableContainer');
+  const errBox = document.getElementById('errors');
+
+  function currentYM()
+  {
+    return {
+      year: +document.getElementById('year').value,
+      month: +document.getElementById('month').value,
+      version: +(document.getElementById('version').value || 0)
+    };
+  }
+  async function refreshVersions(){
+    const y = +document.getElementById('year').value;
+    const m = +document.getElementById('month').value;
+    const res = await fetch(`/list_schedule_versions?year=${y}&month=${m}`);
+    const data = await res.json();
+    const verSel = document.getElementById('version');
+    verSel.innerHTML = '';
+    if (data.versions && data.versions.length) {
+      data.versions.forEach(v => {
+        const opt = document.createElement('option');
+        opt.value = v.version;
+        opt.textContent = `v${v.version}${v.published ? ' (published)' : ''}`;
+        verSel.appendChild(opt);
+      });
+    }
+  }
+
+  document.getElementById('year').addEventListener('change', refreshVersions);
+  document.getElementById('month').addEventListener('change', refreshVersions);
+  refreshVersions();
+
+  function candidateOptions(day, level, candidates) {
+    const opts = candidates.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
+    return `<select data-day="${day}" data-level="${level}">${opts}</select>`;
+  }
+
+  async function fetchCandidatesMonth(y, m){
+    const res = await fetch(`/eligible_for_month?year=${y}&month=${m}`);
+    return await res.json();
+  }
+
+  async function loadSchedule() {
+    errBox.textContent = '';
+    const { year, month, version } = currentYM();
+    try {
+      const res = await fetch(`/load_schedule_version?year=${year}&month=${month}&version=${version}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error||'Failed to load');
+      const sched = data.schedule || {};
+      const days = Object.keys(sched);
+      const elig = await fetchCandidatesMonth(year, month);
+      let html = '<table class="schedule-table" style="width:100%;border-collapse:collapse;">';
+      html += '<thead><tr><th style="border:1px solid #ccc;padding:6px;">Date</th>' + ['1A','1B','2A','2B','3','4'].map(l=>`<th style="border:1px solid #ccc;padding:6px;">${l}</th>`).join('') + '</tr></thead><tbody>';
+      for (const day of days) {
+        html += `<tr><td style="border:1px solid #ccc;padding:6px;">${day}</td>`;
+        for (const lvl of ['1A','1B','2A','2B','3','4']) {
+          const cands = (elig[day] && elig[day][lvl]) ? elig[day][lvl] : [];
+          const cur = sched[day] ? sched[day][lvl] : null;
+          const opts = cands.map(s => {
+            const isSel = String(cur) === String(s.id) || cur === s.name;
+            return `<option value="${s.id}" ${isSel ? 'selected' : ''}>${s.name}</option>`;
+          }).join('');
+          html += `<td style="border:1px solid #ccc;padding:6px;"><select data-day="${day}" data-level="${lvl}"><option value="">—</option>${opts}</select></td>`;
+        }
+        html += '</tr>';
+      }
+      html += '</tbody></table>';
+      container.innerHTML = html;
+    } catch (e) {
+      errBox.textContent = e.message || 'Failed to load schedule';
+    }
+  }
+
+  btnLoad.addEventListener('click', loadSchedule);
+
+  async function saveVersion(publish) {
+    errBox.textContent = '';
+    const { year, month } = currentYM();
+    // collect from table
+    const selects = container.querySelectorAll('select[data-day]');
+    const sched = {};
+    selects.forEach(sel => {
+      const day = sel.getAttribute('data-day');
+      const lvl = sel.getAttribute('data-level');
+      const val = sel.value;
+      if (!sched[day]) sched[day] = {};
+      // store by ID to be consistent server-side, but display uses names
+      sched[day][lvl] = val ? +val : null;
+    });
+    try {
+      const res = await fetch('/save_schedule_version', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ year, month, schedule: sched, publish })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error||'Failed to save');
+      alert(`Saved version v${data.version}${data.published?' and published':''}.`);
+      window.location.reload();
+    } catch (e) {
+      errBox.textContent = e.message || 'Failed to save';
+    }
+  }
+
+  btnSave.addEventListener('click', () => saveVersion(false));
+  btnPublish.addEventListener('click', () => saveVersion(true));
+});
+</script>
+{% endblock %}
+
