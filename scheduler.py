@@ -136,7 +136,7 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
     base_domains = {
         "1A": domain_1A,     
         "1B": domain_1B,
-        "2A": list(set(group1_ids + group2_ids + group3_ids)),
+        "2A": list(set(group1_ids + group2_ids)),  # exclude subgroup 3 from 2A
         "2B": group3_ids + group4_ids + [-1],
         "3":  domain_3,
         "4":  domain_4,
@@ -452,16 +452,9 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                     model.Add, X[(d, "2B")] == -1
                 ).OnlyEnforceIf(b2)
             for s in group3_ids:
-                b3 = model.NewBoolVar(f"lvl2_grp3_day{d}_is_s{s}")
-                add_named_constraint(f"Level2 group3: Day {d} 2A == {s}",
-                    model.Add, X[(d, "2A")] == s
-                ).OnlyEnforceIf(b3)
-                add_named_constraint(f"Level2 group3: Day {d} 2A != {s}",
-                    model.Add, X[(d, "2A")] != s
-                ).OnlyEnforceIf(b3.Not())
-                add_named_constraint(f"Level2 group3: Day {d} if 2A=={s} then 2B == -1",
-                    model.Add, X[(d, "2B")] == -1
-                ).OnlyEnforceIf(b3)
+                # Explicitly forbid subgroup 3 from 2A (hard ban)
+                add_named_constraint(f"Level2 group3 ban on 2A: Day {d} 2A != {s}",
+                    model.Add, X[(d, "2A")] != s)
             # 3) Never allow Group 4 in 2A.
             for s in group4_ids:
                 add_named_constraint(f"Level2 group4 ban: Day {d} 2A != {s}",
@@ -518,43 +511,79 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
             add_named_constraint(f"Min total calls for NLTH surgeon {s}",
                 model.Add, call_count_overall[s] >= min_calls_nlth_cfg)
 
-    # --- Fairness within Level-2 groups: balance 2A+2B among surgeons in groups 1, 2, 3 ---
-    l2_fairness_diffs = []
-    if enable_fairness_l2_groups and gamma_fairness_l2_groups > 0:
-        # Build per-surgeon 2A+2B counts
-        l2_counts = {s: model.NewIntVar(0, num_days * 2, f"l2_count_{s}") for s in all_surgeon_ids}
-        for s in all_surgeon_ids:
-            add_named_constraint(f"2A+2B count for surgeon {s}",
-                model.Add, l2_counts[s] == sum(indicators[(d, lvl, s)] for d in range(num_days) for lvl in ["2A","2B"]))
+    # --- Per-group fairness terms (replace overall fairness) ---
+    group_fairness_diffs = []
 
-        # For each L2 group 1/2/3 (exclude group 4 supervisors from fairness scope)
-        groups = {
-            1: [s for s in all_surgeon_ids if s in group1_ids],
-            2: [s for s in all_surgeon_ids if s in group2_ids],
-            3: [s for s in all_surgeon_ids if s in group3_ids],
-        }
-        for gid, members in groups.items():
-            members = [m for m in members if m not in nlth_ids]
-            if len(members) <= 1:
-                continue
-            gmax = model.NewIntVar(0, num_days * 2, f"l2_g{gid}_max")
-            gmin = model.NewIntVar(0, num_days * 2, f"l2_g{gid}_min")
-            add_named_constraint(f"L2 group {gid} max", model.AddMaxEquality, gmax, [l2_counts[m] for m in members])
-            add_named_constraint(f"L2 group {gid} min", model.AddMinEquality, gmin, [l2_counts[m] for m in members])
-            gdiff = model.NewIntVar(0, num_days * 2, f"l2_g{gid}_diff")
-            add_named_constraint(f"L2 group {gid} diff", model.Add, gdiff == gmax - gmin)
-            l2_fairness_diffs.append(gdiff)
-    
-    non_nlth_surgeons = [s for s in all_surgeon_ids if s not in nlth_ids]
-    max_all = model.NewIntVar(0, num_days * len(all_levels), 'max_all')
-    min_all = model.NewIntVar(0, num_days * len(all_levels), 'min_all')
-    add_named_constraint("Max overall calls among non-NLTH surgeons",
-        model.AddMaxEquality, max_all, [call_count_overall[s] for s in non_nlth_surgeons])
-    add_named_constraint("Min overall calls among non-NLTH surgeons",
-        model.AddMinEquality, min_all, [call_count_overall[s] for s in non_nlth_surgeons])
-    diff_all = model.NewIntVar(0, num_days * len(all_levels), 'diff_all')
-    add_named_constraint("Call difference overall",
-        model.Add, diff_all == max_all - min_all)
+    # Group 1: (1A + 1B)
+    group_level1_ids = [s["id"] for s in surgeons if set(parse_call_levels(s.get("call_levels",""))).intersection({"1A","1B"}) and s["id"] not in nlth_ids]
+    if len(group_level1_ids) > 1:
+        lvl1_counts = {s: model.NewIntVar(0, num_days * 2, f"lvl1_count_{s}") for s in group_level1_ids}
+        for s in group_level1_ids:
+            add_named_constraint(f"(1A+1B) count for surgeon {s}",
+                model.Add, lvl1_counts[s] == sum(indicators[(d, lvl, s)] for d in range(num_days) for lvl in ["1A","1B"]))
+        gmax = model.NewIntVar(0, num_days * 2, "lvl1_max")
+        gmin = model.NewIntVar(0, num_days * 2, "lvl1_min")
+        add_named_constraint("Max (1A+1B) count", model.AddMaxEquality, gmax, [lvl1_counts[s] for s in group_level1_ids])
+        add_named_constraint("Min (1A+1B) count", model.AddMinEquality, gmin, [lvl1_counts[s] for s in group_level1_ids])
+        diff = model.NewIntVar(0, num_days * 2, "lvl1_diff")
+        add_named_constraint("(1A+1B) diff", model.Add, diff == gmax - gmin)
+        add_named_constraint("Fairness cap: (1A+1B) range <= 1", model.Add, diff <= 1)
+        group_fairness_diffs.append(diff)
+
+    # Group 2: (2A + 2B) fairness within each L2 group 1, 2, and 3 separately
+    for gid, members in [(1, group1_ids), (2, group2_ids), (3, group3_ids)]:
+        grp_ids = [s for s in members if s not in nlth_ids]
+        if len(grp_ids) <= 1:
+            continue
+        lvl2_counts = {s: model.NewIntVar(0, num_days * 2, f"lvl2_g{gid}_count_{s}") for s in grp_ids}
+        for s in grp_ids:
+            add_named_constraint(f"(2A+2B) g{gid} count for surgeon {s}",
+                model.Add, lvl2_counts[s] == sum(indicators[(d, lvl, s)] for d in range(num_days) for lvl in ["2A","2B"]))
+        gmax = model.NewIntVar(0, num_days * 2, f"lvl2_g{gid}_max")
+        gmin = model.NewIntVar(0, num_days * 2, f"lvl2_g{gid}_min")
+        add_named_constraint(f"Max (2A+2B) g{gid}", model.AddMaxEquality, gmax, [lvl2_counts[s] for s in grp_ids])
+        add_named_constraint(f"Min (2A+2B) g{gid}", model.AddMinEquality, gmin, [lvl2_counts[s] for s in grp_ids])
+        diff = model.NewIntVar(0, num_days * 2, f"lvl2_g{gid}_diff")
+        add_named_constraint(f"(2A+2B) g{gid} diff", model.Add, diff == gmax - gmin)
+        add_named_constraint(f"Fairness cap: (2A+2B) g{gid} range <= 1", model.Add, diff <= 1)
+        group_fairness_diffs.append(diff)
+
+    # Group 3: include all surgeons with level 3, plus L2 subgroup 4; 
+    # counts include level 3 for everyone, and add 2B only for subgroup 4.
+    s3_union_ids = set([s["id"] for s in surgeons if "3" in parse_call_levels(s.get("call_levels",""))] + group4_ids)
+    s3_ids = [sid for sid in s3_union_ids if sid not in nlth_ids]
+    if len(s3_ids) > 1:
+        g3_counts = {s: model.NewIntVar(0, num_days * 2, f"lvl3_union_count_{s}") for s in s3_ids}
+        for s in s3_ids:
+            terms = [indicators[(d, "3", s)] for d in range(num_days)]
+            if s in group4_ids:
+                terms += [indicators[(d, "2B", s)] for d in range(num_days)]
+            add_named_constraint(f"(3 [+2B if grp4]) count for surgeon {s}",
+                model.Add, g3_counts[s] == sum(terms))
+        gmax = model.NewIntVar(0, num_days * 2, "lvl3_union_max")
+        gmin = model.NewIntVar(0, num_days * 2, "lvl3_union_min")
+        add_named_constraint("Max lvl3 union count", model.AddMaxEquality, gmax, [g3_counts[s] for s in s3_ids])
+        add_named_constraint("Min lvl3 union count", model.AddMinEquality, gmin, [g3_counts[s] for s in s3_ids])
+        diff = model.NewIntVar(0, num_days * 2, "lvl3_union_diff")
+        add_named_constraint("lvl3 union diff", model.Add, diff == gmax - gmin)
+        add_named_constraint("Fairness cap: lvl3 union range <= 1", model.Add, diff <= 1)
+        group_fairness_diffs.append(diff)
+
+    # Group 4: level 4 only
+    group4_level_ids = [s["id"] for s in surgeons if "4" in parse_call_levels(s.get("call_levels","")) and s["id"] not in nlth_ids]
+    if len(group4_level_ids) > 1:
+        lvl4_counts = {s: model.NewIntVar(0, num_days, f"lvl4_count_{s}") for s in group4_level_ids}
+        for s in group4_level_ids:
+            add_named_constraint(f"(4) count for surgeon {s}",
+                model.Add, lvl4_counts[s] == sum(indicators[(d, "4", s)] for d in range(num_days)))
+        gmax = model.NewIntVar(0, num_days, "lvl4_max")
+        gmin = model.NewIntVar(0, num_days, "lvl4_min")
+        add_named_constraint("Max (4) count", model.AddMaxEquality, gmax, [lvl4_counts[s] for s in group4_level_ids])
+        add_named_constraint("Min (4) count", model.AddMinEquality, gmin, [lvl4_counts[s] for s in group4_level_ids])
+        diff = model.NewIntVar(0, num_days, "lvl4_diff")
+        add_named_constraint("(4) diff", model.Add, diff == gmax - gmin)
+        add_named_constraint("Fairness cap: (4) range <= 1", model.Add, diff <= 1)
+        group_fairness_diffs.append(diff)
     
     # --- Then, create a per-surgeon, per-day “assigned” BoolVar ----
     assigned = {}
@@ -766,19 +795,10 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
     else:
         add_named_constraint("Penalty nocall zero", model.Add, penalty_nocall == 0)
     
-    # --- Additional Fairness: Penalize Deviation from Average Calls ---
+    # --- Total calls (used for unavailability credit scaling) ---
     N = len(all_surgeon_ids)
     T = model.NewIntVar(0, num_days * len(all_levels) * N, "T")
     add_named_constraint("Total calls T", model.Add, T == sum(call_count_overall[s] for s in all_surgeon_ids))
-    deviations = {}
-    for s in all_surgeon_ids:
-        diff = model.NewIntVar(-num_days * len(all_levels) * N, num_days * len(all_levels) * N, f"diff_{s}")
-        add_named_constraint(f"Deviation diff for surgeon {s}", model.Add, diff == call_count_overall[s] * N - T)
-        deviations[s] = model.NewIntVar(0, num_days * len(all_levels) * N, f"dev_{s}")
-        add_named_constraint(f"Deviation lower for surgeon {s}", model.Add, deviations[s] >= diff)
-        add_named_constraint(f"Deviation upper for surgeon {s}", model.Add, deviations[s] >= -diff)
-    deviation_sum = model.NewIntVar(0, num_days * len(all_levels) * N, "deviation_sum")
-    add_named_constraint("Deviation sum", model.Add, deviation_sum == sum(deviations[s] for s in all_surgeon_ids))
     
     # --- Unavailability credit (soft): for each 7 days unavailable, allow one fewer call without penalty ---
     # Count per-surgeon unavailable days in this month
@@ -841,14 +861,12 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                 empty_indicators.append(b)
     
     objective_terms = []
-    if enable_fairness_diff_all:
-        objective_terms.append(fairness_weight * diff_all)
+    # Remove overall fairness term; use per-group fairness instead
     if enable_nocall_penalty:
         objective_terms.append(gamma_no_call * penalty_nocall)
     if enable_unavail_prev_penalty:
         objective_terms.append(gamma_unavail_prev * penalty_unavail_prev)
-    if enable_deviation_sum:
-        objective_terms.append(gamma_balance * deviation_sum)
+    # Remove deviation-from-average fairness term
     if enable_unavail_credit and 'unavail_overflows' in locals() and unavail_overflows:
         objective_terms.append(gamma_unavail_credit * sum(unavail_overflows))
     if enable_spacing_penalty:
@@ -863,9 +881,9 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
     if enable_team_day_prefs and td_terms:
         objective_terms += [- coef * b for coef, b in td_terms]
 
-    # Add Level-2 group fairness terms
-    if enable_fairness_l2_groups and gamma_fairness_l2_groups > 0 and l2_fairness_diffs:
-        objective_terms.extend([gamma_fairness_l2_groups * diff for diff in l2_fairness_diffs])
+    # Add per-group fairness terms
+    if group_fairness_diffs:
+        objective_terms.extend([fairness_weight * diff for diff in group_fairness_diffs])
 
     # --- Soft penalty for using 2B (reduce supervisor overload when not required) ---
     # Apply whenever gamma_2b_usage > 0 (toggle is optional)
@@ -920,6 +938,7 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
         for name in constraint_mapping:
             print("  ", name)
         # Return diagnostics to the caller so the UI can display them
+        diagnostics.append("Fairness hard cap (range ≤ 1) across call-level groups could not be satisfied under current eligibility/availability. Consider relaxing the cap or enabling more candidates.")
         if not diagnostics:
             diagnostics.append("No feasible assignment exists under current constraints. Try relaxing constraints or adding eligible surgeons.")
         return {"errors": diagnostics}, None
