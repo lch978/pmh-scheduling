@@ -1,32 +1,79 @@
 {% extends "base.html" %}
 {% block title %}Edit and Publish{% endblock %}
+{% block head %}
+<style>
+  .controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: center;
+    align-items: center;
+    margin: 8px 0;
+  }
+  .btn {
+    padding: 10px 15px;
+    font-size: 14px;
+    margin: 4px;
+    border: none;
+    border-radius: 4px;
+    color: #fff;
+    cursor: pointer;
+    transition: background-color 0.2s ease-in-out;
+  }
+  .btn-primary { background-color: #0077ff; }
+  .btn-primary:hover { background-color: #0062cc; }
+  .btn-success { background-color: #2e7d32; }
+  .btn-success:hover { background-color: #256628; }
+  .btn-secondary { background-color: #6c757d; }
+  .btn-secondary:hover { background-color: #5a6268; }
+  .btn-green { background-color: #5cb85c; }
+  .btn-green:hover { background-color: #4cae4c; }
+</style>
+{% endblock %}
 {% block content %}
 <div class="schedule-container" style="max-width:1000px;margin:auto;background:#fff;padding:20px;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,0.1);">
   <h1 style="text-align:center;margin-bottom:12px;">Edit and Publish</h1>
-  <div style="text-align:center;margin-bottom:12px;">
-    <label>Year:</label>
-    <select id="year">
-      {% for y in range(2020, 2031) %}
-        <option value="{{ y }}" {% if y==year %}selected{% endif %}>{{ y }}</option>
-      {% endfor %}
-    </select>
-    <label>Month:</label>
-    <select id="month">
-      {% for m in range(1,13) %}
-        <option value="{{ m }}" {% if m==month %}selected{% endif %}>{{ m }}</option>
-      {% endfor %}
-    </select>
-    <label>Version:</label>
-    <select id="version"></select>
-    <button id="btnLoad">Load Schedule</button>
+  <div class="controls" style="margin-bottom:12px;">
+    <div>
+      <label>Year:</label>
+      <select id="year">
+        {% for y in range(2020, 2031) %}
+          <option value="{{ y }}" {% if y==year %}selected{% endif %}>{{ y }}</option>
+        {% endfor %}
+      </select>
+      <label>Month:</label>
+      <select id="month">
+        {% for m in range(1,13) %}
+          <option value="{{ m }}" {% if m==month %}selected{% endif %}>{{ m }}</option>
+        {% endfor %}
+      </select>
+      <label>Version:</label>
+      <select id="version"></select>
+    </div>
+    <button id="btnLoad" class="btn btn-secondary">Load Schedule</button>
   </div>
 
   <div id="errors" style="color:#b00020;text-align:center;margin:8px 0;"></div>
   <div id="tableContainer"></div>
 
-  <div style="text-align:right;margin-top:12px;">
-    <button id="btnSave">Save New Version</button>
-    <button id="btnPublish" style="background:#2e7d32;color:#fff;border:none;border-radius:4px;padding:8px 12px;">Save and Publish</button>
+  <div class="controls" style="margin-top:12px;">
+    <button id="btnSave" class="btn btn-secondary">Save New Version</button>
+    <button id="btnPublish" class="btn btn-success">Save and Publish</button>
+  </div>
+
+  <div class="controls" style="margin-top:16px;">
+    <form id="formExportSchedule" method="post" action="{{ url_for('export_schedule') }}" style="display:inline;">
+      <input type="hidden" name="year" id="exp_year_ep" value="{{ year }}">
+      <input type="hidden" name="month" id="exp_month_ep" value="{{ month }}">
+      <input type="hidden" name="schedule_json" id="export_schedule_json_ep" value="">
+      <button type="submit" id="btnExportEP" class="btn btn-primary">Download Schedule as Excel</button>
+    </form>
+
+    <form id="formExportRequests" method="post" action="{{ url_for('export_requests') }}" style="display:inline;">
+      <input type="hidden" name="year" id="req_year_ep" value="{{ year }}">
+      <input type="hidden" name="month" id="req_month_ep" value="{{ month }}">
+      <button type="submit" id="btnExportRequestsEP" class="btn btn-green">Export Requests Matrix (Excel)</button>
+    </form>
   </div>
 </div>
 
@@ -37,6 +84,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnPublish = document.getElementById('btnPublish');
   const container = document.getElementById('tableContainer');
   const errBox = document.getElementById('errors');
+  const formExportSchedule = document.getElementById('formExportSchedule');
+  const formExportRequests = document.getElementById('formExportRequests');
 
   function currentYM()
   {
@@ -142,6 +191,36 @@ document.addEventListener('DOMContentLoaded', () => {
 
   btnSave.addEventListener('click', () => saveVersion(false));
   btnPublish.addEventListener('click', () => saveVersion(true));
+
+  // Build a name-based schedule from the current table selections
+  function buildScheduleByName() {
+    const selects = container.querySelectorAll('select[data-day]');
+    const sched = {};
+    selects.forEach(sel => {
+      const day = sel.getAttribute('data-day');
+      const lvl = sel.getAttribute('data-level');
+      const val = sel.value;
+      const nameText = sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text : '';
+      if (!sched[day]) sched[day] = {};
+      sched[day][lvl] = val ? nameText : null;
+    });
+    return sched;
+  }
+
+  // Populate export forms just before submit
+  formExportSchedule.addEventListener('submit', (e) => {
+    const { year, month } = currentYM();
+    document.getElementById('exp_year_ep').value = year;
+    document.getElementById('exp_month_ep').value = month;
+    const sched = buildScheduleByName();
+    document.getElementById('export_schedule_json_ep').value = JSON.stringify(sched);
+  });
+
+  formExportRequests.addEventListener('submit', (e) => {
+    const { year, month } = currentYM();
+    document.getElementById('req_year_ep').value = year;
+    document.getElementById('req_month_ep').value = month;
+  });
 });
 </script>
 {% endblock %}
