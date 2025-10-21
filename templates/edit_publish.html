@@ -31,7 +31,7 @@
 </style>
 {% endblock %}
 {% block content %}
-<div class="schedule-container" style="max-width:1000px;margin:auto;background:#fff;padding:20px;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,0.1);">
+<div class="schedule-container" style="max-width:1200px;margin:auto;background:#fff;padding:20px;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,0.1);">
   <h1 style="text-align:center;margin-bottom:12px;">Edit and Publish</h1>
   <div class="controls" style="margin-bottom:12px;">
     <div>
@@ -47,33 +47,40 @@
           <option value="{{ m }}" {% if m==month %}selected{% endif %}>{{ m }}</option>
         {% endfor %}
       </select>
-      <label>Version:</label>
-      <select id="version"></select>
     </div>
-    <button id="btnLoad" class="btn btn-secondary">Load Schedule</button>
+    <button id="btnLoad" class="btn btn-secondary">Load Month</button>
   </div>
 
-  <div id="errors" style="color:#b00020;text-align:center;margin:8px 0;"></div>
-  <div id="tableContainer"></div>
+  <div style="display:flex; gap:16px; align-items:flex-start;">
+    <div id="versionsPanel" style="width:280px; border:1px solid #ddd; border-radius:8px; padding:10px; position:sticky; top:12px; height: calc(100vh - 200px); overflow:auto;">
+      <div style="font-weight:bold; margin-bottom:8px;">Versions</div>
+      <div id="versionsList" style="display:flex; flex-direction:column; gap:6px;"></div>
+    </div>
 
-  <div class="controls" style="margin-top:12px;">
-    <button id="btnSave" class="btn btn-secondary">Save New Version</button>
-    <button id="btnPublish" class="btn btn-success">Save and Publish</button>
-  </div>
+    <div style="flex:1;">
+      <div id="errors" style="color:#b00020;text-align:center;margin:8px 0;"></div>
+      <div id="tableContainer"></div>
 
-  <div class="controls" style="margin-top:16px;">
-    <form id="formExportSchedule" method="post" action="{{ url_for('export_schedule') }}" style="display:inline;">
-      <input type="hidden" name="year" id="exp_year_ep" value="{{ year }}">
-      <input type="hidden" name="month" id="exp_month_ep" value="{{ month }}">
-      <input type="hidden" name="schedule_json" id="export_schedule_json_ep" value="">
-      <button type="submit" id="btnExportEP" class="btn btn-primary">Download Schedule as Excel</button>
-    </form>
+      <div class="controls" style="margin-top:12px;">
+        <button id="btnSave" class="btn btn-secondary">Save New Version</button>
+        <button id="btnPublish" class="btn btn-success">Save and Publish</button>
+      </div>
 
-    <form id="formExportRequests" method="post" action="{{ url_for('export_requests') }}" style="display:inline;">
-      <input type="hidden" name="year" id="req_year_ep" value="{{ year }}">
-      <input type="hidden" name="month" id="req_month_ep" value="{{ month }}">
-      <button type="submit" id="btnExportRequestsEP" class="btn btn-green">Export Requests Matrix (Excel)</button>
-    </form>
+      <div class="controls" style="margin-top:16px;">
+        <form id="formExportSchedule" method="post" action="{{ url_for('export_schedule') }}" style="display:inline;">
+          <input type="hidden" name="year" id="exp_year_ep" value="{{ year }}">
+          <input type="hidden" name="month" id="exp_month_ep" value="{{ month }}">
+          <input type="hidden" name="schedule_json" id="export_schedule_json_ep" value="">
+          <button type="submit" id="btnExportEP" class="btn btn-primary">Download Schedule as Excel</button>
+        </form>
+
+        <form id="formExportRequests" method="post" action="{{ url_for('export_requests') }}" style="display:inline;">
+          <input type="hidden" name="year" id="req_year_ep" value="{{ year }}">
+          <input type="hidden" name="month" id="req_month_ep" value="{{ month }}">
+          <button type="submit" id="btnExportRequestsEP" class="btn btn-green">Export Requests Matrix (Excel)</button>
+        </form>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -86,35 +93,72 @@ document.addEventListener('DOMContentLoaded', () => {
   const errBox = document.getElementById('errors');
   const formExportSchedule = document.getElementById('formExportSchedule');
   const formExportRequests = document.getElementById('formExportRequests');
+  const versionsList = document.getElementById('versionsList');
 
-  function currentYM()
-  {
+  function currentYM() {
     return {
       year: +document.getElementById('year').value,
-      month: +document.getElementById('month').value,
-      version: +(document.getElementById('version').value || 0)
+      month: +document.getElementById('month').value
     };
   }
-  async function refreshVersions(){
+
+  document.getElementById('year').addEventListener('change', () => { renderVersions(); container.innerHTML=''; errBox.textContent=''; });
+  document.getElementById('month').addEventListener('change', () => { renderVersions(); container.innerHTML=''; errBox.textContent=''; });
+  renderVersions();
+
+  async function renderVersions() {
+    versionsList.innerHTML = '';
     const y = +document.getElementById('year').value;
     const m = +document.getElementById('month').value;
     const res = await fetch(`/list_schedule_versions?year=${y}&month=${m}`);
     const data = await res.json();
-    const verSel = document.getElementById('version');
-    verSel.innerHTML = '';
-    if (data.versions && data.versions.length) {
-      data.versions.forEach(v => {
-        const opt = document.createElement('option');
-        opt.value = v.version;
-        opt.textContent = `v${v.version}${v.published ? ' (published)' : ''}`;
-        verSel.appendChild(opt);
-      });
-    }
+    const versions = (data.versions||[]).sort((a,b)=>b.version-a.version);
+    versions.forEach(v => {
+      const row = document.createElement('div');
+      row.style.border = '1px solid #eee';
+      row.style.borderRadius = '6px';
+      row.style.padding = '8px';
+      row.innerHTML = `
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
+          <div>
+            <div style="font-weight:600;">v${v.version} ${v.published ? '<span style="font-size:12px;color:#2e7d32;">(published)</span>' : ''}</div>
+          </div>
+          <div>
+            <button data-v="${v.version}" class="btn btn-secondary js-load">Load</button>
+            ${v.published ? `<button data-v="${v.version}" class="btn btn-secondary js-unpublish">Unpublish</button>` : `<button data-v="${v.version}" class="btn btn-success js-publish">Publish</button>`}
+            <button data-v="${v.version}" class="btn btn-secondary js-delete" style="background:#a33;">Delete</button>
+          </div>
+        </div>`;
+      versionsList.appendChild(row);
+    });
+    // wire actions
+    versionsList.querySelectorAll('.js-load').forEach(b=>b.addEventListener('click', async (e)=>{
+      const v = +e.target.getAttribute('data-v');
+      await loadSchedule(v);
+    }));
+    versionsList.querySelectorAll('.js-publish').forEach(b=>b.addEventListener('click', async (e)=>{
+      const v = +e.target.getAttribute('data-v');
+      const y = +document.getElementById('year').value;
+      const m = +document.getElementById('month').value;
+      await fetch('/publish_schedule_version', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({year:y, month:m, version:v, published:true})});
+      await renderVersions();
+    }));
+    versionsList.querySelectorAll('.js-unpublish').forEach(b=>b.addEventListener('click', async (e)=>{
+      const v = +e.target.getAttribute('data-v');
+      const y = +document.getElementById('year').value;
+      const m = +document.getElementById('month').value;
+      await fetch('/publish_schedule_version', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({year:y, month:m, version:v, published:false})});
+      await renderVersions();
+    }));
+    versionsList.querySelectorAll('.js-delete').forEach(b=>b.addEventListener('click', async (e)=>{
+      const v = +e.target.getAttribute('data-v');
+      if (!confirm(`Delete version v${v}?`)) return;
+      const y = +document.getElementById('year').value;
+      const m = +document.getElementById('month').value;
+      await fetch('/delete_schedule_version', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({year:y, month:m, version:v})});
+      await renderVersions();
+    }));
   }
-
-  document.getElementById('year').addEventListener('change', refreshVersions);
-  document.getElementById('month').addEventListener('change', refreshVersions);
-  refreshVersions();
 
   function candidateOptions(day, level, candidates) {
     const opts = candidates.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
@@ -122,13 +166,39 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   async function fetchCandidatesMonth(y, m){
-    const res = await fetch(`/eligible_for_month?year=${y}&month=${m}`);
-    return await res.json();
+    const [eligRes, preRes] = await Promise.all([
+      fetch(`/eligible_for_month?year=${y}&month=${m}`),
+      fetch(`/preassignments_for_month?year=${y}&month=${m}`)
+    ]);
+    const elig = await eligRes.json();
+    const pre = await preRes.json();
+    // Merge preassigned surgeons into eligibility lists by level for each day
+    // Preassignments use names; eligible_for_month uses IDs+names
+    const ensureInList = (arr, id, name) => {
+      if (!id) return;
+      if (!Array.isArray(arr)) return;
+      if (!arr.some(x => String(x.id) === String(id))) {
+        arr.push({ id, name });
+      }
+    };
+    for (const day of Object.keys(pre)) {
+      const lvls = pre[day] || {};
+      const dayMap = elig[day] || {};
+      for (const lvl of Object.keys(lvls)) {
+        const entry = lvls[lvl];
+        if (entry && entry.id) {
+          dayMap[lvl] = dayMap[lvl] || [];
+          ensureInList(dayMap[lvl], entry.id, entry.name);
+        }
+      }
+      elig[day] = dayMap;
+    }
+    return elig;
   }
 
-  async function loadSchedule() {
+  async function loadSchedule(version) {
     errBox.textContent = '';
-    const { year, month, version } = currentYM();
+    const { year, month } = currentYM();
     try {
       const res = await fetch(`/load_schedule_version?year=${year}&month=${month}&version=${version}`);
       const data = await res.json();
@@ -158,7 +228,21 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  btnLoad.addEventListener('click', loadSchedule);
+  btnLoad.addEventListener('click', async () => {
+    // Reload sidebar; auto-load published if exists
+    await renderVersions();
+    // Try auto-load published
+    const y = +document.getElementById('year').value;
+    const m = +document.getElementById('month').value;
+    try {
+      const res = await fetch(`/list_schedule_versions?year=${y}&month=${m}`);
+      const data = await res.json();
+      const published = (data.versions||[]).find(v=>v.published);
+      if (published) {
+        await loadSchedule(published.version);
+      }
+    } catch {}
+  });
 
   async function saveVersion(publish) {
     errBox.textContent = '';
@@ -221,6 +305,9 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('req_year_ep').value = year;
     document.getElementById('req_month_ep').value = month;
   });
+
+  // initial render versions
+  renderVersions();
 });
 </script>
 {% endblock %}

@@ -117,17 +117,6 @@
       </tbody>
     </table>
     
-    <!-- Button Group -->
-    <div class="button-group">
-      <form method="get" action="{{ url_for('new_schedule') }}" style="display:inline;">
-        <button type="submit">Generate New Schedule</button>
-      </form>
-      <form method="get" action="{{ url_for('config_max_calls') }}" style="display:inline;">
-        <button type="submit">Configure Max Calls</button>
-      </form>
-      <form method="get" action="{{ url_for('list_surgeons') }}" style="display:inline;">
-        <button type="submit">Manage Surgeons</button>
-      </form>
-    </div>
+    
   </div>
 {% endblock %}

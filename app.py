@@ -271,6 +271,7 @@ def create_app():
                 "enable_team_day_prefs": cb("enable_team_day_prefs"),
                 "enable_2b_usage_penalty": cb("enable_2b_usage_penalty"),
                 "enable_fairness_l2_groups": cb("enable_fairness_l2_groups"),
+                "fairness_cap_uses_credit": cb("fairness_cap_uses_credit"),
             }
             update_global_config({
                 "no_call_hard": no_call_hard_val,
@@ -1307,6 +1308,45 @@ def create_app():
             rows = db.execute(text("SELECT version, published FROM saved_schedule_versions WHERE year=:y AND month=:m ORDER BY version"), {"y": year, "m": month}).mappings().all()
         return jsonify({"versions": [{"version": r['version'], "published": bool(r['published'])} for r in rows]})
 
+    @app.route('/publish_schedule_version', methods=['POST'])
+    @basic_auth.required
+    def publish_schedule_version():
+        data = request.get_json() or {}
+        try:
+            year = int(data.get('year'))
+            month = int(data.get('month'))
+            version = int(data.get('version'))
+            published = bool(data.get('published', True))
+        except Exception:
+            return jsonify({"error": "Invalid payload"}), 400
+        db = get_db()
+        with db.begin():
+            if published:
+                db.execute(text("UPDATE saved_schedule_versions SET published = FALSE WHERE year=:y AND month=:m"), {"y": year, "m": month})
+                res = db.execute(text("UPDATE saved_schedule_versions SET published = TRUE WHERE year=:y AND month=:m AND version=:v"), {"y": year, "m": month, "v": version})
+            else:
+                res = db.execute(text("UPDATE saved_schedule_versions SET published = FALSE WHERE year=:y AND month=:m AND version=:v"), {"y": year, "m": month, "v": version})
+        if res.rowcount == 0:
+            return jsonify({"error": "Version not found"}), 404
+        return jsonify({"ok": True})
+
+    @app.route('/delete_schedule_version', methods=['POST'])
+    @basic_auth.required
+    def delete_schedule_version():
+        data = request.get_json() or {}
+        try:
+            year = int(data.get('year'))
+            month = int(data.get('month'))
+            version = int(data.get('version'))
+        except Exception:
+            return jsonify({"error": "Invalid payload"}), 400
+        db = get_db()
+        with db.begin():
+            res = db.execute(text("DELETE FROM saved_schedule_versions WHERE year=:y AND month=:m AND version=:v"), {"y": year, "m": month, "v": version})
+        if res.rowcount == 0:
+            return jsonify({"error": "Version not found"}), 404
+        return jsonify({"ok": True})
+
     @app.route('/load_schedule_version')
     @basic_auth.required
     def load_schedule_version():
@@ -1322,6 +1362,41 @@ def create_app():
             return jsonify({"error": "Not found"}), 404
         data = row['schedule_data'] if isinstance(row['schedule_data'], dict) else json.loads(row['schedule_data'])
         return jsonify({"schedule": data})
+
+    @app.route('/preassignments_for_month')
+    @basic_auth.required
+    def preassignments_for_month():
+        try:
+            year = int(request.args.get('year'))
+            month = int(request.args.get('month'))
+        except Exception:
+            return jsonify({"error": "Invalid parameters"}), 400
+        db = get_db()
+        # Load raw preassignments JSON for the month
+        row = db.execute(text("SELECT preassignment_data FROM preassignments WHERE year = :year AND month = :month"), {"year": year, "month": month}).mappings().fetchone()
+        if not row or not row['preassignment_data']:
+            return jsonify({})
+        try:
+            raw = row['preassignment_data']
+            pre = raw if isinstance(raw, dict) else json.loads(raw)
+        except Exception:
+            return jsonify({})
+        # Map surgeon IDs to names for convenience in the UI
+        surgeons = get_all_surgeons()
+        id_to_name = {s['id']: s['name'] for s in surgeons}
+        enriched = {}
+        for day, lvls in (pre or {}).items():
+            if not isinstance(lvls, dict):
+                continue
+            enriched.setdefault(day, {})
+            for lvl, sid in lvls.items():
+                try:
+                    si = int(sid) if sid not in [None, ""] else None
+                except Exception:
+                    si = None
+                if si:
+                    enriched[day][lvl] = {"id": si, "name": id_to_name.get(si, str(si))}
+        return jsonify(enriched)
 
     @app.route('/save_schedule_version', methods=['POST'])
     @basic_auth.required

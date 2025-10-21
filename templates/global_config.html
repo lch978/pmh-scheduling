@@ -19,6 +19,7 @@
       <label style="display:block;margin:6px 0;"><input type="checkbox" name="enable_spacing_penalty" value="1" {% if config.enable_spacing_penalty != '0' %}checked{% endif %}> Spacing penalty</label>
       <label style="display:block;margin:6px 0;"><input type="checkbox" name="enable_availability_unavail_prev_penalty" value="1" {% if config.enable_availability_unavail_prev_penalty != '0' %}checked{% endif %}> Unavailable prev-day penalty</label>
       <label style="display:block;margin:6px 0;"><input type="checkbox" name="enable_availability_nocall_penalty" value="1" {% if config.enable_availability_nocall_penalty != '0' %}checked{% endif %}> No-call penalty (soft)</label>
+      <label style="display:block;margin:6px 0;"><input type="checkbox" name="fairness_cap_uses_credit" value="1" {% if config.get('fairness_cap_uses_credit','0') != '0' %}checked{% endif %}> Use unavailability credit in fairness hard cap</label>
       <hr>
       <label style="display:block;margin:6px 0;"><input type="checkbox" name="enable_force_1B_weekend" value="1" {% if config.enable_force_1B_weekend != '0' %}checked{% endif %}> Force 1B on weekends/holidays</label>
       <label style="display:block;margin:6px 0;"><input type="checkbox" name="enable_level2_supervision" value="1" {% if config.enable_level2_supervision != '0' %}checked{% endif %}> Level-2 supervision rules</label>

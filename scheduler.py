@@ -9,7 +9,7 @@ import sys
 # OR‑Tools Scheduling Function (with Availability Constraints)
 #############################################
 
-def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=None, preassignments=None, time_limit_seconds: int = 30, allow_empty: bool = False):
+def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=None, preassignments=None, time_limit_seconds: int = 30, allow_empty: bool = False, _diagnostic_run: bool = False, _relax_fairness_caps: bool = False):
 
     from helper import (
         get_max_calls_config,
@@ -37,6 +37,7 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
     # Load global configuration weights.
     global_config = get_global_config()
     fairness_weight = int(global_config.get("fairness_weight", "1000"))
+    cap_uses_credit = str(global_config.get("fairness_cap_uses_credit", "0")) == "1"
     gamma_no_call = int(global_config.get("gamma_no_call", "10"))
     gamma_unavail_prev = int(global_config.get("gamma_unavail_prev", "5"))
     gamma_1B = int(global_config.get("gamma_1B", "1"))
@@ -154,6 +155,45 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                     domains_by_day[d][lvl].append(-1)
 
     availability = get_availability_requests()
+
+    # --- Precompute preassigned pairs early (day-index, level) -> surgeon_id (int) ---
+    preassigned_early = {}
+    if preassignments:
+        day_to_idx = {day: i for i, day in enumerate(days)}
+        for day_str, lvls in preassignments.items():
+            if day_str not in day_to_idx:
+                continue
+            d_idx = day_to_idx[day_str]
+            if not isinstance(lvls, dict):
+                continue
+            for lvl, sid in lvls.items():
+                if sid in [None, ""]:
+                    continue
+                try:
+                    preassigned_early[(d_idx, lvl)] = int(sid)
+                except Exception:
+                    continue
+    # Compute per-surgeon unavailability credit in call units (integer number of calls to credit)
+    day_set_str = set(days)
+    credit_calls_per_surgeon = {s['id']: 0 for s in surgeons}
+    try:
+        for s_id, req_list in availability.items():
+            count_unavail = 0
+            for req in req_list:
+                if req.get('request_type') != 'unavailable':
+                    continue
+                raw = req.get('date')
+                if isinstance(raw, str):
+                    if raw in day_set_str:
+                        count_unavail += 1
+                elif isinstance(raw, datetime.date):
+                    if raw.isoformat() in day_set_str:
+                        count_unavail += 1
+            # Convert days to calls credit via floor division
+            credit_calls_per_surgeon[s_id] = (count_unavail // unavail_credit_days) if unavail_credit_days > 0 else 0
+    except Exception:
+        # Fallback: no credits if any parsing error
+        credit_calls_per_surgeon = {s['id']: 0 for s in surgeons}
     for d, day_str in enumerate(days):
         current_date = datetime.datetime.strptime(day_str, "%Y-%m-%d").date()
         for s_id, req_list in availability.items():
@@ -172,6 +212,9 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                         for lvl in all_levels:
                             # Only remove if the domain has more than one candidate
                             if s_id in domains_by_day[d][lvl]:
+                                # Do not remove if this (day,lvl) is preassigned to this surgeon
+                                if preassigned_early.get((d, lvl)) == s_id:
+                                    continue
                                 if len(domains_by_day[d][lvl]) > 1:
                                     domains_by_day[d][lvl].remove(s_id)
                                 else:
@@ -181,6 +224,9 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                         for lvl in all_levels:
                             # Only remove if the domain has more than one candidate
                             if s_id in domains_by_day[d][lvl]:
+                                # Protect preassigned (day,lvl)
+                                if preassigned_early.get((d, lvl)) == s_id:
+                                    continue
                                 if len(domains_by_day[d][lvl]) > 1:
                                     domains_by_day[d][lvl].remove(s_id)
                                 else:
@@ -234,6 +280,9 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                 for sid in banned_ids:
                     if sid not in dom:
                         continue
+                    # Do not remove if this (day,lvl) is preassigned to this surgeon
+                    if preassigned_early.get((d, lvl)) == sid:
+                        continue
                     if len(dom) > 1:
                         dom.remove(sid)
                         pruned[d][lvl].append(sid)
@@ -258,6 +307,11 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
         for lvl in all_levels:
             print(f"  {lvl:>3}: {domains_by_day[d][lvl]}")
     print("=== end of domain dump ===\n")
+
+    # Ensure all preassigned surgeons are present in domains before variable creation
+    for (d_idx, lvl), sid in preassigned_early.items():
+        if sid not in domains_by_day.get(d_idx, {}).get(lvl, []):
+            domains_by_day[d_idx][lvl].append(sid)
 
     # --- Preflight feasibility checks to produce helpful diagnostics ---
     # 1) Empty domain checks (post-pruning)
@@ -344,6 +398,7 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                     preassigned_fixed[(d, level)] = assigned_id
                     # Debug print: show available domain for that slot.
                     print(f"Day {day_str} level {level} domain: {domains_by_day[d][level]}, preassigned: {assigned_id}")
+                    # Force variable to assigned_id regardless of availability and spacing rules.
                     add_named_constraint(f"Preassignment: {day_str} level {level} fixed to surgeon {assigned_id}",
                         model.Add, X[(d, level)] == assigned_id)
 
@@ -521,13 +576,26 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
         for s in group_level1_ids:
             add_named_constraint(f"(1A+1B) count for surgeon {s}",
                 model.Add, lvl1_counts[s] == sum(indicators[(d, lvl, s)] for d in range(num_days) for lvl in ["1A","1B"]))
-        gmax = model.NewIntVar(0, num_days * 2, "lvl1_max")
-        gmin = model.NewIntVar(0, num_days * 2, "lvl1_min")
-        add_named_constraint("Max (1A+1B) count", model.AddMaxEquality, gmax, [lvl1_counts[s] for s in group_level1_ids])
-        add_named_constraint("Min (1A+1B) count", model.AddMinEquality, gmin, [lvl1_counts[s] for s in group_level1_ids])
+        # Optionally apply unavailability credit to fairness cap by using adjusted counts
+        if cap_uses_credit:
+            lvl1_adj = {s: model.NewIntVar(-num_days * 2, num_days * 2, f"lvl1_adj_{s}") for s in group_level1_ids}
+            for s in group_level1_ids:
+                add_named_constraint(f"(1A+1B) adjusted {s}", model.Add, lvl1_adj[s] == lvl1_counts[s] - credit_calls_per_surgeon.get(s, 0))
+            fairness_vars_lvl1 = [lvl1_adj[s] for s in group_level1_ids]
+        else:
+            fairness_vars_lvl1 = [lvl1_counts[s] for s in group_level1_ids]
+        gmax = model.NewIntVar(-num_days * 2, num_days * 2, "lvl1_max")
+        gmin = model.NewIntVar(-num_days * 2, num_days * 2, "lvl1_min")
+        add_named_constraint("Max (1A+1B) count", model.AddMaxEquality, gmax, fairness_vars_lvl1)
+        add_named_constraint("Min (1A+1B) count", model.AddMinEquality, gmin, fairness_vars_lvl1)
         diff = model.NewIntVar(0, num_days * 2, "lvl1_diff")
-        add_named_constraint("(1A+1B) diff", model.Add, diff == gmax - gmin)
-        add_named_constraint("Fairness cap: (1A+1B) range <= 1", model.Add, diff <= 1)
+        if cap_uses_credit:
+            # diff over adjusted counts
+            add_named_constraint("(1A+1B) diff", model.Add, diff == gmax - gmin)
+        else:
+            add_named_constraint("(1A+1B) diff", model.Add, diff == gmax - gmin)
+        if not _relax_fairness_caps:
+            add_named_constraint("Fairness cap: (1A+1B) range <= 1", model.Add, diff <= 1)
         group_fairness_diffs.append(diff)
 
     # Group 2: (2A + 2B) fairness within each L2 group 1, 2, and 3 separately
@@ -539,13 +607,21 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
         for s in grp_ids:
             add_named_constraint(f"(2A+2B) g{gid} count for surgeon {s}",
                 model.Add, lvl2_counts[s] == sum(indicators[(d, lvl, s)] for d in range(num_days) for lvl in ["2A","2B"]))
-        gmax = model.NewIntVar(0, num_days * 2, f"lvl2_g{gid}_max")
-        gmin = model.NewIntVar(0, num_days * 2, f"lvl2_g{gid}_min")
-        add_named_constraint(f"Max (2A+2B) g{gid}", model.AddMaxEquality, gmax, [lvl2_counts[s] for s in grp_ids])
-        add_named_constraint(f"Min (2A+2B) g{gid}", model.AddMinEquality, gmin, [lvl2_counts[s] for s in grp_ids])
+        if cap_uses_credit:
+            lvl2_adj = {s: model.NewIntVar(-num_days * 2, num_days * 2, f"lvl2_g{gid}_adj_{s}") for s in grp_ids}
+            for s in grp_ids:
+                add_named_constraint(f"(2A+2B) g{gid} adjusted {s}", model.Add, lvl2_adj[s] == lvl2_counts[s] - credit_calls_per_surgeon.get(s, 0))
+            fairness_vars_lvl2 = [lvl2_adj[s] for s in grp_ids]
+        else:
+            fairness_vars_lvl2 = [lvl2_counts[s] for s in grp_ids]
+        gmax = model.NewIntVar(-num_days * 2, num_days * 2, f"lvl2_g{gid}_max")
+        gmin = model.NewIntVar(-num_days * 2, num_days * 2, f"lvl2_g{gid}_min")
+        add_named_constraint(f"Max (2A+2B) g{gid}", model.AddMaxEquality, gmax, fairness_vars_lvl2)
+        add_named_constraint(f"Min (2A+2B) g{gid}", model.AddMinEquality, gmin, fairness_vars_lvl2)
         diff = model.NewIntVar(0, num_days * 2, f"lvl2_g{gid}_diff")
         add_named_constraint(f"(2A+2B) g{gid} diff", model.Add, diff == gmax - gmin)
-        add_named_constraint(f"Fairness cap: (2A+2B) g{gid} range <= 1", model.Add, diff <= 1)
+        if not _relax_fairness_caps:
+            add_named_constraint(f"Fairness cap: (2A+2B) g{gid} range <= 1", model.Add, diff <= 1)
         group_fairness_diffs.append(diff)
 
     # Group 3: include all surgeons with level 3, plus L2 subgroup 4; 
@@ -560,13 +636,21 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                 terms += [indicators[(d, "2B", s)] for d in range(num_days)]
             add_named_constraint(f"(3 [+2B if grp4]) count for surgeon {s}",
                 model.Add, g3_counts[s] == sum(terms))
-        gmax = model.NewIntVar(0, num_days * 2, "lvl3_union_max")
-        gmin = model.NewIntVar(0, num_days * 2, "lvl3_union_min")
-        add_named_constraint("Max lvl3 union count", model.AddMaxEquality, gmax, [g3_counts[s] for s in s3_ids])
-        add_named_constraint("Min lvl3 union count", model.AddMinEquality, gmin, [g3_counts[s] for s in s3_ids])
+        if cap_uses_credit:
+            g3_adj = {s: model.NewIntVar(-num_days * 2, num_days * 2, f"lvl3_union_adj_{s}") for s in s3_ids}
+            for s in s3_ids:
+                add_named_constraint(f"lvl3 union adjusted {s}", model.Add, g3_adj[s] == g3_counts[s] - credit_calls_per_surgeon.get(s, 0))
+            fairness_vars_g3 = [g3_adj[s] for s in s3_ids]
+        else:
+            fairness_vars_g3 = [g3_counts[s] for s in s3_ids]
+        gmax = model.NewIntVar(-num_days * 2, num_days * 2, "lvl3_union_max")
+        gmin = model.NewIntVar(-num_days * 2, num_days * 2, "lvl3_union_min")
+        add_named_constraint("Max lvl3 union count", model.AddMaxEquality, gmax, fairness_vars_g3)
+        add_named_constraint("Min lvl3 union count", model.AddMinEquality, gmin, fairness_vars_g3)
         diff = model.NewIntVar(0, num_days * 2, "lvl3_union_diff")
         add_named_constraint("lvl3 union diff", model.Add, diff == gmax - gmin)
-        add_named_constraint("Fairness cap: lvl3 union range <= 1", model.Add, diff <= 1)
+        if not _relax_fairness_caps:
+            add_named_constraint("Fairness cap: lvl3 union range <= 1", model.Add, diff <= 1)
         group_fairness_diffs.append(diff)
 
     # Group 4: level 4 only
@@ -576,13 +660,21 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
         for s in group4_level_ids:
             add_named_constraint(f"(4) count for surgeon {s}",
                 model.Add, lvl4_counts[s] == sum(indicators[(d, "4", s)] for d in range(num_days)))
-        gmax = model.NewIntVar(0, num_days, "lvl4_max")
-        gmin = model.NewIntVar(0, num_days, "lvl4_min")
-        add_named_constraint("Max (4) count", model.AddMaxEquality, gmax, [lvl4_counts[s] for s in group4_level_ids])
-        add_named_constraint("Min (4) count", model.AddMinEquality, gmin, [lvl4_counts[s] for s in group4_level_ids])
+        if cap_uses_credit:
+            lvl4_adj = {s: model.NewIntVar(-num_days, num_days, f"lvl4_adj_{s}") for s in group4_level_ids}
+            for s in group4_level_ids:
+                add_named_constraint(f"(4) adjusted {s}", model.Add, lvl4_adj[s] == lvl4_counts[s] - credit_calls_per_surgeon.get(s, 0))
+            fairness_vars_lvl4 = [lvl4_adj[s] for s in group4_level_ids]
+        else:
+            fairness_vars_lvl4 = [lvl4_counts[s] for s in group4_level_ids]
+        gmax = model.NewIntVar(-num_days, num_days, "lvl4_max")
+        gmin = model.NewIntVar(-num_days, num_days, "lvl4_min")
+        add_named_constraint("Max (4) count", model.AddMaxEquality, gmax, fairness_vars_lvl4)
+        add_named_constraint("Min (4) count", model.AddMinEquality, gmin, fairness_vars_lvl4)
         diff = model.NewIntVar(0, num_days, "lvl4_diff")
         add_named_constraint("(4) diff", model.Add, diff == gmax - gmin)
-        add_named_constraint("Fairness cap: (4) range <= 1", model.Add, diff <= 1)
+        if not _relax_fairness_caps:
+            add_named_constraint("Fairness cap: (4) range <= 1", model.Add, diff <= 1)
         group_fairness_diffs.append(diff)
     
     # --- Then, create a per-surgeon, per-day “assigned” BoolVar ----
@@ -938,7 +1030,92 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
         for name in constraint_mapping:
             print("  ", name)
         # Return diagnostics to the caller so the UI can display them
-        diagnostics.append("Fairness hard cap (range ≤ 1) across call-level groups could not be satisfied under current eligibility/availability. Consider relaxing the cap or enabling more candidates.")
+        diagnostics.append("Fairness hard cap (range ≤ 1) within call-level cohorts could not be satisfied under current eligibility/availability.")
+        # Try a diagnostic run with caps relaxed to identify violating cohorts and their ranges
+        if not _diagnostic_run:
+            try:
+                diag_sched, _ = solve_schedule_or_tools(
+                    days=days,
+                    surgeons=surgeons,
+                    prev_schedule=prev_schedule,
+                    public_holidays=public_holidays,
+                    preassignments=preassignments,
+                    time_limit_seconds=time_limit_seconds,
+                    allow_empty=allow_empty,
+                    _diagnostic_run=True,
+                    _relax_fairness_caps=True
+                )
+                # Only proceed if we got a schedule dict
+                if isinstance(diag_sched, dict) and 'errors' not in diag_sched:
+                    name_to_id = {s['name']: s['id'] for s in surgeons}
+                    def range_from_counts(cnts: dict):
+                        vals = list(cnts.values())
+                        return (max(vals) - min(vals)) if len(vals) > 1 else 0
+                    # Group 1 (1A+1B)
+                    group_level1_ids = [s["id"] for s in surgeons if set(parse_call_levels(s.get("call_levels",""))).intersection({"1A","1B"}) and s["id"] not in nlth_ids]
+                    g1_counts = {sid: 0 for sid in group_level1_ids}
+                    for assigns in diag_sched.values():
+                        for lvl in ["1A","1B"]:
+                            name = assigns.get(lvl)
+                            if name:
+                                sid = name_to_id.get(name)
+                                if sid in g1_counts:
+                                    g1_counts[sid] += 1
+                    g1_range = range_from_counts(g1_counts)
+                    # Group 2: per L2 subgroup 1/2/3
+                    g2_ranges = {}
+                    for gid, members in [(1, group1_ids), (2, group2_ids), (3, group3_ids)]:
+                        grp_ids = [sid for sid in members if sid not in nlth_ids]
+                        counts = {sid: 0 for sid in grp_ids}
+                        for assigns in diag_sched.values():
+                            for lvl in ["2A","2B"]:
+                                name = assigns.get(lvl)
+                                if name:
+                                    sid = name_to_id.get(name)
+                                    if sid in counts:
+                                        counts[sid] += 1
+                        g2_ranges[gid] = range_from_counts(counts)
+                    # Group 3: union 3 and subgroup 4 (count 3 for all; +2B if subgroup 4)
+                    s3_union_ids = set([s["id"] for s in surgeons if "3" in parse_call_levels(s.get("call_levels",""))] + group4_ids)
+                    s3_ids = [sid for sid in s3_union_ids if sid not in nlth_ids]
+                    g3_counts = {sid: 0 for sid in s3_ids}
+                    for assigns in diag_sched.values():
+                        n3 = assigns.get("3")
+                        if n3:
+                            sid3 = name_to_id.get(n3)
+                            if sid3 in g3_counts:
+                                g3_counts[sid3] += 1
+                        n2b = assigns.get("2B")
+                        if n2b:
+                            sid2b = name_to_id.get(n2b)
+                            if sid2b in g3_counts and sid2b in group4_ids:
+                                g3_counts[sid2b] += 1
+                    g3_range = range_from_counts(g3_counts)
+                    # Group 4: level 4 only
+                    group4_level_ids = [s["id"] for s in surgeons if "4" in parse_call_levels(s.get("call_levels","")) and s["id"] not in nlth_ids]
+                    g4_counts = {sid: 0 for sid in group4_level_ids}
+                    for assigns in diag_sched.values():
+                        n4 = assigns.get("4")
+                        if n4:
+                            sid4 = name_to_id.get(n4)
+                            if sid4 in g4_counts:
+                                g4_counts[sid4] += 1
+                    g4_range = range_from_counts(g4_counts)
+                    violating = []
+                    if g1_range > 1:
+                        violating.append(f"Group 1 (1A+1B) range={g1_range}")
+                    for gid in [1,2,3]:
+                        if g2_ranges.get(gid, 0) > 1:
+                            violating.append(f"Group 2 (L2 subgroup {gid} 2A+2B) range={g2_ranges[gid]}")
+                    if g3_range > 1:
+                        violating.append(f"Group 3 (3 [+2B if subgroup 4]) range={g3_range}")
+                    if g4_range > 1:
+                        violating.append(f"Group 4 (level 4) range={g4_range}")
+                    if violating:
+                        diagnostics.append("Cohorts exceeding range ≤ 1:")
+                        diagnostics.extend(violating)
+            except Exception:
+                pass
         if not diagnostics:
             diagnostics.append("No feasible assignment exists under current constraints. Try relaxing constraints or adding eligible surgeons.")
         return {"errors": diagnostics}, None
