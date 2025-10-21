@@ -272,6 +272,7 @@ def create_app():
                 "enable_2b_usage_penalty": cb("enable_2b_usage_penalty"),
                 "enable_fairness_l2_groups": cb("enable_fairness_l2_groups"),
                 "fairness_cap_uses_credit": cb("fairness_cap_uses_credit"),
+                "enable_fairness_hard_cap": cb("enable_fairness_hard_cap"),
             }
             update_global_config({
                 "no_call_hard": no_call_hard_val,
@@ -289,6 +290,7 @@ def create_app():
                 "min_calls_nlth": min_calls_nlth,
                 "gamma_2b_usage": request.form.get("gamma_2b_usage", "0"),
                 "gamma_fairness_l2_groups": request.form.get("gamma_fairness_l2_groups", "500"),
+                "fairness_hard_cap_range": request.form.get("fairness_hard_cap_range", "1"),
                 **flags
             })
             flash("Global configuration saved.", "success")

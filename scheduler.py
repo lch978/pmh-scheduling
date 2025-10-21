@@ -38,6 +38,11 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
     global_config = get_global_config()
     fairness_weight = int(global_config.get("fairness_weight", "1000"))
     cap_uses_credit = str(global_config.get("fairness_cap_uses_credit", "0")) == "1"
+    enable_fairness_hard_cap = str(global_config.get("enable_fairness_hard_cap", "1")) == "1"
+    try:
+        fairness_hard_cap_range = int(global_config.get("fairness_hard_cap_range", "1"))
+    except Exception:
+        fairness_hard_cap_range = 1
     gamma_no_call = int(global_config.get("gamma_no_call", "10"))
     gamma_unavail_prev = int(global_config.get("gamma_unavail_prev", "5"))
     gamma_1B = int(global_config.get("gamma_1B", "1"))
@@ -594,8 +599,8 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
             add_named_constraint("(1A+1B) diff", model.Add, diff == gmax - gmin)
         else:
             add_named_constraint("(1A+1B) diff", model.Add, diff == gmax - gmin)
-        if not _relax_fairness_caps:
-            add_named_constraint("Fairness cap: (1A+1B) range <= 1", model.Add, diff <= 1)
+        if enable_fairness_hard_cap and not _relax_fairness_caps:
+            add_named_constraint("Fairness cap: (1A+1B) range <= cap", model.Add, diff <= fairness_hard_cap_range)
         group_fairness_diffs.append(diff)
 
     # Group 2: (2A + 2B) fairness within each L2 group 1, 2, and 3 separately
@@ -620,8 +625,8 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
         add_named_constraint(f"Min (2A+2B) g{gid}", model.AddMinEquality, gmin, fairness_vars_lvl2)
         diff = model.NewIntVar(0, num_days * 2, f"lvl2_g{gid}_diff")
         add_named_constraint(f"(2A+2B) g{gid} diff", model.Add, diff == gmax - gmin)
-        if not _relax_fairness_caps:
-            add_named_constraint(f"Fairness cap: (2A+2B) g{gid} range <= 1", model.Add, diff <= 1)
+        if enable_fairness_hard_cap and not _relax_fairness_caps:
+            add_named_constraint(f"Fairness cap: (2A+2B) g{gid} range <= cap", model.Add, diff <= fairness_hard_cap_range)
         group_fairness_diffs.append(diff)
 
     # Group 3: include all surgeons with level 3, plus L2 subgroup 4; 
@@ -649,8 +654,8 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
         add_named_constraint("Min lvl3 union count", model.AddMinEquality, gmin, fairness_vars_g3)
         diff = model.NewIntVar(0, num_days * 2, "lvl3_union_diff")
         add_named_constraint("lvl3 union diff", model.Add, diff == gmax - gmin)
-        if not _relax_fairness_caps:
-            add_named_constraint("Fairness cap: lvl3 union range <= 1", model.Add, diff <= 1)
+        if enable_fairness_hard_cap and not _relax_fairness_caps:
+            add_named_constraint("Fairness cap: lvl3 union range <= cap", model.Add, diff <= fairness_hard_cap_range)
         group_fairness_diffs.append(diff)
 
     # Group 4: level 4 only
@@ -673,8 +678,8 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
         add_named_constraint("Min (4) count", model.AddMinEquality, gmin, fairness_vars_lvl4)
         diff = model.NewIntVar(0, num_days, "lvl4_diff")
         add_named_constraint("(4) diff", model.Add, diff == gmax - gmin)
-        if not _relax_fairness_caps:
-            add_named_constraint("Fairness cap: (4) range <= 1", model.Add, diff <= 1)
+        if enable_fairness_hard_cap and not _relax_fairness_caps:
+            add_named_constraint("Fairness cap: (4) range <= cap", model.Add, diff <= fairness_hard_cap_range)
         group_fairness_diffs.append(diff)
     
     # --- Then, create a per-surgeon, per-day “assigned” BoolVar ----
@@ -794,6 +799,33 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                 else:
                     add_named_constraint(f"Team presence none {t} d{d}", model.Add, p == 0)
 
+    # Build unique presence terms for weekend diversity objective (with carryover)
+    unique_presence_vars = []
+    if enable_weekend_team_diversity and weekend_days:
+        prev_levels_for_carry = ["1A","1B","2A","2B"]
+        for t in teams:
+            for d in weekend_days:
+                carry = model.NewBoolVar(f"carry_team_{t}_d{d}")
+                if d - 1 >= 0:
+                    ors_prev = [indicators[(d-1, lvl, sid)] for lvl in prev_levels_for_carry for sid in team_to_ids[t]]
+                    if ors_prev:
+                        add_named_constraint(f"Carry upper {t} d{d}", model.Add, carry <= sum(ors_prev))
+                        for v in ors_prev:
+                            add_named_constraint(f"Carry lower {t} d{d}", model.Add, v <= carry)
+                    else:
+                        add_named_constraint(f"Carry none {t} d{d}", model.Add, carry == 0)
+                else:
+                    add_named_constraint(f"Carry out of range {t} d{d}", model.Add, carry == 0)
+
+                # unique presence = OR(day presence, carry)
+                pu = model.NewBoolVar(f"presence_unique_team_{t}_d{d}")
+                pd = team_presence_vars.get((t,d)) if enable_weekend_team_diversity else None
+                if pd is not None:
+                    add_named_constraint(f"PU ge presence {t} d{d}", model.Add, pu >= pd)
+                    add_named_constraint(f"PU ge carry {t} d{d}", model.Add, pu >= carry)
+                    add_named_constraint(f"PU le sum {t} d{d}", model.Add, pu <= pd + carry)
+                    unique_presence_vars.append(pu)
+
     # Count weekend presence per team (per-day OR, not per-slot)
     team_weekend_counts = {}
     for t in teams:
@@ -804,17 +836,9 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
             add_named_constraint(f"Team weekend count zero {t}", model.Add, cnt == 0)
         team_weekend_counts[t] = cnt
 
-    # Balance: minimize max-min across teams
-    if enable_weekend_team_diversity and len(teams) >= 2:
-        tw_max = model.NewIntVar(0, len(weekend_days), "team_weekend_max")
-        tw_min = model.NewIntVar(0, len(weekend_days), "team_weekend_min")
-        add_named_constraint("Team weekend max", model.AddMaxEquality, tw_max, list(team_weekend_counts.values()))
-        add_named_constraint("Team weekend min", model.AddMinEquality, tw_min, list(team_weekend_counts.values()))
-        team_weekend_diff = model.NewIntVar(0, len(weekend_days), "team_weekend_diff")
-        add_named_constraint("Team weekend diff", model.Add, team_weekend_diff == tw_max - tw_min)
-    else:
-        team_weekend_diff = model.NewIntVar(0, 0, "team_weekend_diff")
-        add_named_constraint("Team weekend diff zero", model.Add, team_weekend_diff == 0)
+    # Deprecated balance metric retained as zero to keep variable references simple
+    team_weekend_diff = model.NewIntVar(0, 0, "team_weekend_diff")
+    add_named_constraint("Team weekend diff zero (replaced by unique teams objective)", model.Add, team_weekend_diff == 0)
     
     td_terms = []
     for d, day_str in enumerate(days):
@@ -967,8 +991,9 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
         objective_terms.append(gamma_weekend_balance * (sum(weekend_diff_terms) * 10))
     if enable_weekend_consecutive_pen and isinstance(consec_penalty, cp_model.IntVar):
         objective_terms.append(gamma_consec_weekend * consec_penalty)
-    if enable_weekend_team_diversity:
-        objective_terms.append(gamma_weekend_team_diversity * team_weekend_diff)
+    if enable_weekend_team_diversity and unique_presence_vars:
+        # maximize unique teams per weekend day by minimizing negative sum
+        objective_terms.append(- gamma_weekend_team_diversity * sum(unique_presence_vars))
     # team day preferences
     if enable_team_day_prefs and td_terms:
         objective_terms += [- coef * b for coef, b in td_terms]
@@ -1030,7 +1055,7 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
         for name in constraint_mapping:
             print("  ", name)
         # Return diagnostics to the caller so the UI can display them
-        diagnostics.append("Fairness hard cap (range ≤ 1) within call-level cohorts could not be satisfied under current eligibility/availability.")
+        diagnostics.append("Fairness hard cap within call-level cohorts could not be satisfied under current eligibility/availability.")
         # Try a diagnostic run with caps relaxed to identify violating cohorts and their ranges
         if not _diagnostic_run:
             try:
