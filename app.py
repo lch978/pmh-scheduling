@@ -273,6 +273,7 @@ def create_app():
                 "enable_fairness_l2_groups": cb("enable_fairness_l2_groups"),
                 "fairness_cap_uses_credit": cb("fairness_cap_uses_credit"),
                 "enable_fairness_hard_cap": cb("enable_fairness_hard_cap"),
+                "solver_debug": cb("solver_debug"),
             }
             update_global_config({
                 "no_call_hard": no_call_hard_val,
@@ -406,10 +407,12 @@ def create_app():
         # ── 1) Ensure year/month are always in the URL ──
         if not request.args.get('year') or not request.args.get('month'):
             today = datetime.date.today()
+            next_year = today.year + 1 if today.month == 12 else today.year
+            next_month = 1 if today.month == 12 else today.month + 1
             return redirect(url_for(
                 'new_schedule',
-                year=today.year,
-                month=today.month
+                year=next_year,
+                month=next_month
             ))
 
         # ── 2) Parse year & month ──
@@ -1132,6 +1135,15 @@ def create_app():
                 res[dkey][lvl] = elig
         return jsonify(res)
 
+    # Provide surgeon id/name lookup for UI reconciliation
+    @app.route('/surgeons_lookup')
+    @basic_auth.required
+    def surgeons_lookup():
+        surgeons = get_all_surgeons()
+        by_id = {int(s['id']): s['name'] for s in surgeons}
+        by_name = {s['name']: int(s['id']) for s in surgeons}
+        return jsonify({"by_id": by_id, "by_name": by_name})
+
     #############################################
     # Delete Surgeon Endpoint
     #############################################
@@ -1264,7 +1276,13 @@ def create_app():
     @app.route('/edit_publish', methods=['GET'])
     @basic_auth.required
     def edit_publish():
-        year_sel, month_sel = get_year_month()
+        # Default to next month when no params supplied
+        if not request.args.get('year') or not request.args.get('month'):
+            today = datetime.date.today()
+            year_sel = today.year + 1 if today.month == 12 else today.year
+            month_sel = 1 if today.month == 12 else today.month + 1
+        else:
+            year_sel, month_sel = get_year_month()
         db = get_db()
         versions = db.execute(text("SELECT version, published FROM saved_schedule_versions WHERE year=:y AND month=:m ORDER BY version"), {"y": year_sel, "m": month_sel}).mappings().all()
         if not versions:
@@ -1435,6 +1453,49 @@ def create_app():
             if publish:
                 db.execute(text("UPDATE saved_schedule_versions SET published = FALSE WHERE year=:y AND month=:m AND version <> :v"), {"y": year, "m": month, "v": next_ver})
         return jsonify({"version": next_ver, "published": publish})
+
+    @app.route('/save_schedule_version_form', methods=['POST'])
+    @basic_auth.required
+    def save_schedule_version_form():
+        try:
+            year = int(request.form.get('year'))
+            month = int(request.form.get('month'))
+            publish = request.form.get('publish') in ['1', 'true', 'True', 'on']
+            sched_json = request.form.get('schedule_json_ids') or '{}'
+            schedule = json.loads(sched_json)
+        except Exception:
+            flash('Invalid form submission for saving schedule version.', 'error')
+            return redirect(url_for('edit_publish', year=request.form.get('year'), month=request.form.get('month')))
+
+        db = get_db()
+        surgeons = get_all_surgeons()
+        id_to_name = {s['id']: s['name'] for s in surgeons}
+
+        # Convert ID-based schedule to name-based before saving
+        sched_by_name = {}
+        for day, assigns in (schedule or {}).items():
+            sched_by_name[day] = {}
+            for lvl, val in (assigns or {}).items():
+                if val in [None, ""]:
+                    sched_by_name[day][lvl] = None
+                else:
+                    try:
+                        sid = int(val)
+                        sched_by_name[day][lvl] = id_to_name.get(sid)
+                    except Exception:
+                        # If somehow a name slips through, keep it
+                        sched_by_name[day][lvl] = val
+
+        # compute next version and insert
+        row = db.execute(text("SELECT COALESCE(MAX(version),0) AS maxv FROM saved_schedule_versions WHERE year=:y AND month=:m"), {"y": year, "m": month}).mappings().fetchone()
+        next_ver = (row['maxv'] or 0) + 1
+        with db.begin():
+            db.execute(text("INSERT INTO saved_schedule_versions (year, month, version, schedule_data, published) VALUES (:y, :m, :v, CAST(:d AS JSONB), :p)"), {"y": year, "m": month, "v": next_ver, "d": json.dumps(sched_by_name), "p": publish})
+            if publish:
+                db.execute(text("UPDATE saved_schedule_versions SET published = FALSE WHERE year=:y AND month=:m AND version <> :v"), {"y": year, "m": month, "v": next_ver})
+
+        flash(f"Saved version v{next_ver}{' and published' if publish else ''}.", 'success')
+        return redirect(url_for('edit_publish', year=year, month=month))
 
     #############################################
     # Start, poll, cancel endpoints

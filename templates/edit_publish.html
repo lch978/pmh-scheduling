@@ -64,6 +64,13 @@
       <div class="controls" style="margin-top:12px;">
         <button id="btnSave" class="btn btn-secondary">Save New Version</button>
         <button id="btnPublish" class="btn btn-success">Save and Publish</button>
+        <form id="fallbackSaveForm" method="post" action="{{ url_for('save_schedule_version_form') }}" style="display:none;">
+          <input type="hidden" name="year" id="fb_year" value="{{ year }}">
+          <input type="hidden" name="month" id="fb_month" value="{{ month }}">
+          <input type="hidden" name="publish" id="fb_publish" value="0">
+          <!-- schedule_json_ids holds id-valued selections; backend converts to names -->
+          <input type="hidden" name="schedule_json_ids" id="fb_schedule_json_ids" value="{}">
+        </form>
       </div>
 
       <div class="controls" style="margin-top:16px;">
@@ -94,6 +101,20 @@ document.addEventListener('DOMContentLoaded', () => {
   const formExportSchedule = document.getElementById('formExportSchedule');
   const formExportRequests = document.getElementById('formExportRequests');
   const versionsList = document.getElementById('versionsList');
+
+  // Safari-safe JSON fetch helper: tolerant of bad/missing content-type
+  async function fetchJSONSafe(url, options) {
+    const res = await fetch(url, options);
+    if (!res.ok) throw new Error('Network error');
+    try {
+      const ct = res.headers && res.headers.get ? (res.headers.get('content-type') || '') : '';
+      if (ct.includes('application/json')) return await res.json();
+    } catch (e) {
+      // continue to text fallback
+    }
+    const txt = await res.text();
+    try { return JSON.parse(txt); } catch { throw new Error('Invalid server response'); }
+  }
 
   function currentYM() {
     return {
@@ -166,12 +187,10 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   async function fetchCandidatesMonth(y, m){
-    const [eligRes, preRes] = await Promise.all([
-      fetch(`/eligible_for_month?year=${y}&month=${m}`),
-      fetch(`/preassignments_for_month?year=${y}&month=${m}`)
+    const [elig, pre] = await Promise.all([
+      fetchJSONSafe(`/eligible_for_month?year=${y}&month=${m}`),
+      fetchJSONSafe(`/preassignments_for_month?year=${y}&month=${m}`)
     ]);
-    const elig = await eligRes.json();
-    const pre = await preRes.json();
     // Merge preassigned surgeons into eligibility lists by level for each day
     // Preassignments use names; eligible_for_month uses IDs+names
     const ensureInList = (arr, id, name) => {
@@ -200,19 +219,39 @@ document.addEventListener('DOMContentLoaded', () => {
     errBox.textContent = '';
     const { year, month } = currentYM();
     try {
-      const res = await fetch(`/load_schedule_version?year=${year}&month=${month}&version=${version}`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error||'Failed to load');
+      const data = await fetchJSONSafe(`/load_schedule_version?year=${year}&month=${month}&version=${version}`);
       const sched = data.schedule || {};
       const days = Object.keys(sched);
       const elig = await fetchCandidatesMonth(year, month);
+      // Fetch surgeon lookup for id/name reconciliation so current assignments appear in dropdowns even if filtered
+      let byName = {}, byId = {};
+      try {
+        const lkData = await fetchJSONSafe('/surgeons_lookup');
+        byName = lkData.by_name || {};
+        byId = lkData.by_id || {};
+      } catch {}
       let html = '<table class="schedule-table" style="width:100%;border-collapse:collapse;">';
       html += '<thead><tr><th style="border:1px solid #ccc;padding:6px;">Date</th>' + ['1A','1B','2A','2B','3','4'].map(l=>`<th style="border:1px solid #ccc;padding:6px;">${l}</th>`).join('') + '</tr></thead><tbody>';
       for (const day of days) {
         html += `<tr><td style="border:1px solid #ccc;padding:6px;">${day}</td>`;
         for (const lvl of ['1A','1B','2A','2B','3','4']) {
-          const cands = (elig[day] && elig[day][lvl]) ? elig[day][lvl] : [];
+          const cands = (elig[day] && elig[day][lvl]) ? [...elig[day][lvl]] : [];
           const cur = sched[day] ? sched[day][lvl] : null;
+          // Ensure current assignment appears in the dropdown even if not eligible
+          if (cur) {
+            let curId = null;
+            let curName = null;
+            if (!isNaN(Number(cur))) {
+              curId = Number(cur);
+              curName = byId[curId] || String(cur);
+            } else {
+              curName = String(cur);
+              curId = byName[curName] != null ? Number(byName[curName]) : null;
+            }
+            if (curId != null && !cands.some(s => String(s.id) === String(curId))) {
+              cands.push({ id: curId, name: curName });
+            }
+          }
           const opts = cands.map(s => {
             const isSel = String(cur) === String(s.id) || cur === s.name;
             return `<option value="${s.id}" ${isSel ? 'selected' : ''}>${s.name}</option>`;
@@ -258,18 +297,38 @@ document.addEventListener('DOMContentLoaded', () => {
       // store by ID to be consistent server-side, but display uses names
       sched[day][lvl] = val ? +val : null;
     });
+    // Prefer fetch; on Safari issues, fallback to form POST
     try {
-      const res = await fetch('/save_schedule_version', {
+      // Feature-detect AbortController, but do not rely on it
+      let controller, signal, timeout;
+      try {
+        controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        signal = controller ? controller.signal : undefined;
+        timeout = controller ? setTimeout(() => controller.abort(), 10000) : null;
+      } catch (_) { controller = null; signal = undefined; timeout = null; }
+
+      const data = await fetchJSONSafe('/save_schedule_version', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ year, month, schedule: sched, publish })
+        body: JSON.stringify({ year, month, schedule: sched, publish }),
+        signal
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error||'Failed to save');
+      if (timeout) clearTimeout(timeout);
       alert(`Saved version v${data.version}${data.published?' and published':''}.`);
       window.location.reload();
+      return;
     } catch (e) {
-      errBox.textContent = e.message || 'Failed to save';
+      // Fallback submit via hidden form (improves Safari/iPad reliability)
+      try {
+        document.getElementById('fb_year').value = year;
+        document.getElementById('fb_month').value = month;
+        document.getElementById('fb_publish').value = publish ? '1' : '0';
+        document.getElementById('fb_schedule_json_ids').value = JSON.stringify(sched);
+        document.getElementById('fallbackSaveForm').submit();
+        return;
+      } catch (err) {
+        errBox.textContent = 'Failed to save.';
+      }
     }
   }
 
@@ -306,8 +365,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('req_month_ep').value = month;
   });
 
-  // initial render versions
-  renderVersions();
+  // initial render handled earlier to avoid double-render race
 });
 </script>
 {% endblock %}
