@@ -9,7 +9,7 @@ import sys
 # OR‑Tools Scheduling Function (with Availability Constraints)
 #############################################
 
-def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=None, preassignments=None, time_limit_seconds: int = 30, allow_empty: bool = False, _diagnostic_run: bool = False, _relax_fairness_caps: bool = False):
+def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=None, preassignments=None, time_limit_seconds: int = 30, allow_empty: bool = False, _diagnostic_run: bool = False, _relax_fairness_caps: bool = False, horizon_prior_counts=None):
 
     from helper import (
         get_max_calls_config,
@@ -504,7 +504,8 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                     model.Add, X[(d, "1B")] != -1)
     
     # --- Level‑2 Grouping & Supervision Constraints (toggle) ---
-    if enable_level2_supervision:
+    # In allow-empty mode, skip Level-2 supervision hard rules to guarantee feasibility.
+    if enable_level2_supervision and not allow_empty:
         for d in range(num_days):
             # 1) If a group‑1 surgeon is on 2A, must have someone in 2B.
             for s in group1_ids:
@@ -538,9 +539,7 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
             for s in group4_ids:
                 add_named_constraint(f"Level2 group4 ban: Day {d} 2A != {s}",
                     model.Add, X[(d, "2A")] != s)
-            # 4) Never let the same person occupy both 2A and 2B.
-            add_named_constraint(f"Level2 uniqueness: Day {d} 2A != 2B",
-                model.Add, X[(d, "2A")] != X[(d, "2B")])
+            # Note: global same-day uniqueness across levels is enforced earlier when both are filled.
     
     # ── Prevent Group-4 surgeons from covering both 2B and 3 on the same day (toggle) ──
     if enable_group4_2B3_ban:
@@ -600,24 +599,34 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
         for s in group_level1_ids:
             add_named_constraint(f"(1A+1B) count for surgeon {s}",
                 model.Add, lvl1_counts[s] == sum(indicators[(d, lvl, s)] for d in range(num_days) for lvl in ["1A","1B"]))
-        # Optionally apply unavailability credit to fairness cap by using adjusted counts
-        if cap_uses_credit:
-            lvl1_adj = {s: model.NewIntVar(-num_days * 2, num_days * 2, f"lvl1_adj_{s}") for s in group_level1_ids}
-            for s in group_level1_ids:
-                add_named_constraint(f"(1A+1B) adjusted {s}", model.Add, lvl1_adj[s] == lvl1_counts[s] - credit_calls_per_surgeon.get(s, 0))
-            fairness_vars_lvl1 = [lvl1_adj[s] for s in group_level1_ids]
-        else:
-            fairness_vars_lvl1 = [lvl1_counts[s] for s in group_level1_ids]
+        fairness_vars_lvl1 = []
+        for s in group_level1_ids:
+            # prior horizon counts (1A+1B)
+            prior_1a = 0
+            prior_1b = 0
+            if isinstance(horizon_prior_counts, dict):
+                try:
+                    prior_levels = horizon_prior_counts.get("prior_levels", {})
+                    prior_1a = int(prior_levels.get("1A", {}).get(s, 0))
+                    prior_1b = int(prior_levels.get("1B", {}).get(s, 0))
+                except Exception:
+                    prior_1a = prior_1b = 0
+            prior_total = prior_1a + prior_1b
+            # current adjusted by credit if enabled
+            cur_var = lvl1_counts[s]
+            if cap_uses_credit:
+                cur_adj = model.NewIntVar(-num_days * 2, num_days * 2, f"lvl1_cur_adj_{s}")
+                add_named_constraint(f"(1A+1B) current adj {s}", model.Add, cur_adj == cur_var - credit_calls_per_surgeon.get(s, 0))
+                cur_var = cur_adj
+            total = model.NewIntVar(-num_days * 2, num_days * 4, f"lvl1_total_{s}")
+            add_named_constraint(f"(1A+1B) horizon total {s}", model.Add, total == cur_var + prior_total)
+            fairness_vars_lvl1.append(total)
         gmax = model.NewIntVar(-num_days * 2, num_days * 2, "lvl1_max")
         gmin = model.NewIntVar(-num_days * 2, num_days * 2, "lvl1_min")
         add_named_constraint("Max (1A+1B) count", model.AddMaxEquality, gmax, fairness_vars_lvl1)
         add_named_constraint("Min (1A+1B) count", model.AddMinEquality, gmin, fairness_vars_lvl1)
         diff = model.NewIntVar(0, num_days * 2, "lvl1_diff")
-        if cap_uses_credit:
-            # diff over adjusted counts
-            add_named_constraint("(1A+1B) diff", model.Add, diff == gmax - gmin)
-        else:
-            add_named_constraint("(1A+1B) diff", model.Add, diff == gmax - gmin)
+        add_named_constraint("(1A+1B) diff", model.Add, diff == gmax - gmin)
         if enable_fairness_hard_cap and not _relax_fairness_caps:
             add_named_constraint("Fairness cap: (1A+1B) range <= cap", model.Add, diff <= fairness_hard_cap_range)
         group_fairness_diffs.append(diff)
@@ -629,13 +638,26 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
         for s in l2_union_ids:
             add_named_constraint(f"(2A+2B) all-L2 count for surgeon {s}",
                 model.Add, lvl2_counts_all[s] == sum(indicators[(d, lvl, s)] for d in range(num_days) for lvl in ["2A","2B"]))
-        if cap_uses_credit:
-            lvl2_adj_all = {s: model.NewIntVar(-num_days * 2, num_days * 2, f"lvl2_all_adj_{s}") for s in l2_union_ids}
-            for s in l2_union_ids:
-                add_named_constraint(f"(2A+2B) all-L2 adjusted {s}", model.Add, lvl2_adj_all[s] == lvl2_counts_all[s] - credit_calls_per_surgeon.get(s, 0))
-            fairness_vars_lvl2_all = [lvl2_adj_all[s] for s in l2_union_ids]
-        else:
-            fairness_vars_lvl2_all = [lvl2_counts_all[s] for s in l2_union_ids]
+        fairness_vars_lvl2_all = []
+        for s in l2_union_ids:
+            prior_2a = 0
+            prior_2b = 0
+            if isinstance(horizon_prior_counts, dict):
+                try:
+                    prior_levels = horizon_prior_counts.get("prior_levels", {})
+                    prior_2a = int(prior_levels.get("2A", {}).get(s, 0))
+                    prior_2b = int(prior_levels.get("2B", {}).get(s, 0))
+                except Exception:
+                    prior_2a = prior_2b = 0
+            prior_total = prior_2a + prior_2b
+            cur_var = lvl2_counts_all[s]
+            if cap_uses_credit:
+                cur_adj = model.NewIntVar(-num_days * 2, num_days * 2, f"lvl2_all_cur_adj_{s}")
+                add_named_constraint(f"(2A+2B) all-L2 current adj {s}", model.Add, cur_adj == cur_var - credit_calls_per_surgeon.get(s, 0))
+                cur_var = cur_adj
+            total = model.NewIntVar(-num_days * 2, num_days * 4, f"lvl2_all_total_{s}")
+            add_named_constraint(f"(2A+2B) all-L2 horizon total {s}", model.Add, total == cur_var + prior_total)
+            fairness_vars_lvl2_all.append(total)
         gmax = model.NewIntVar(-num_days * 2, num_days * 2, "lvl2_all_max")
         gmin = model.NewIntVar(-num_days * 2, num_days * 2, "lvl2_all_min")
         add_named_constraint("Max (2A+2B) all-L2", model.AddMaxEquality, gmax, fairness_vars_lvl2_all)
@@ -658,13 +680,27 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                 terms += [indicators[(d, "2B", s)] for d in range(num_days)]
             add_named_constraint(f"(3 [+2B if grp4]) count for surgeon {s}",
                 model.Add, g3_counts[s] == sum(terms))
-        if cap_uses_credit:
-            g3_adj = {s: model.NewIntVar(-num_days * 2, num_days * 2, f"lvl3_union_adj_{s}") for s in s3_ids}
-            for s in s3_ids:
-                add_named_constraint(f"lvl3 union adjusted {s}", model.Add, g3_adj[s] == g3_counts[s] - credit_calls_per_surgeon.get(s, 0))
-            fairness_vars_g3 = [g3_adj[s] for s in s3_ids]
-        else:
-            fairness_vars_g3 = [g3_counts[s] for s in s3_ids]
+        fairness_vars_g3 = []
+        for s in s3_ids:
+            prior_3 = 0
+            prior_2b_if_grp4 = 0
+            if isinstance(horizon_prior_counts, dict):
+                try:
+                    prior_levels = horizon_prior_counts.get("prior_levels", {})
+                    prior_3 = int(prior_levels.get("3", {}).get(s, 0))
+                    if s in group4_ids:
+                        prior_2b_if_grp4 = int(prior_levels.get("2B", {}).get(s, 0))
+                except Exception:
+                    prior_3 = prior_2b_if_grp4 = 0
+            prior_total = prior_3 + prior_2b_if_grp4
+            cur_var = g3_counts[s]
+            if cap_uses_credit:
+                cur_adj = model.NewIntVar(-num_days * 2, num_days * 2, f"lvl3_union_cur_adj_{s}")
+                add_named_constraint(f"lvl3 union current adj {s}", model.Add, cur_adj == cur_var - credit_calls_per_surgeon.get(s, 0))
+                cur_var = cur_adj
+            total = model.NewIntVar(-num_days * 2, num_days * 4, f"lvl3_union_total_{s}")
+            add_named_constraint(f"lvl3 union horizon total {s}", model.Add, total == cur_var + prior_total)
+            fairness_vars_g3.append(total)
         gmax = model.NewIntVar(-num_days * 2, num_days * 2, "lvl3_union_max")
         gmin = model.NewIntVar(-num_days * 2, num_days * 2, "lvl3_union_min")
         add_named_constraint("Max lvl3 union count", model.AddMaxEquality, gmax, fairness_vars_g3)
@@ -682,13 +718,23 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
         for s in group4_level_ids:
             add_named_constraint(f"(4) count for surgeon {s}",
                 model.Add, lvl4_counts[s] == sum(indicators[(d, "4", s)] for d in range(num_days)))
-        if cap_uses_credit:
-            lvl4_adj = {s: model.NewIntVar(-num_days, num_days, f"lvl4_adj_{s}") for s in group4_level_ids}
-            for s in group4_level_ids:
-                add_named_constraint(f"(4) adjusted {s}", model.Add, lvl4_adj[s] == lvl4_counts[s] - credit_calls_per_surgeon.get(s, 0))
-            fairness_vars_lvl4 = [lvl4_adj[s] for s in group4_level_ids]
-        else:
-            fairness_vars_lvl4 = [lvl4_counts[s] for s in group4_level_ids]
+        fairness_vars_lvl4 = []
+        for s in group4_level_ids:
+            prior_4 = 0
+            if isinstance(horizon_prior_counts, dict):
+                try:
+                    prior_levels = horizon_prior_counts.get("prior_levels", {})
+                    prior_4 = int(prior_levels.get("4", {}).get(s, 0))
+                except Exception:
+                    prior_4 = 0
+            cur_var = lvl4_counts[s]
+            if cap_uses_credit:
+                cur_adj = model.NewIntVar(-num_days, num_days, f"lvl4_cur_adj_{s}")
+                add_named_constraint(f"(4) current adj {s}", model.Add, cur_adj == cur_var - credit_calls_per_surgeon.get(s, 0))
+                cur_var = cur_adj
+            total = model.NewIntVar(-num_days, num_days * 2, f"lvl4_total_{s}")
+            add_named_constraint(f"(4) horizon total {s}", model.Add, total == cur_var + prior_4)
+            fairness_vars_lvl4.append(total)
         gmax = model.NewIntVar(-num_days, num_days, "lvl4_max")
         gmin = model.NewIntVar(-num_days, num_days, "lvl4_min")
         add_named_constraint("Max (4) count", model.AddMaxEquality, gmax, fairness_vars_lvl4)
@@ -1046,7 +1092,6 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
         empty_penalty_weight = max([w for w in empty_weight_candidates if isinstance(w, int)], default=1) * 10000
         objective_terms.append(empty_penalty_weight * sum(empty_indicators))
     add_named_constraint("Objective", model.Minimize, sum(objective_terms) if objective_terms else 0)
-    add_named_constraint("Objective", model.Minimize, sum(objective_terms))
     
     # --- Solve the Model ---
     solver = cp_model.CpSolver()

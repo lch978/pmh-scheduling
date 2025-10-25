@@ -313,12 +313,14 @@ def get_team_day_prefs():
 def update_team_day_prefs(new_prefs):
     db = get_db()
     with db.begin():
-        stmt = text("""
-            UPDATE team_day_preferences
-               SET preference = :preference
-             WHERE team      = :team
-               AND weekday   = :weekday
-        """)
+        stmt = text(
+            """
+            INSERT INTO team_day_preferences (team, weekday, preference)
+            VALUES (:team, :weekday, :preference)
+            ON CONFLICT (team, weekday) DO UPDATE
+            SET preference = EXCLUDED.preference
+            """
+        )
         for team, by_wd in new_prefs.items():
             for wd, pref in by_wd.items():
                 db.execute(stmt, {
@@ -387,6 +389,140 @@ def get_availability_requests():
             'request_type': mapping['request_type']
         })
     return requests
+
+#############################################
+# Half-year horizon helpers
+#############################################
+
+def get_published_schedule_version(year: int, month: int):
+    db = get_db()
+    # Try published version first
+    row = db.execute(
+        text(
+            """
+            SELECT schedule_data
+            FROM saved_schedule_versions
+            WHERE year = :y AND month = :m AND published = TRUE
+            ORDER BY version DESC
+            LIMIT 1
+            """
+        ),
+        {"y": year, "m": month}
+    ).mappings().fetchone()
+    if not row:
+        row = db.execute(
+            text(
+                """
+                SELECT schedule_data
+                FROM saved_schedule_versions
+                WHERE year = :y AND month = :m
+                ORDER BY version DESC
+                LIMIT 1
+                """
+            ),
+            {"y": year, "m": month}
+        ).mappings().fetchone()
+    if not row or row.get("schedule_data") in (None, ""):
+        return None
+    data = row["schedule_data"]
+    try:
+        import json
+        return data if isinstance(data, dict) else json.loads(data)
+    except Exception:
+        return None
+
+def get_horizon_prior_levels_and_credit(year: int, month: int, surgeons: list):
+    """
+    Aggregate prior counts per level and unavailability credit over the same half‑year
+    up to but excluding (year, month).
+    Returns {
+      'prior_levels': { '1A':{sid:cnt}, '1B':{...}, '2A':{...}, '2B':{...}, '3':{...}, '4':{...} },
+      'prior_unavail_days': {sid: days},
+      'prior_unavail_credit_calls': {sid: credit_calls}
+    }
+    """
+    import calendar as _cal
+    import datetime as _dt
+
+    id_by_name = {s["name"]: s["id"] for s in surgeons}
+    all_ids = [s["id"] for s in surgeons]
+    levels = ["1A","1B","2A","2B","3","4"]
+    prior_levels = {L: {sid: 0 for sid in all_ids} for L in levels}
+
+    # Determine half-year window
+    if 1 <= month <= 6:
+        start_month, end_month_excl = 1, 7
+    else:
+        start_month, end_month_excl = 7, 13
+    months = [m for m in range(start_month, min(month, end_month_excl))]
+
+    # Accumulate prior level counts from published schedules
+    for m in months:
+        sched = get_published_schedule_version(year, m)
+        if not sched:
+            continue
+        for day_str, assigns in (sched or {}).items():
+            if not isinstance(assigns, dict):
+                continue
+            for L in levels:
+                name = assigns.get(L)
+                if not name:
+                    continue
+                sid = id_by_name.get(name)
+                if sid is None:
+                    continue
+                prior_levels[L][sid] = prior_levels[L].get(sid, 0) + 1
+
+    # Compute unavailability credit across same window (up to month-1)
+    # Range: [year-start_month-01, year-(month-1)-last_day]
+    if months:
+        start_date = _dt.date(year, months[0], 1)
+        last_m = months[-1]
+        last_day = _cal.monthrange(year, last_m)[1]
+        end_date = _dt.date(year, last_m, last_day)
+    else:
+        start_date = end_date = None
+
+    prior_unavail_days = {sid: 0 for sid in all_ids}
+    if start_date and end_date:
+        db = get_db()
+        rows = db.execute(
+            text(
+                """
+                SELECT surgeon_id, date
+                FROM surgeon_availability
+                WHERE request_type = 'unavailable'
+                  AND date >= :start_d AND date <= :end_d
+                """
+            ),
+            {"start_d": start_date, "end_d": end_date}
+        ).mappings().all()
+        for r in rows:
+            try:
+                sid = int(r["surgeon_id"]) if r.get("surgeon_id") is not None else None
+            except Exception:
+                continue
+            if sid in prior_unavail_days:
+                prior_unavail_days[sid] += 1
+
+    # Convert days to credit calls using global config
+    cfg = get_global_config()
+    try:
+        unavail_credit_days = int(cfg.get("unavail_credit_days", "7"))
+    except Exception:
+        unavail_credit_days = 7
+    if unavail_credit_days < 1:
+        unavail_credit_days = 7
+    prior_unavail_credit_calls = {
+        sid: (prior_unavail_days.get(sid, 0) // unavail_credit_days)
+        for sid in all_ids
+    }
+
+    return {
+        "prior_levels": prior_levels,
+        "prior_unavail_days": prior_unavail_days,
+        "prior_unavail_credit_calls": prior_unavail_credit_calls,
+    }
 
 #############################################
 # Prior last-two storage

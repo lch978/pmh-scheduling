@@ -43,6 +43,8 @@
       <hr>
       <label style="display:block;margin:6px 0;"><input type="checkbox" name="enable_2b_usage_penalty" value="1" {% if config.enable_2b_usage_penalty != '0' %}checked{% endif %}> Enable 2B usage penalty</label>
       <label style="display:block;margin:6px 0;"><input type="checkbox" name="enable_fairness_l2_groups" value="1" {% if config.enable_fairness_l2_groups != '0' %}checked{% endif %}> Balance 2A+2B calls within L2 groups (1/2/3)</label>
+      <hr>
+      <label style="display:block;margin:6px 0;"><input type="checkbox" name="enable_horizon_fairness" value="1" {% if config.get('enable_horizon_fairness','0') != '0' %}checked{% endif %}> Enable half‑year fairness balancing (Jan–Jun, Jul–Dec)</label>
     </div>
 
     <div style="border:1px solid #ddd;border-radius:8px;padding:12px;">

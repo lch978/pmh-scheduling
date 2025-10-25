@@ -250,6 +250,9 @@ def create_app():
             gamma_weekend_team_diversity = request.form.get("gamma_weekend_team_diversity", "50")
             max_weekend_calls = request.form.get("max_weekend_calls", "3")
             min_calls_nlth = request.form.get("min_calls_nlth", "3")
+            # unavailability credit controls
+            gamma_unavail_credit = request.form.get('gamma_unavail_credit', '50')
+            unavail_credit_days = request.form.get('unavail_credit_days', '7')
             # checkboxes
             def cb(name):
                 return '1' if request.form.get(name) == '1' else '0'
@@ -271,6 +274,7 @@ def create_app():
                 "enable_team_day_prefs": cb("enable_team_day_prefs"),
                 "enable_2b_usage_penalty": cb("enable_2b_usage_penalty"),
                 "enable_fairness_l2_groups": cb("enable_fairness_l2_groups"),
+                "enable_horizon_fairness": cb("enable_horizon_fairness"),
                 "fairness_cap_uses_credit": cb("fairness_cap_uses_credit"),
                 "enable_fairness_hard_cap": cb("enable_fairness_hard_cap"),
                 "solver_debug": cb("solver_debug"),
@@ -287,6 +291,8 @@ def create_app():
                 "gamma_weekend_balance": gamma_weekend_balance,
                 "gamma_consec_weekend": gamma_consec_weekend,
                 "gamma_weekend_team_diversity": gamma_weekend_team_diversity,
+                "gamma_unavail_credit": gamma_unavail_credit,
+                "unavail_credit_days": unavail_credit_days,
                 "max_weekend_calls": max_weekend_calls,
                 "min_calls_nlth": min_calls_nlth,
                 "gamma_2b_usage": request.form.get("gamma_2b_usage", "0"),
@@ -366,7 +372,7 @@ def create_app():
     #############################################
 
     # (About page removed as part of revert)
-    def run_solver_job(job_id, days, surgeons, prev_schedule, public_holidays, preassignments, time_limit_seconds: int = 30, allow_empty: bool = False):
+    def run_solver_job(job_id, days, surgeons, prev_schedule, public_holidays, preassignments, time_limit_seconds: int = 30, allow_empty: bool = False, horizon_prior=None):
         # we only import the solver function here—never re‑import `app` or `solve_jobs`
         from scheduler import solve_schedule_or_tools
 
@@ -383,7 +389,8 @@ def create_app():
             sched, cost = solve_schedule_or_tools(
                 days, surgeons, prev_schedule, public_holidays, preassignments,
                 time_limit_seconds=time_limit_seconds,
-                allow_empty=allow_empty
+                allow_empty=allow_empty,
+                horizon_prior_counts=horizon_prior
             )
 
             if sched is not None and not (isinstance(sched, dict) and 'errors' in sched):
@@ -693,6 +700,91 @@ def create_app():
             .reset_index(drop=True)
         )
 
+        # 3b) Compute Half-Year (H1/H2-to-date including current month) per-group totals
+        df_hy_stats = None
+        try:
+            from helper import get_published_schedule_version, get_all_surgeons, parse_call_levels, get_level2_group
+            surgeons_list = get_all_surgeons()
+            # Determine half-year months
+            if 1 <= month <= 6:
+                hy_months = list(range(1, month + 1))
+            else:
+                hy_months = list(range(7, month + 1))
+            # Aggregate level counts per surgeon name
+            levels = ["1A","1B","2A","2B","3","4"]
+            hy_level_counts = {}
+            def add_count(nm, lvl):
+                if not nm:
+                    return
+                rec = hy_level_counts.setdefault(nm, {L:0 for L in levels})
+                if lvl in rec:
+                    rec[lvl] += 1
+            # Prior months (published schedules)
+            for m in [m for m in hy_months if m != month]:
+                prev = get_published_schedule_version(year, m)
+                if not prev:
+                    continue
+                for _, assigns in (prev or {}).items():
+                    if not isinstance(assigns, dict):
+                        continue
+                    for L in levels:
+                        add_count(assigns.get(L), L)
+            # Current month (use in-memory schedule)
+            for _, assigns in schedule.items():
+                for L in levels:
+                    add_count(assigns.get(L), L)
+
+            # Group membership by surgeon name
+            def has_level(s, L):
+                return L in parse_call_levels(s.get('call_levels',''))
+            group1_names = sorted({s['name'] for s in surgeons_list if (has_level(s,'1A') or has_level(s,'1B'))})
+            l2_union_names = sorted({s['name'] for s in surgeons_list if get_level2_group(s) in (1,2,3)})
+            group4_level_names = sorted({s['name'] for s in surgeons_list if has_level(s,'4')})
+            group4_l2_names = sorted({s['name'] for s in surgeons_list if get_level2_group(s) == 4})
+            s3_union_names = sorted({s['name'] for s in surgeons_list if has_level(s,'3') or s['name'] in group4_l2_names})
+
+            # Per-surgeon half-year totals per fairness group
+            g1_total = {}
+            g2_total = {}
+            g3_total = {}
+            g4_total = {}
+            for nm, lc in hy_level_counts.items():
+                g1_total[nm] = int(lc.get('1A',0) + lc.get('1B',0))
+                g2_total[nm] = int(lc.get('2A',0) + lc.get('2B',0))
+                # group 3: level 3 for all; plus 2B only for grp4 surgeons
+                g3_extra_2b = lc.get('2B',0) if nm in group4_l2_names else 0
+                g3_total[nm] = int(lc.get('3',0) + g3_extra_2b)
+                g4_total[nm] = int(lc.get('4',0))
+
+            # Group averages (consider only cohort members)
+            def avg(vals):
+                vals = [v for v in vals if isinstance(v, (int, float))]
+                return (sum(vals)/len(vals)) if vals else 0.0
+            avg_g1 = avg([g1_total.get(nm,0) for nm in group1_names])
+            avg_g2 = avg([g2_total.get(nm,0) for nm in l2_union_names])
+            avg_g3 = avg([g3_total.get(nm,0) for nm in s3_union_names])
+            avg_g4 = avg([g4_total.get(nm,0) for nm in group4_level_names])
+
+            # Build one-column stats with grouped sections
+            rows = []
+            def add_group(section_name, members, getter, avg_val):
+                for nm in members:
+                    rows.append({"Surgeon": nm, "Group": section_name, "Number of past calls": int(getter(nm))})
+                # average row
+                rows.append({"Surgeon": f"Average ({section_name})", "Group": section_name, "Number of past calls": avg_val})
+                # spacer
+                rows.append({"Surgeon": "", "Group": "", "Number of past calls": ""})
+
+            add_group("G1 (1A+1B)", group1_names, lambda nm: g1_total.get(nm,0), avg_g1)
+            add_group("G2 (2A+2B)", l2_union_names, lambda nm: g2_total.get(nm,0), avg_g2)
+            add_group("G3 (3 + 2B if grp4)", s3_union_names, lambda nm: g3_total.get(nm,0), avg_g3)
+            add_group("G4 (4)", group4_level_names, lambda nm: g4_total.get(nm,0), avg_g4)
+
+            import pandas as _pd
+            df_hy_stats = _pd.DataFrame(rows)
+        except Exception:
+            df_hy_stats = None
+
         # 4) Build unavailability DataFrame
         availability = get_availability_requests()
         surgeons = get_all_surgeons()
@@ -754,6 +846,81 @@ def create_app():
                 for cell in ws[1]:
                     cell.font = header_font
                     cell.alignment = Alignment(horizontal='center')
+
+            # Append Half-Year grouped stats to the right of Monthly Stats table in one column
+            if df_hy_stats is not None:
+                ws_ms = writer.sheets['Monthly Stats']
+                start_row = 1
+                start_col = ws_ms.max_column + 2  # leave one blank column
+                # Header for the single column
+                ws_ms.cell(row=start_row, column=start_col, value='Number of past calls').font = header_font
+                ws_ms.cell(row=start_row, column=start_col).alignment = Alignment(horizontal='center')
+                # Group averages map for coloring
+                avg_map = {
+                    'G1 (1A+1B)': avg_g1 if 'avg_g1' in locals() else 0.0,
+                    'G2 (2A+2B)': avg_g2 if 'avg_g2' in locals() else 0.0,
+                    'G3 (3 + 2B if grp4)': avg_g3 if 'avg_g3' in locals() else 0.0,
+                    'G4 (4)': avg_g4 if 'avg_g4' in locals() else 0.0,
+                }
+                green_fill = PatternFill(start_color='C6EFCE', end_color='C6EFCE', fill_type='solid')
+                red_fill = PatternFill(start_color='FFC7CE', end_color='FFC7CE', fill_type='solid')
+                # Build row map by group to align with existing stats order
+                # Create a mapping surgeon -> number of past calls and surgeon -> group label
+                hy_map = {}
+                group_map = {}
+                for _, row in df_hy_stats.iterrows():
+                    nm = row.get('Surgeon')
+                    grp = row.get('Group')
+                    if nm and not (isinstance(nm, str) and nm.startswith('Average (')):
+                        hy_map[nm] = row.get('Number of past calls')
+                        group_map[nm] = grp
+                # Write aligned values next to existing table
+                # Find Surgeon column in Monthly Stats
+                hdr_to_col = {ws_ms.cell(row=1, column=c).value: c for c in range(1, ws_ms.max_column+1)}
+                col_surgeon = hdr_to_col.get('Surgeon')
+                r = 2
+                while r <= ws_ms.max_row:
+                    nm = ws_ms.cell(row=r, column=col_surgeon).value if col_surgeon else None
+                    val = hy_map.get(nm)
+                    ws_ms.cell(row=r, column=start_col, value=val if val is not None else "")
+                    # Color row based on group average
+                    try:
+                        grp = group_map.get(nm)
+                        if grp and isinstance(val, (int, float)):
+                            avg_val = avg_map.get(grp, 0.0)
+                            cell = ws_ms.cell(row=r, column=start_col)
+                            if val < avg_val:
+                                cell.fill = green_fill
+                            elif val > avg_val:
+                                cell.fill = red_fill
+                    except Exception:
+                        pass
+                    r += 1
+                # Insert an Average row after each group's last row
+                group_last_row = {}
+                for rr in range(2, ws_ms.max_row + 1):
+                    nm_rr = ws_ms.cell(row=rr, column=col_surgeon).value if col_surgeon else None
+                    grp_rr = group_map.get(nm_rr)
+                    if grp_rr:
+                        group_last_row[grp_rr] = rr
+                groups_in_order = [
+                    ('G1 (1A+1B)', avg_g1 if 'avg_g1' in locals() else 0.0),
+                    ('G2 (2A+2B)', avg_g2 if 'avg_g2' in locals() else 0.0),
+                    ('G3 (3 + 2B if grp4)', avg_g3 if 'avg_g3' in locals() else 0.0),
+                    ('G4 (4)', avg_g4 if 'avg_g4' in locals() else 0.0),
+                ]
+                to_insert = [(group_last_row[g], g, a) for g, a in groups_in_order if g in group_last_row]
+                to_insert.sort(key=lambda x: x[0], reverse=True)
+                for base_row, grp_label, avg_val in to_insert:
+                    insert_at = base_row + 1
+                    ws_ms.insert_rows(insert_at, amount=1)
+                    c_lbl = ws_ms.cell(row=insert_at, column=col_surgeon or 1, value=f"Average ({grp_label})")
+                    c_lbl.font = header_font
+                    ws_ms.cell(row=insert_at, column=start_col, value=avg_val)
+                # Autosize the appended single column width
+                col_cells = [ws_ms.cell(row=i, column=start_col) for i in range(1, ws_ms.max_row + 1)]
+                max_len = max(len(str(c.value)) if c.value is not None else 0 for c in col_cells)
+                ws_ms.column_dimensions[col_cells[0].column_letter].width = max_len + 2
 
         bio.seek(0)
         filename = f"call_list_{year}_{month:02d}.xlsx"
@@ -1557,6 +1724,13 @@ def create_app():
             preassignments = {}
 
         surgeons = get_all_surgeons()
+        # Half-year horizon prior counts and credits
+        cfg = get_global_config()
+        enable_horizon = str(cfg.get('enable_horizon_fairness','0')) == '1'
+        horizon_prior = None
+        if enable_horizon:
+            from helper import get_horizon_prior_levels_and_credit
+            horizon_prior = get_horizon_prior_levels_and_credit(year, month, surgeons)
         # Build prev_schedule only from prior_last_two for carry-over spacing
         if prior_last_two:
             # Build date strings for last two days of the previous month
@@ -1589,7 +1763,7 @@ def create_app():
         job_id = uuid.uuid4().hex
         threading.Thread(
             target=run_solver_job,
-            args=(job_id, days, surgeons, prev_schedule, public_holidays, preassignments, time_limit_seconds, allow_empty),
+            args=(job_id, days, surgeons, prev_schedule, public_holidays, preassignments, time_limit_seconds, allow_empty, horizon_prior),
             daemon=True
         ).start()
         
