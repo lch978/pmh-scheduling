@@ -1038,10 +1038,10 @@ def create_app():
                     flash("No dates selected.")
                     return redirect(url_for('availability', surgeon_id=surgeon_id))
                 
-                # Insert each date as a separate row.
-                with db.begin():
+                # Insert each date as a separate row using a fresh transaction to avoid conflicts.
+                with ENGINE.begin() as write_conn:
                     for d in dates_list:
-                        db.execute(
+                        write_conn.execute(
                             text(
                                 "INSERT INTO surgeon_availability "
                                 "(surgeon_id, request_type, date) "
@@ -1049,7 +1049,7 @@ def create_app():
                             ),
                             {"sid": surgeon_id, "rtype": request_type, "dt": d}
                         )
-                    flash("Request submitted successfully!")
+                flash("Request submitted successfully!")
             except Exception as e:
                 flash(f"Error processing the dates: {str(e)}")
             return redirect(url_for('availability', surgeon_id=surgeon_id))
@@ -1118,7 +1118,7 @@ def create_app():
         
         db = get_db()  # Get the DB connection from your helper
 
-        with db.begin():
+        with ENGINE.begin() as write_conn:
             success = True
             for req in delete_requests:
                 req_type = req.get('reqType')
@@ -1133,7 +1133,7 @@ def create_app():
                     AND request_type = :req_type 
                     AND date BETWEEN :start_date AND :end_date
                 """)
-                result = db.execute(query, {
+                result = write_conn.execute(query, {
                     "surgeon_id": surgeon_id,
                     "req_type": req_type,
                     "start_date": start_date,
