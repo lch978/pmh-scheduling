@@ -139,6 +139,7 @@
     <button type="button" id="btnStop" disabled style="padding:10px 15px; font-size:14px; margin: 5px;">Stop</button>
     
     <form method="post" action="{{ url_for('save_schedule') }}" style="display:inline;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="year" value="{{ year }}">
       <input type="hidden" name="month" value="{{ month }}">
       <input type="hidden" name="schedule_json" id="schedule_json">
@@ -146,6 +147,7 @@
     </form>
     
     <form method="post" action="{{ url_for('export_schedule') }}" style="display:inline;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="year" value="{{ year }}">
       <input type="hidden" name="month" value="{{ month }}">
       <input type="hidden" name="schedule_json" id="export_schedule_json" value="">
@@ -153,6 +155,7 @@
     </form>
     
     <form method="post" action="{{ url_for('export_requests') }}" style="display:inline;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="year" value="{{ year }}">
       <input type="hidden" name="month" value="{{ month }}">
       <button type="submit" id="btnExportRequests" style="padding:10px 15px; font-size:14px; margin:5px;">Export Requests Matrix (Excel)</button>
@@ -363,7 +366,10 @@
       }
       const res = await fetch('/start_solve', {
         method: 'POST',
-        headers: {'Content-Type':'application/json'},
+        headers: {
+          'Content-Type':'application/json',
+          'X-CSRFToken': document.querySelector('meta[name="csrf-token"]').getAttribute('content')
+        },
         body: JSON.stringify({ year: y, month: m, time_limit_seconds: Math.floor(timeLimitMs/1000), allow_empty: allowEmpty, prior_last_two: prior })
       });
       const { job_id } = await res.json();
@@ -380,7 +386,7 @@
 
     btnStop.addEventListener('click', () => {
       if (!currentJob) return;
-      fetch(`/cancel_solve/${currentJob}`, { method: 'POST' })
+      fetch(`/cancel_solve/${currentJob}`, { method: 'POST', headers: { 'X-CSRFToken': document.querySelector('meta[name="csrf-token"]').getAttribute('content') } })
         .finally(() => {
           hidePopupProgress();
           btnStop.disabled = true;
@@ -401,7 +407,10 @@
       try {
         const res = await fetch('/save_prior_last_two', {
           method: 'POST',
-          headers: {'Content-Type':'application/json'},
+          headers: {
+            'Content-Type':'application/json',
+            'X-CSRFToken': document.querySelector('meta[name="csrf-token"]').getAttribute('content')
+          },
           body: JSON.stringify({ year: y, month: m, m2, m1 })
         });
         if (res.ok) {

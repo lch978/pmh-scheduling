@@ -65,6 +65,7 @@
         <button id="btnSave" class="btn btn-secondary">Save New Version</button>
         <button id="btnPublish" class="btn btn-success">Save and Publish</button>
         <form id="fallbackSaveForm" method="post" action="{{ url_for('save_schedule_version_form') }}" style="display:none;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="year" id="fb_year" value="{{ year }}">
           <input type="hidden" name="month" id="fb_month" value="{{ month }}">
           <input type="hidden" name="publish" id="fb_publish" value="0">
@@ -75,6 +76,7 @@
 
       <div class="controls" style="margin-top:16px;">
         <form id="formExportSchedule" method="post" action="{{ url_for('export_schedule') }}" style="display:inline;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="year" id="exp_year_ep" value="{{ year }}">
           <input type="hidden" name="month" id="exp_month_ep" value="{{ month }}">
           <input type="hidden" name="schedule_json" id="export_schedule_json_ep" value="">
@@ -82,6 +84,7 @@
         </form>
 
         <form id="formExportRequests" method="post" action="{{ url_for('export_requests') }}" style="display:inline;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="year" id="req_year_ep" value="{{ year }}">
           <input type="hidden" name="month" id="req_month_ep" value="{{ month }}">
           <button type="submit" id="btnExportRequestsEP" class="btn btn-green">Export Requests Matrix (Excel)</button>
@@ -161,14 +164,14 @@ document.addEventListener('DOMContentLoaded', () => {
       const v = +e.target.getAttribute('data-v');
       const y = +document.getElementById('year').value;
       const m = +document.getElementById('month').value;
-      await fetch('/publish_schedule_version', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({year:y, month:m, version:v, published:true})});
+      await fetch('/publish_schedule_version', {method:'POST', headers:{'Content-Type':'application/json','X-CSRFToken': document.querySelector('meta[name="csrf-token"]').getAttribute('content')}, body: JSON.stringify({year:y, month:m, version:v, published:true})});
       await renderVersions();
     }));
     versionsList.querySelectorAll('.js-unpublish').forEach(b=>b.addEventListener('click', async (e)=>{
       const v = +e.target.getAttribute('data-v');
       const y = +document.getElementById('year').value;
       const m = +document.getElementById('month').value;
-      await fetch('/publish_schedule_version', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({year:y, month:m, version:v, published:false})});
+      await fetch('/publish_schedule_version', {method:'POST', headers:{'Content-Type':'application/json','X-CSRFToken': document.querySelector('meta[name="csrf-token"]').getAttribute('content')}, body: JSON.stringify({year:y, month:m, version:v, published:false})});
       await renderVersions();
     }));
     versionsList.querySelectorAll('.js-delete').forEach(b=>b.addEventListener('click', async (e)=>{
@@ -176,7 +179,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!confirm(`Delete version v${v}?`)) return;
       const y = +document.getElementById('year').value;
       const m = +document.getElementById('month').value;
-      await fetch('/delete_schedule_version', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({year:y, month:m, version:v})});
+      await fetch('/delete_schedule_version', {method:'POST', headers:{'Content-Type':'application/json','X-CSRFToken': document.querySelector('meta[name="csrf-token"]').getAttribute('content')}, body: JSON.stringify({year:y, month:m, version:v})});
       await renderVersions();
     }));
   }
@@ -309,7 +312,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const data = await fetchJSONSafe('/save_schedule_version', {
         method: 'POST',
-        headers: {'Content-Type': 'application/json'},
+        headers: {'Content-Type': 'application/json', 'X-CSRFToken': document.querySelector('meta[name="csrf-token"]').getAttribute('content')},
         body: JSON.stringify({ year, month, schedule: sched, publish }),
         signal
       });

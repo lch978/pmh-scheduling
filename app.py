@@ -15,11 +15,21 @@ from dotenv import load_dotenv
 from helper import *
 from helper import save_prior_last_two as save_prior_last_two_db
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, g, session, send_file, abort
+from flask_wtf import CSRFProtect
+from flask_wtf.csrf import generate_csrf
 
 def create_app():
     
     app = Flask(__name__)
     app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY","dev-key")
+    # Cookie and request safety
+    is_dev = os.environ.get("FLASK_ENV", "development") == "development"
+    app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+    app.config["SESSION_COOKIE_SECURE"] = not is_dev
+    app.config["SESSION_COOKIE_HTTPONLY"] = True
+    app.config["MAX_CONTENT_LENGTH"] = int(os.environ.get("MAX_CONTENT_LENGTH_BYTES", 2 * 1024 * 1024))
+    # CSRF
+    csrf = CSRFProtect(app)
 
     # login for stuff
     load_dotenv()
@@ -35,8 +45,28 @@ def create_app():
     @app.context_processor
     def utility_processor():
         return {
-            'parse_call_levels': parse_call_levels
+            'parse_call_levels': parse_call_levels,
+            'csrf_token': lambda: generate_csrf()
         }
+    
+    @app.after_request
+    def set_security_headers(resp):
+        # Core hardening headers
+        resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+        resp.headers.setdefault("X-Frame-Options", "DENY")
+        resp.headers.setdefault("Referrer-Policy", "same-origin")
+        # Relaxed but safer CSP to avoid breaking CDN and inline usage
+        csp = (
+            "default-src 'self'; "
+            "base-uri 'self'; object-src 'none'; frame-ancestors 'none'; "
+            "img-src 'self' data:; style-src 'self' 'unsafe-inline' https:; "
+            "script-src 'self' 'unsafe-inline' https:;"
+        )
+        resp.headers.setdefault("Content-Security-Policy", csp)
+        # HSTS only when HTTPS or explicitly enabled
+        if request.is_secure or os.environ.get("ENABLE_HSTS") == "1":
+            resp.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+        return resp
     
     @app.teardown_appcontext
     def teardown_db(exception):
@@ -62,6 +92,7 @@ def create_app():
         return render_template('surgeons_list.html', surgeons=surgeons)
     
     @app.route('/surgeons/sort_by_team_then_level')
+    @basic_auth.required
     def list_surgeons_by_team_then_level():
         surgeons = get_all_surgeons()
 
@@ -83,6 +114,7 @@ def create_app():
         return render_template('surgeons_list.html', surgeons=surgeons)
 
     @app.route('/surgeons/add', methods=['GET', 'POST'])
+    @basic_auth.required
     def add_surgeon():
         if request.method == 'POST':
             name = request.form['name']
@@ -103,6 +135,7 @@ def create_app():
         default_surgeon = {"name": "", "call_levels": "", "team": "", "id": 0}
         return render_template('surgeon_form.html', surgeon=default_surgeon, action="Add")
     @app.route('/surgeons/edit/<int:surgeon_id>', methods=['GET', 'POST'])
+    @basic_auth.required
     def edit_surgeon(surgeon_id):
         db = get_db()
         if request.method == 'POST':
@@ -135,6 +168,7 @@ def create_app():
         return render_template('surgeon_form.html', surgeon=surgeon, action="Edit")
 
     @app.route('/surgeons/update/<int:surgeon_id>', methods=['POST'])
+    @basic_auth.required
     def update_surgeon_inline(surgeon_id):
         name = request.form['name']
         call_levels_list = request.form.getlist('call_levels')
@@ -151,6 +185,7 @@ def create_app():
             return redirect(url_for('list_surgeons'))
 
     @app.route('/update_all_surgeons', methods=['POST'])
+    @basic_auth.required
     def update_all_surgeons():
         db = get_db()
         # Prepare a single text‐Clause for performance
@@ -253,6 +288,9 @@ def create_app():
             # unavailability credit controls
             gamma_unavail_credit = request.form.get('gamma_unavail_credit', '50')
             unavail_credit_days = request.form.get('unavail_credit_days', '7')
+            # deadline controls
+            unavail_deadline_day = request.form.get("unavail_deadline_day", "20")
+            unavail_deadline_time = request.form.get("unavail_deadline_time", "23:59")
             # checkboxes
             def cb(name):
                 return '1' if request.form.get(name) == '1' else '0'
@@ -278,6 +316,7 @@ def create_app():
                 "fairness_cap_uses_credit": cb("fairness_cap_uses_credit"),
                 "enable_fairness_hard_cap": cb("enable_fairness_hard_cap"),
                 "solver_debug": cb("solver_debug"),
+                "enable_unavail_deadline": cb("enable_unavail_deadline"),
             }
             update_global_config({
                 "no_call_hard": no_call_hard_val,
@@ -298,6 +337,8 @@ def create_app():
                 "gamma_2b_usage": request.form.get("gamma_2b_usage", "0"),
                 "gamma_fairness_l2_groups": request.form.get("gamma_fairness_l2_groups", "500"),
                 "fairness_hard_cap_range": request.form.get("fairness_hard_cap_range", "1"),
+                "unavail_deadline_day": unavail_deadline_day,
+                "unavail_deadline_time": unavail_deadline_time,
                 **flags
             })
             flash("Global configuration saved.", "success")
@@ -313,6 +354,7 @@ def create_app():
     #############################################
 
     @app.route('/constraint_weights', methods=['GET', 'POST'])
+    @basic_auth.required
     def constraint_weights():
         if request.method == 'POST':
             # Retrieve new weight values from the form.
@@ -455,20 +497,25 @@ def create_app():
         )
         result_pre = db.execute(stmt_pre, {"year": year_sel, "month": month_sel})
         row_pre = result_pre.mappings().fetchone()
-        print("Fetched preassignment row:", row_pre)  # Debug: show raw DB row
+        # Avoid leaking DB details in logs in production
+        if app.debug:
+            print("Fetched preassignment row:", row_pre)
 
         if row_pre and row_pre['preassignment_data'] is not None and row_pre['preassignment_data'] != "":
             raw_pre = row_pre['preassignment_data']
-            print("Raw preassignment data (raw_pre):", raw_pre)  # Debug: show raw data
+            if app.debug:
+                print("Raw preassignment data (raw_pre):", raw_pre)
             try:
                 preassignments = raw_pre if isinstance(raw_pre, dict) else json.loads(raw_pre)
             except Exception as e:
-                print("Error decoding preassignments:", e)
+                if app.debug:
+                    print("Error decoding preassignments:", e)
                 preassignments = {}
         else:
             preassignments = {}
 
-        print("Loaded preassignments:", preassignments)
+        if app.debug:
+            print("Loaded preassignments:", preassignments)
 
         # ── 6) Do we already have one in the DB? ──
         row = db.execute(
@@ -550,6 +597,7 @@ def create_app():
         )
 
     @app.route('/save_schedule', methods=['POST'])
+    @basic_auth.required
     def save_schedule():
         # 1) Figure out which month/year we’re saving
         year_str = request.form.get('year') or request.args.get('year')
@@ -633,6 +681,7 @@ def create_app():
                             year=year_sel, month=month_sel)
 
     @app.route('/save_prior_last_two', methods=['POST'])
+    @basic_auth.required
     def save_prior_last_two():
         data = request.get_json()
         try:
@@ -652,6 +701,7 @@ def create_app():
         return jsonify({'ok': True})
 
     @app.route('/export_schedule', methods=['POST'])
+    @basic_auth.required
     def export_schedule():
         year = int(request.form['year'])
         month = int(request.form['month'])
@@ -952,11 +1002,29 @@ def create_app():
     @app.route('/availability', methods=['GET', 'POST'])
     def availability():
         db = get_db()
+        now = datetime.datetime.now()
+        deadline_dt, deadline_passed = is_unavail_deadline_passed(now=now)
+        next_month_year = now.year + (1 if now.month == 12 else 0)
+        next_month_month = 1 if now.month == 12 else now.month + 1
+        next_month_label = datetime.date(next_month_year, next_month_month, 1).strftime("%B %Y")
+
+        def is_admin_request():
+            auth = request.authorization
+            expected_user = app.config.get('BASIC_AUTH_USERNAME')
+            expected_pass = app.config.get('BASIC_AUTH_PASSWORD')
+            return bool(auth and expected_user and expected_pass and auth.username == expected_user and auth.password == expected_pass)
+
+        is_admin = is_admin_request()
+        block_requests = bool(deadline_dt and deadline_passed and not is_admin)
         if request.method == 'POST':
             # Process submission of selected dates.
             surgeon_id = request.form.get('surgeon_id')
             request_type = request.form.get('request_type')  # "unavailable" or "no_call"
             selected_dates_json = request.form.get('selected_dates')
+
+            if block_requests:
+                flash("New unavailability requests for next month are closed. Please contact an administrator.", "warning")
+                return redirect(url_for('availability', surgeon_id=surgeon_id))
             
             # Validate that all required data is provided.
             if not surgeon_id or not request_type or not selected_dates_json:
@@ -1022,7 +1090,12 @@ def create_app():
                     events[rtype] = group_dates(date_list)
         surgeons = get_all_surgeons()
         return render_template('availability.html', events=events, surgeons=surgeons,
-                               selected_surgeon_id=surgeon_id, surgeon_name=surgeon_name)
+                               selected_surgeon_id=surgeon_id, surgeon_name=surgeon_name,
+                               deadline_blocked=block_requests,
+                               deadline_dt=deadline_dt,
+                               deadline_passed=bool(deadline_dt and deadline_passed),
+                               deadline_next_month_label=next_month_label,
+                               is_admin=is_admin)
 
     #############################################
     # Delete Availability Request Endpoint
@@ -1081,6 +1154,7 @@ def create_app():
     #############################################
 
     @app.route('/export_requests', methods=['POST'])
+    @basic_auth.required
     def export_requests():
         try:
             year = int(request.form.get("year"))
@@ -1140,8 +1214,12 @@ def create_app():
         )
         req_rows = db.execute(stmt, {"start_date": start_date.isoformat(), "next_date": next_date.isoformat()}).mappings().all()
 
-        # Build a matrix of marks: any request (unavailable/no_call) -> X
-        marks = {(r['surgeon_id'], r['date'].day): 'X' for r in req_rows if r['request_type'] in ('unavailable', 'no_call')}
+        # Build a matrix of marks with request types for coloring/labels
+        marks = {}
+        for r in req_rows:
+            rtype = r['request_type']
+            if rtype in ('unavailable', 'no_call', 'study_leave'):
+                marks[(r['surgeon_id'], r['date'].day)] = rtype
 
         # Build workbook
         from openpyxl import Workbook
@@ -1164,6 +1242,8 @@ def create_app():
 
         # Styles
         dark_red = PatternFill(start_color="8B0000", end_color="8B0000", fill_type="solid")
+        orange_fill = PatternFill(start_color="FFD580", end_color="FFD580", fill_type="solid")
+        green_fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
         weekend_fill = PatternFill(start_color="D3D3D3", end_color="D3D3D3", fill_type="solid")
         holiday_fill = PatternFill(start_color="ADD8E6", end_color="ADD8E6", fill_type="solid")
         header_font = Font(bold=True)
@@ -1188,14 +1268,21 @@ def create_app():
                     ws.cell(row=r, column=col_idx).fill = base_fill
 
         # Fill marks
-        for (sid, d), mark in marks.items():
+        for (sid, d), rtype in marks.items():
             row = surgeon_id_to_row.get(sid)
             if not row:
                 continue
             cell = ws.cell(row=row, column=1 + d)
-            cell.value = mark
+            if rtype == 'unavailable':
+                cell.value = 'U'
+                cell.fill = dark_red
+            elif rtype == 'no_call':
+                cell.value = 'N'
+                cell.fill = orange_fill
+            elif rtype == 'study_leave':
+                cell.value = 'SL'
+                cell.fill = green_fill
             cell.alignment = center
-            cell.fill = dark_red
 
         # Autosize columns
             for col in ws.columns:
@@ -1248,7 +1335,7 @@ def create_app():
                             d = datetime.date.fromisoformat(raw)
                         except Exception:
                             continue
-                    if d == target and req.get('request_type') in ('unavailable','no_call'):
+                if d == target and req.get('request_type') in ('unavailable','study_leave','no_call'):
                         bad = True
                         break
                 if not bad:
@@ -1281,7 +1368,7 @@ def create_app():
                         d = datetime.date.fromisoformat(raw)
                     except Exception:
                         continue
-                if d.year == year and d.month == month and req.get('request_type') in ('unavailable', 'no_call'):
+                if d.year == year and d.month == month and req.get('request_type') in ('unavailable', 'study_leave', 'no_call'):
                     bset.add(d)
             blocked[sid] = bset
         # Precompute level eligibility per surgeon
@@ -1316,6 +1403,7 @@ def create_app():
     #############################################
 
     @app.route('/surgeons/delete/<int:surgeon_id>', methods=['POST'])
+    @basic_auth.required
     def delete_surgeon(surgeon_id):
         db = get_db()
         with db.begin():
@@ -1670,6 +1758,7 @@ def create_app():
 
     # --- Route to start a new solve job ---
     @app.route('/start_solve', methods=['POST'])
+    @basic_auth.required
     def start_solve():
         data = request.get_json()
         year, month = int(data['year']), int(data['month'])
@@ -1771,6 +1860,7 @@ def create_app():
 
     # --- Route to poll status of a job ---
     @app.route('/solve_status/<job_id>')
+    @basic_auth.required
     def solve_status(job_id):
         job = solve_jobs.get(job_id)
         if not job:
@@ -1787,6 +1877,7 @@ def create_app():
 
     # --- Route to cancel a running job ---
     @app.route('/cancel_solve/<job_id>', methods=['POST'])
+    @basic_auth.required
     def cancel_solve(job_id):
         job = solve_jobs.get(job_id)
         if job and job['status'] == 'running':
@@ -1895,4 +1986,5 @@ def create_app():
 # Run the App
 #############################################
 if __name__=="__main__":
-    create_app().run(host="0.0.0.0", port=int(os.environ.get("PORT",5000)), debug=True)
+    debug_mode = os.environ.get("FLASK_DEBUG", "0") == "1"
+    create_app().run(host="0.0.0.0", port=int(os.environ.get("PORT",5000)), debug=debug_mode)

@@ -3,6 +3,7 @@
 {% block content %}
   <h1 style="text-align: center;">Configure Maximum Calls per Level Group</h1>
   <form method="post" action="{{ url_for('config_max_calls') }}" style="text-align: center; margin-top: 20px;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div>
       <label for="group_1">Level Group 1 (1A &amp; 1B):</label>
       <input type="number" name="group_1" id="group_1" value="{{ config['1'] }}" required>

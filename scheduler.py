@@ -185,7 +185,7 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
         for s_id, req_list in availability.items():
             count_unavail = 0
             for req in req_list:
-                if req.get('request_type') != 'unavailable':
+                if req.get('request_type') not in ('unavailable','study_leave'):
                     continue
                 raw = req.get('date')
                 if isinstance(raw, str):
@@ -211,9 +211,9 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                         req_date = datetime.datetime.strptime(raw, "%Y-%m-%d").date()
                     except Exception:
                         continue
-                # If the request applies on the current date, and is an "unavailable" or "no_call" request:
+                # If the request applies on the current date, and is an unavailable/study_leave/no_call request:
                 if no_call_hard:
-                    if req_date == current_date and req.get('request_type') in ("unavailable","no_call"):
+                    if req_date == current_date and req.get('request_type') in ("unavailable","study_leave","no_call"):
                         for lvl in all_levels:
                             # Only remove if the domain has more than one candidate
                             if s_id in domains_by_day[d][lvl]:
@@ -225,7 +225,7 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                                 else:
                                     print(f"Warning: Not removing surgeon {s_id} from Day {day_str}, level {lvl} because it would empty the domain.")
                 if not no_call_hard:
-                    if req_date == current_date and req.get('request_type') in ("unavailable"):
+                    if req_date == current_date and req.get('request_type') in ("unavailable","study_leave"):
                         for lvl in all_levels:
                             # Only remove if the domain has more than one candidate
                             if s_id in domains_by_day[d][lvl]:
@@ -931,7 +931,7 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                         req_date = datetime.datetime.strptime(raw, "%Y-%m-%d").date()
                     except Exception:
                         continue
-                if req_date == next_day and req["request_type"] == "unavailable":
+                if req_date == next_day and req["request_type"] in ("unavailable","study_leave"):
                     for lev in all_levels:
                         b = model.NewBoolVar(f'penalty_unavailprev_{i}_{lev}_{s_id}')
                         add_named_constraint(f"Availability Prev: Day {i} {lev} equals surgeon {s_id}",
@@ -985,7 +985,7 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
     day_set = {datetime.datetime.strptime(d, "%Y-%m-%d").date() for d in days}
     for s_id, req_list in get_availability_requests().items():
         u_days = {datetime.datetime.strptime(req["date"], "%Y-%m-%d").date()
-                  for req in req_list if req.get("request_type") == "unavailable"
+                  for req in req_list if req.get("request_type") in ("unavailable","study_leave")
                   if isinstance(req.get("date"), str)}
         # include only dates in current month days
         unavail_days_per_surgeon[s_id] = len(u_days & day_set)
@@ -1247,7 +1247,7 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                                         d = raw if isinstance(raw, datetime.date) else datetime.date.fromisoformat(raw)
                                     except Exception:
                                         continue
-                                    if d in date_to_d.values() and req.get('request_type') in ('unavailable','no_call'):
+                                    if d in date_to_d.values() and req.get('request_type') in ('unavailable','study_leave','no_call'):
                                         bset.add(d)
                                 blocked[sid] = bset
                             for d_str, lvl in unfilled:

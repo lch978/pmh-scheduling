@@ -3,6 +3,7 @@
 {% block content %}
   <h1 style="text-align: center;">Global Configuration</h1>
   <form method="post" action="{{ url_for('global_config_page') }}" style="max-width: 900px; margin: 20px auto; display: grid; grid-template-columns: 260px 1fr; gap: 20px; align-items: start;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div style="border:1px solid #ddd;border-radius:8px;padding:12px;">
       <h3 style="margin-top:0;">Constraint Toggles</h3>
       <div style="margin: 8px 0;">
@@ -12,6 +13,18 @@
           <option value="0" {% if config.get('no_call_hard', '1') == '0' %}selected{% endif %}>Soft Constraint</option>
         </select>
         <div style="font-size:12px; font-style:italic; color:#666;">Choose whether “no‑call” requests are strictly enforced (hard) or treated as soft preferences.</div>
+      </div>
+      <hr>
+      <label style="display:block;margin:6px 0;">
+        <input type="checkbox" name="enable_unavail_deadline" value="1" {% if config.get('enable_unavail_deadline','0') != '0' %}checked{% endif %}>
+        Enable next-month unavailability deadline
+      </label>
+      <div style="margin:8px 0 12px 24px;">
+        <label for="unavail_deadline_day" style="display:block;margin-bottom:4px;">Deadline day of month (applies to next month’s requests):</label>
+        <input type="number" id="unavail_deadline_day" name="unavail_deadline_day" min="1" max="31" value="{{ config.get('unavail_deadline_day','20') }}" style="width:80px;">
+        <label for="unavail_deadline_time" style="display:block;margin-top:10px;margin-bottom:4px;">Deadline time (24h HH:MM, default 23:59):</label>
+        <input type="time" id="unavail_deadline_time" name="unavail_deadline_time" value="{{ config.get('unavail_deadline_time','23:59') }}">
+        <div style="font-size:12px; font-style:italic; color:#666;">Example: day 20 @ 23:59 means December availability closes at 20 Nov 23:59.</div>
       </div>
       <hr>
       <label style="display:block;margin:6px 0;"><input type="checkbox" name="enable_fairness_diff_all" value="1" {% if config.enable_fairness_diff_all != '0' %}checked{% endif %}> Fairness (overall diff)</label>

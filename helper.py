@@ -1,3 +1,4 @@
+import calendar
 import datetime
 import json
 import flask
@@ -353,6 +354,54 @@ def update_global_config(new_config):
         for key, value in new_config.items():
             db.execute(upsert_stmt, {"key": key, "value": str(value)})
 
+def get_next_month_unavail_deadline(now: datetime.datetime | None = None):
+    """
+    Returns a datetime representing the configured deadline for submitting
+    unavailability requests for the next month. If the deadline feature
+    is disabled or misconfigured, returns None.
+    The deadline is defined as an absolute datetime in the current month
+    (the month preceding the upcoming schedule month).
+    """
+    cfg = get_global_config()
+    if str(cfg.get("enable_unavail_deadline", "0")) == "0":
+        return None
+    if now is None:
+        now = datetime.datetime.now()
+    try:
+        deadline_day = int(cfg.get("unavail_deadline_day", "20"))
+    except Exception:
+        deadline_day = 20
+    time_str = cfg.get("unavail_deadline_time", "23:59")
+    try:
+        hour, minute = [int(part) for part in time_str.split(":")[:2]]
+    except Exception:
+        hour, minute = 23, 59
+    # clamp components
+    hour = max(0, min(23, hour))
+    minute = max(0, min(59, minute))
+    year = now.year
+    month = now.month
+    # Ensure day exists within this month
+    max_day = calendar.monthrange(year, month)[1]
+    day = max(1, min(max_day, deadline_day))
+    try:
+        return datetime.datetime(year, month, day, hour, minute)
+    except ValueError:
+        # fallback to end of month
+        return datetime.datetime(year, month, max_day, hour, minute)
+
+def is_unavail_deadline_passed(now: datetime.datetime | None = None):
+    """
+    Helper returning (deadline_datetime, passed_bool). Deadline is None and passed False
+    when feature disabled.
+    """
+    deadline_dt = get_next_month_unavail_deadline(now=now)
+    if deadline_dt is None:
+        return None, False
+    if now is None:
+        now = datetime.datetime.now()
+    return deadline_dt, now >= deadline_dt
+
 def get_all_surgeons():
     db = get_db()
     result = db.execute(text("SELECT * FROM surgeons"))
@@ -491,7 +540,7 @@ def get_horizon_prior_levels_and_credit(year: int, month: int, surgeons: list):
                 """
                 SELECT surgeon_id, date
                 FROM surgeon_availability
-                WHERE request_type = 'unavailable'
+                WHERE request_type IN ('unavailable','study_leave')
                   AND date >= :start_d AND date <= :end_d
                 """
             ),

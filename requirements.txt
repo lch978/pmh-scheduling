@@ -4,10 +4,12 @@ ortools~=9.14.0
 python-dateutil==2.8.2
 holidays==0.27
 Flask-SQLAlchemy==3.1.1
-SQLAlchemy==2.0.29
+SQLAlchemy==2.0.32
 openpyxl
-SQLAlchemy>=1.4
 psycopg2-binary
 python-dotenv
 supabase
 Flask-BasicAuth>=0.2.0
+Flask-WTF==1.2.1
+Flask-Limiter==3.8.0
+redis>=5,<6

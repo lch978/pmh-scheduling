@@ -96,10 +96,28 @@
       </select>
       <button type="submit">Show My Requests</button>
   </form>
+
+  {% if deadline_dt %}
+    <div style="max-width: 900px; margin: 0 auto 20px auto; padding: 12px; border-radius: 6px; background-color: #f0f4ff; border: 1px solid #c3d4ff;">
+      Requests for <strong>{{ deadline_next_month_label }}</strong> close on
+      <strong>{{ deadline_dt.strftime("%b %d, %Y %H:%M") }}</strong>.
+      {% if deadline_blocked %}
+        The deadline has passed for standard submissions.
+      {% elif deadline_passed %}
+        Deadline passed, admin override active.
+      {% endif %}
+    </div>
+  {% endif %}
   
   {% if selected_surgeon_id %}
+    {% if deadline_blocked %}
+      <div style="text-align:center; margin-bottom: 20px; color:#a94442; background:#fbe3e4; padding:15px; border:1px solid #f5c2c7; border-radius:8px;">
+        New unavailability requests for {{ deadline_next_month_label }} are closed. Please contact an administrator for changes.
+      </div>
+    {% else %}
     <!-- Section for submitting a new availability / no call request -->
     <form method="post" action="{{ url_for('availability') }}" id="availabilityForm" style="text-align: center; margin-bottom: 20px;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <!-- Use the initially selected surgeon -->
       <input type="hidden" name="surgeon_id" value="{{ selected_surgeon_id }}">
       <p>Applying as: {{ surgeon_name }}</p>
@@ -107,6 +125,7 @@
       <select name="request_type" id="request_type" required>
           <option value="unavailable">Unavailable</option>
           <option value="no_call">No Call Request</option>
+          <option value="study_leave">Study Leave</option>
       </select>
       <br><br>
       <!-- The calendar for day selection -->
@@ -118,6 +137,7 @@
       <br>
       <button type="submit">Submit Request</button>
     </form>
+    {% endif %}
     
     <!-- Existing Requests: Full month calendar view -->
     <h2 style="text-align: center;">Existing Requests for {{ surgeon_name }}</h2>
@@ -132,6 +152,7 @@
     
     <!-- Hidden form to submit deletion requests -->
     <form id="deleteForm" method="post" action="{{ url_for('delete_availability') }}" style="display:none;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="surgeon_id" value="{{ selected_surgeon_id }}">
       <!-- This hidden field will hold a JSON array describing the events to delete -->
       <input type="hidden" id="delete_requests" name="delete_requests">
@@ -145,45 +166,49 @@
       // Calendar for new request selection
       var calendarEl = document.getElementById('calendar');
       var selectedDates = [];
-      
-      var calendar = new FullCalendar.Calendar(calendarEl, {
-        initialView: 'dayGridMonth',
-        // Display next month by default:
-        initialDate: moment().add(1, 'month').format('YYYY-MM-DD'),
-        headerToolbar: {
-          left: 'prev',
-          center: 'title',
-          right: 'next'
-        },
-        height: 'auto',
-        contentHeight: 'auto',
-        expandRows: true,
-        dateClick: function(info) {
-          var clickedDate = info.dateStr;
-          var index = selectedDates.indexOf(clickedDate);
-          if(index === -1){
-            // Add the clicked date and mark it as selected.
-            selectedDates.push(clickedDate);
-            calendar.addEvent({
-              id: clickedDate,
-              start: clickedDate,
-              allDay: true,
-              display: 'background',
-              backgroundColor: '#396344'
-            });
-          } else {
-            // Remove the clicked date and its highlight.
-            selectedDates.splice(index, 1);
-            var event = calendar.getEventById(clickedDate);
-            if(event){
-              event.remove();
+      if (calendarEl) {
+        var calendar = new FullCalendar.Calendar(calendarEl, {
+          initialView: 'dayGridMonth',
+          // Display next month by default:
+          initialDate: moment().add(1, 'month').format('YYYY-MM-DD'),
+          headerToolbar: {
+            left: 'prev',
+            center: 'title',
+            right: 'next'
+          },
+          height: 'auto',
+          contentHeight: 'auto',
+          expandRows: true,
+          dateClick: function(info) {
+            var clickedDate = info.dateStr;
+            var index = selectedDates.indexOf(clickedDate);
+            if(index === -1){
+              // Add the clicked date and mark it as selected.
+              selectedDates.push(clickedDate);
+              calendar.addEvent({
+                id: clickedDate,
+                start: clickedDate,
+                allDay: true,
+                display: 'background',
+                backgroundColor: '#396344'
+              });
+            } else {
+              // Remove the clicked date and its highlight.
+              selectedDates.splice(index, 1);
+              var event = calendar.getEventById(clickedDate);
+              if(event){
+                event.remove();
+              }
+            }
+            // Update the hidden field with the JSON array of selected dates.
+            var selectedField = document.getElementById('start_date');
+            if (selectedField) {
+              selectedField.value = JSON.stringify(selectedDates);
             }
           }
-          // Update the hidden field with the JSON array of selected dates.
-          document.getElementById('start_date').value = JSON.stringify(selectedDates);
-        }
-      });
-      calendar.render();
+        });
+        calendar.render();
+      }
       
       {% if selected_surgeon_id %}
         // Build an array of events from your "events" structure.
@@ -216,6 +241,11 @@
             evt.borderColor = "#cce5ff";
             evt.textColor = "#000";
             evt.title = "No Call";
+          } else if(evt.reqType === "study_leave") {
+            evt.backgroundColor = "#d5f5e3"; // pastel green
+            evt.borderColor = "#d5f5e3";
+            evt.textColor = "#000";
+            evt.title = "Study Leave";
           }
           return evt;
         });
@@ -257,6 +287,9 @@
                 event.setProp('textColor', "#000");
               } else if(event.extendedProps.reqType === "no_call") {
                 event.setProp('borderColor', "#cce5ff");
+                event.setProp('textColor', "#000");
+              } else if(event.extendedProps.reqType === "study_leave") {
+                event.setProp('borderColor', "#d5f5e3");
                 event.setProp('textColor', "#000");
               }
             }

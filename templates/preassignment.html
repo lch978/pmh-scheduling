@@ -39,6 +39,7 @@
   </form>
 </div>
 <form method="POST" action="{{ url_for('preassignment', year=year, month=month) }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <table>
     <thead>
       <tr>

@@ -3,6 +3,7 @@
 {% block content %}
   <h1 style="text-align: center;">Global Configuration</h1>
   <form method="post" action="{{ url_for('constraint_weights') }}" style="max-width:900px;margin:20px auto;display:grid;grid-template-columns: 260px 1fr;gap:20px;align-items:start;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div style="border:1px solid #ddd;border-radius:8px;padding:12px;">
       <h3 style="margin-top:0;">Enable/Disable Constraints</h3>
       <label style="display:block;margin:6px 0;">
