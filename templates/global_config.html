@@ -14,6 +14,15 @@
         </select>
         <div style="font-size:12px; font-style:italic; color:#666;">Choose whether “no‑call” requests are strictly enforced (hard) or treated as soft preferences.</div>
       </div>
+      <div style="margin: 8px 0;">
+        <label for="pre_unavail_mode" style="margin-right: 10px;">Day-before unavailability rule:</label>
+        <select name="pre_unavail_mode" id="pre_unavail_mode" style="padding:5px;font-size:14px;">
+          <option value="hard" {% if config.get('pre_unavail_mode','soft') == 'hard' %}selected{% endif %}>Hard (never assign)</option>
+          <option value="soft" {% if config.get('pre_unavail_mode','soft') == 'soft' %}selected{% endif %}>Soft (penalize)</option>
+          <option value="off" {% if config.get('pre_unavail_mode','soft') == 'off' %}selected{% endif %}>Off (ignore)</option>
+        </select>
+        <div style="font-size:12px; font-style:italic; color:#666;">Controls whether the day before an “Unavailable/Study Leave” request is blocked entirely, penalized, or ignored during solving. This never alters stored requests.</div>
+      </div>
       <hr>
       <label style="display:block;margin:6px 0;">
         <input type="checkbox" name="enable_unavail_deadline" value="1" {% if config.get('enable_unavail_deadline','0') != '0' %}checked{% endif %}>

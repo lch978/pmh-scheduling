@@ -19,6 +19,16 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
         get_level2_group,
         get_team_day_prefs
     )
+    def _parse_req_date(raw):
+        if isinstance(raw, datetime.date):
+            return raw
+        if isinstance(raw, str):
+            try:
+                return datetime.datetime.strptime(raw, "%Y-%m-%d").date()
+            except Exception:
+                return None
+        return None
+
     model = cp_model.CpModel()
     constraint_mapping = {}
     diagnostics = []
@@ -29,6 +39,7 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
         return c
 
     num_days = len(days)
+    day_to_idx = {day: idx for idx, day in enumerate(days)}
     all_levels = ["1A","1B","2A","2B","3","4"]
     all_ids    = [s["id"] for s in surgeons]
     nlth_ids = [s["id"] for s in surgeons if s.get("nlth")]
@@ -48,6 +59,9 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
     gamma_1B = int(global_config.get("gamma_1B", "1"))
     gamma_balance = int(global_config.get("gamma_balance", "100"))
     no_call_hard = global_config.get("no_call_hard", "1") == "1"
+    pre_unavail_mode = global_config.get("pre_unavail_mode", "soft")
+    if pre_unavail_mode not in ("hard", "soft", "off"):
+        pre_unavail_mode = "soft"
     gamma_spacing = int(global_config.get("gamma_spacing", "10"))
     spacing_threshold = int(global_config.get("spacing_threshold", "7"))
     max_calls_level1 = int(global_config.get("max_calls_level1", "10"))
@@ -164,7 +178,6 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
     # --- Precompute preassigned pairs early (day-index, level) -> surgeon_id (int) ---
     preassigned_early = {}
     if preassignments:
-        day_to_idx = {day: i for i, day in enumerate(days)}
         for day_str, lvls in preassignments.items():
             if day_str not in day_to_idx:
                 continue
@@ -225,7 +238,7 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                                 else:
                                     print(f"Warning: Not removing surgeon {s_id} from Day {day_str}, level {lvl} because it would empty the domain.")
                 if not no_call_hard:
-                    if req_date == current_date and req.get('request_type') in ("unavailable","study_leave"):
+                    if req_date == current_date and req.get('request_type') == "unavailable":
                         for lvl in all_levels:
                             # Only remove if the domain has more than one candidate
                             if s_id in domains_by_day[d][lvl]:
@@ -237,10 +250,34 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                                 else:
                                     print(f"Warning: Not removing surgeon {s_id} from Day {day_str}, level {lvl} because it would empty the domain.")
 
+    if pre_unavail_mode == "hard":
+        for s_id, req_list in availability.items():
+            for req in req_list:
+                if req.get('request_type') not in ("unavailable",):
+                    continue
+                req_date = _parse_req_date(req.get('date'))
+                if not req_date:
+                    continue
+                prev_str = (req_date - datetime.timedelta(days=1)).isoformat()
+                d_idx = day_to_idx.get(prev_str)
+                if d_idx is None:
+                    continue
+                for lvl in all_levels:
+                    dom = domains_by_day[d_idx][lvl]
+                    if s_id not in dom:
+                        continue
+                    if preassigned_early.get((d_idx, lvl)) == s_id:
+                        continue
+                    if len(dom) <= 1:
+                        continue
+                    dom.remove(s_id)
+
     # --- Pre-solve domain diagnostics: flag empty domains (excluding -1) ---
     try:
         for d_idx, day_str in enumerate(days):
             for lvl in all_levels:
+                if lvl == "2B":
+                    continue
                 effective = [sid for sid in domains_by_day[d_idx][lvl] if sid != -1]
                 if len(effective) == 0:
                     diagnostics.append(f"No eligible surgeons for {lvl} on {day_str} after eligibility/pruning.")
@@ -918,40 +955,38 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                         td_terms.append((coef, b))
     
     # --- Soft Penalties for Availability ---
+    include_unavail_prev_penalty = (pre_unavail_mode == "soft") and enable_unavail_prev_penalty
     soft_penalties_unavail_prev = []
-    for i in range(num_days - 1):
-        next_day = datetime.datetime.strptime(days[i+1], "%Y-%m-%d").date()
-        for s_id, req_list in get_availability_requests().items():
-            for req in req_list:
-                raw = req["date"]
-                if isinstance(raw, datetime.date):
-                    req_date = raw
-                else:
-                    try:
-                        req_date = datetime.datetime.strptime(raw, "%Y-%m-%d").date()
-                    except Exception:
+    if include_unavail_prev_penalty:
+        for i in range(num_days - 1):
+            next_day = datetime.datetime.strptime(days[i+1], "%Y-%m-%d").date()
+            for s_id, req_list in availability.items():
+                for req in req_list:
+                    req_date = _parse_req_date(req.get("date"))
+                    if not req_date:
                         continue
-                if req_date == next_day and req["request_type"] in ("unavailable","study_leave"):
-                    for lev in all_levels:
-                        b = model.NewBoolVar(f'penalty_unavailprev_{i}_{lev}_{s_id}')
-                        add_named_constraint(f"Availability Prev: Day {i} {lev} equals surgeon {s_id}",
-                            model.Add, X[(i, lev)] == s_id
-                        ).OnlyEnforceIf(b)
-                        add_named_constraint(f"Availability Prev: Day {i} {lev} not equals surgeon {s_id}",
-                            model.Add, X[(i, lev)] != s_id
-                        ).OnlyEnforceIf(b.Not())
-                        soft_penalties_unavail_prev.append(b)
+                    if req_date == next_day and req.get("request_type") in ("unavailable",):
+                        for lev in all_levels:
+                            b = model.NewBoolVar(f'penalty_unavailprev_{i}_{lev}_{s_id}')
+                            add_named_constraint(f"Availability Prev: Day {i} {lev} equals surgeon {s_id}",
+                                model.Add, X[(i, lev)] == s_id
+                            ).OnlyEnforceIf(b)
+                            add_named_constraint(f"Availability Prev: Day {i} {lev} not equals surgeon {s_id}",
+                                model.Add, X[(i, lev)] != s_id
+                            ).OnlyEnforceIf(b.Not())
+                            soft_penalties_unavail_prev.append(b)
     
     soft_penalties_nocall = []
     if not no_call_hard:
         for i, day in enumerate(days):
-            for s_id, req_list in get_availability_requests().items():
+            target_date = datetime.datetime.strptime(day, "%Y-%m-%d").date()
+            for s_id, req_list in availability.items():
                 for req in req_list:
                     try:
-                        req_date = datetime.datetime.strptime(req["date"], "%Y-%m-%d").date()
+                        req_date = _parse_req_date(req.get("date"))
                     except Exception:
                         continue
-                    if req_date == datetime.datetime.strptime(day, "%Y-%m-%d").date() and req["request_type"] == "no_call":
+                    if req_date and req_date == target_date and req.get("request_type") == "no_call":
                         for lev in all_levels:
                             b = model.NewBoolVar(f'penalty_nocall_{i}_{lev}_{s_id}')
                             add_named_constraint(f"No call penalty: Day {i} {lev} equals surgeon {s_id}",
@@ -983,10 +1018,13 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
     # Count per-surgeon unavailable days in this month
     unavail_days_per_surgeon = {s_id: 0 for s_id in all_surgeon_ids}
     day_set = {datetime.datetime.strptime(d, "%Y-%m-%d").date() for d in days}
-    for s_id, req_list in get_availability_requests().items():
-        u_days = {datetime.datetime.strptime(req["date"], "%Y-%m-%d").date()
-                  for req in req_list if req.get("request_type") in ("unavailable","study_leave")
-                  if isinstance(req.get("date"), str)}
+    for s_id, req_list in availability.items():
+        u_days = {
+            datetime.datetime.strptime(req["date"], "%Y-%m-%d").date()
+            for req in req_list
+            if req.get("request_type") in ("unavailable","study_leave")
+            if isinstance(req.get("date"), str)
+        }
         # include only dates in current month days
         unavail_days_per_surgeon[s_id] = len(u_days & day_set)
 
@@ -1043,7 +1081,7 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
     # Remove overall fairness term; use per-group fairness instead
     if enable_nocall_penalty:
         objective_terms.append(gamma_no_call * penalty_nocall)
-    if enable_unavail_prev_penalty:
+    if include_unavail_prev_penalty:
         objective_terms.append(gamma_unavail_prev * penalty_unavail_prev)
     # Remove deviation-from-average fairness term
     if enable_unavail_credit and 'unavail_overflows' in locals() and unavail_overflows:

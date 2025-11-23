@@ -6,6 +6,15 @@
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div style="border:1px solid #ddd;border-radius:8px;padding:12px;">
       <h3 style="margin-top:0;">Enable/Disable Constraints</h3>
+      <div style="margin:8px 0;">
+        <label for="pre_unavail_mode" style="margin-right:10px;">Day-before unavailability rule:</label>
+        <select name="pre_unavail_mode" id="pre_unavail_mode" style="padding:5px;font-size:14px;">
+          <option value="hard" {% if config.get('pre_unavail_mode','soft') == 'hard' %}selected{% endif %}>Hard (never assign)</option>
+          <option value="soft" {% if config.get('pre_unavail_mode','soft') == 'soft' %}selected{% endif %}>Soft (penalize)</option>
+          <option value="off" {% if config.get('pre_unavail_mode','soft') == 'off' %}selected{% endif %}>Off (ignore)</option>
+        </select>
+      </div>
+      <hr>
       <label style="display:block;margin:6px 0;">
         <input type="checkbox" name="enable_fairness_diff_all" value="1" {% if config.enable_fairness_diff_all != '0' %}checked{% endif %}> Fairness (overall diff)
       </label>

@@ -42,6 +42,27 @@ def create_app():
 
     solve_jobs = {}
 
+    def convert_schedule_ids_to_names(schedule, id_to_name):
+        """
+        Convert a day/level schedule keyed by surgeon IDs (or names) into a
+        name-based schedule using the provided lookup.
+        """
+        sched_by_name = {}
+        for day, assigns in (schedule or {}).items():
+            if not isinstance(assigns, dict):
+                continue
+            sched_by_name.setdefault(day, {})
+            for lvl, val in assigns.items():
+                if val in [None, ""]:
+                    sched_by_name[day][lvl] = None
+                    continue
+                try:
+                    sid = int(val)
+                    sched_by_name[day][lvl] = id_to_name.get(sid)
+                except Exception:
+                    sched_by_name[day][lvl] = val
+        return sched_by_name
+
     @app.context_processor
     def utility_processor():
         return {
@@ -272,6 +293,9 @@ def create_app():
                 }
             update_team_day_prefs(new_prefs)
             no_call_hard_val = request.form.get("no_call_hard", "1")
+            pre_unavail_mode = request.form.get("pre_unavail_mode", "soft") or "soft"
+            if pre_unavail_mode not in ("hard", "soft", "off"):
+                pre_unavail_mode = "soft"
             # sliders
             fairness_weight = request.form.get("fairness_weight", "1000")
             gamma_no_call = request.form.get("gamma_no_call", "10")
@@ -320,6 +344,7 @@ def create_app():
             }
             update_global_config({
                 "no_call_hard": no_call_hard_val,
+                "pre_unavail_mode": pre_unavail_mode,
                 "fairness_weight": fairness_weight,
                 "gamma_no_call": gamma_no_call,
                 "gamma_unavail_prev": gamma_unavail_prev,
@@ -388,6 +413,9 @@ def create_app():
                 "enable_fairness_diff_all": cb("enable_fairness_diff_all"),
                 "enable_deviation_sum": cb("enable_deviation_sum"),
             }
+            pre_unavail_mode = request.form.get("pre_unavail_mode", "soft") or "soft"
+            if pre_unavail_mode not in ("hard", "soft", "off"):
+                pre_unavail_mode = "soft"
             # Update global configuration.
             update_global_config({
                 "fairness_weight": fairness_weight,
@@ -400,6 +428,7 @@ def create_app():
                 "gamma_weekend_team_diversity": gamma_weekend_team_diversity,
                 "gamma_unavail_credit": gamma_unavail_credit,
                 "unavail_credit_days": unavail_credit_days,
+                "pre_unavail_mode": pre_unavail_mode,
                 **flags
             })
             flash("Constraint weights updated successfully!")
@@ -1685,28 +1714,25 @@ def create_app():
         except Exception:
             return jsonify({"error": "Invalid payload"}), 400
         db = get_db()
-        # Convert ID-based schedule to name-based before saving, for display consistency
-        surgeons = get_all_surgeons()
-        id_to_name = {s['id']: s['name'] for s in surgeons}
-        sched_by_name = {}
-        for day, assigns in schedule.items():
-            sched_by_name[day] = {}
-            for lvl, val in assigns.items():
-                if val in [None, ""]:
-                    sched_by_name[day][lvl] = None
-                else:
-                    try:
-                        sid = int(val)
-                        sched_by_name[day][lvl] = id_to_name.get(sid)
-                    except Exception:
-                        sched_by_name[day][lvl] = val
-        # compute next version
-        row = db.execute(text("SELECT COALESCE(MAX(version),0) AS maxv FROM saved_schedule_versions WHERE year=:y AND month=:m"), {"y": year, "m": month}).mappings().fetchone()
-        next_ver = (row['maxv'] or 0) + 1
+        next_ver = 0
         with db.begin():
-            db.execute(text("INSERT INTO saved_schedule_versions (year, month, version, schedule_data, published) VALUES (:y, :m, :v, CAST(:d AS JSONB), :p)"), {"y": year, "m": month, "v": next_ver, "d": json.dumps(sched_by_name), "p": publish})
+            rows = db.execute(text("SELECT id, name FROM surgeons")).mappings().all()
+            id_to_name = {row["id"]: row["name"] for row in rows}
+            sched_by_name = convert_schedule_ids_to_names(schedule, id_to_name)
+            row = db.execute(text("SELECT COALESCE(MAX(version),0) AS maxv FROM saved_schedule_versions WHERE year=:y AND month=:m"),
+                             {"y": year, "m": month}).mappings().fetchone()
+            next_ver = (row['maxv'] or 0) + 1
+            db.execute(
+                text("INSERT INTO saved_schedule_versions (year, month, version, schedule_data, published) "
+                     "VALUES (:y, :m, :v, CAST(:d AS JSONB), :p)"),
+                {"y": year, "m": month, "v": next_ver, "d": json.dumps(sched_by_name), "p": publish}
+            )
             if publish:
-                db.execute(text("UPDATE saved_schedule_versions SET published = FALSE WHERE year=:y AND month=:m AND version <> :v"), {"y": year, "m": month, "v": next_ver})
+                db.execute(
+                    text("UPDATE saved_schedule_versions SET published = FALSE "
+                         "WHERE year=:y AND month=:m AND version <> :v"),
+                    {"y": year, "m": month, "v": next_ver}
+                )
         return jsonify({"version": next_ver, "published": publish})
 
     @app.route('/save_schedule_version_form', methods=['POST'])
@@ -1723,31 +1749,25 @@ def create_app():
             return redirect(url_for('edit_publish', year=request.form.get('year'), month=request.form.get('month')))
 
         db = get_db()
-        surgeons = get_all_surgeons()
-        id_to_name = {s['id']: s['name'] for s in surgeons}
-
-        # Convert ID-based schedule to name-based before saving
-        sched_by_name = {}
-        for day, assigns in (schedule or {}).items():
-            sched_by_name[day] = {}
-            for lvl, val in (assigns or {}).items():
-                if val in [None, ""]:
-                    sched_by_name[day][lvl] = None
-                else:
-                    try:
-                        sid = int(val)
-                        sched_by_name[day][lvl] = id_to_name.get(sid)
-                    except Exception:
-                        # If somehow a name slips through, keep it
-                        sched_by_name[day][lvl] = val
-
-        # compute next version and insert
-        row = db.execute(text("SELECT COALESCE(MAX(version),0) AS maxv FROM saved_schedule_versions WHERE year=:y AND month=:m"), {"y": year, "m": month}).mappings().fetchone()
-        next_ver = (row['maxv'] or 0) + 1
+        next_ver = 0
         with db.begin():
-            db.execute(text("INSERT INTO saved_schedule_versions (year, month, version, schedule_data, published) VALUES (:y, :m, :v, CAST(:d AS JSONB), :p)"), {"y": year, "m": month, "v": next_ver, "d": json.dumps(sched_by_name), "p": publish})
+            rows = db.execute(text("SELECT id, name FROM surgeons")).mappings().all()
+            id_to_name = {row["id"]: row["name"] for row in rows}
+            sched_by_name = convert_schedule_ids_to_names(schedule, id_to_name)
+            row = db.execute(text("SELECT COALESCE(MAX(version),0) AS maxv FROM saved_schedule_versions WHERE year=:y AND month=:m"),
+                             {"y": year, "m": month}).mappings().fetchone()
+            next_ver = (row['maxv'] or 0) + 1
+            db.execute(
+                text("INSERT INTO saved_schedule_versions (year, month, version, schedule_data, published) "
+                     "VALUES (:y, :m, :v, CAST(:d AS JSONB), :p)"),
+                {"y": year, "m": month, "v": next_ver, "d": json.dumps(sched_by_name), "p": publish}
+            )
             if publish:
-                db.execute(text("UPDATE saved_schedule_versions SET published = FALSE WHERE year=:y AND month=:m AND version <> :v"), {"y": year, "m": month, "v": next_ver})
+                db.execute(
+                    text("UPDATE saved_schedule_versions SET published = FALSE "
+                         "WHERE year=:y AND month=:m AND version <> :v"),
+                    {"y": year, "m": month, "v": next_ver}
+                )
 
         flash(f"Saved version v{next_ver}{' and published' if publish else ''}.", 'success')
         return redirect(url_for('edit_publish', year=year, month=month))
