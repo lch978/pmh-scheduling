@@ -112,9 +112,9 @@
   {% if selected_surgeon_id %}
     {% if deadline_blocked %}
       <div style="text-align:center; margin-bottom: 20px; color:#a94442; background:#fbe3e4; padding:15px; border:1px solid #f5c2c7; border-radius:8px;">
-        New unavailability requests for {{ deadline_next_month_label }} are closed. Please contact an administrator for changes.
+        New unavailability requests for {{ deadline_next_month_label }} are closed. You may still submit requests for later months.
       </div>
-    {% else %}
+    {% endif %}
     <!-- Section for submitting a new availability / no call request -->
     <form method="post" action="{{ url_for('availability') }}" id="availabilityForm" style="text-align: center; margin-bottom: 20px;">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -137,7 +137,6 @@
       <br>
       <button type="submit">Submit Request</button>
     </form>
-    {% endif %}
     
     <!-- Existing Requests: Full month calendar view -->
     <h2 style="text-align: center;">Existing Requests for {{ surgeon_name }}</h2>

@@ -1045,16 +1045,14 @@ def create_app():
 
         is_admin = is_admin_request()
         block_requests = bool(deadline_dt and deadline_passed and not is_admin)
+        next_month_start = datetime.date(next_month_year, next_month_month, 1)
+        next_month_end = (next_month_start + datetime.timedelta(days=32)).replace(day=1)
         if request.method == 'POST':
             # Process submission of selected dates.
             surgeon_id = request.form.get('surgeon_id')
             request_type = request.form.get('request_type')  # "unavailable" or "no_call"
             selected_dates_json = request.form.get('selected_dates')
 
-            if block_requests:
-                flash("New unavailability requests for next month are closed. Please contact an administrator.", "warning")
-                return redirect(url_for('availability', surgeon_id=surgeon_id))
-            
             # Validate that all required data is provided.
             if not surgeon_id or not request_type or not selected_dates_json:
                 flash("Please fill in all fields.")
@@ -1062,10 +1060,24 @@ def create_app():
             
             try:
                 # Parse the JSON array of dates.
-                dates_list = json.loads(selected_dates_json)
+                raw_dates = json.loads(selected_dates_json)
+                dates_list = raw_dates if isinstance(raw_dates, list) else []
                 if not dates_list:
                     flash("No dates selected.")
                     return redirect(url_for('availability', surgeon_id=surgeon_id))
+                def _coerce_date(val):
+                    if isinstance(val, datetime.date):
+                        return val
+                    return datetime.date.fromisoformat(val)
+                if block_requests:
+                    for d in dates_list:
+                        try:
+                            d_obj = _coerce_date(d)
+                        except Exception:
+                            raise
+                        if next_month_start <= d_obj < next_month_end:
+                            flash(f"Requests for {next_month_label} are closed after the deadline. Later months remain open.", "warning")
+                            return redirect(url_for('availability', surgeon_id=surgeon_id))
                 
                 # Insert each date as a separate row using a fresh transaction to avoid conflicts.
                 with ENGINE.begin() as write_conn:
