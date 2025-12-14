@@ -32,6 +32,53 @@ def get_db() -> Connection:
         g._db = ENGINE.connect()
     return g._db
 
+def json_cast(param_name):
+    """
+    Returns the SQL fragment for inserting a JSON parameter.
+    Postgres requires CAST(:param AS JSONB), while SQLite expects just :param (TEXT).
+    """
+    db = get_db()
+    if db.dialect.name == 'sqlite':
+        return f":{param_name}"
+    else:
+        return f"CAST(:{param_name} AS JSONB)"
+
+def sql_now():
+    """
+    Returns the SQL function for current timestamp.
+    Postgres: now()
+    SQLite: CURRENT_TIMESTAMP
+    """
+    db = get_db()
+    if db.dialect.name == 'sqlite':
+        return "CURRENT_TIMESTAMP"
+    else:
+        return "now()"
+
+def sql_true():
+    """
+    Returns the SQL literal for TRUE.
+    Postgres: TRUE
+    SQLite: 1
+    """
+    db = get_db()
+    if db.dialect.name == 'sqlite':
+        return "1"
+    else:
+        return "TRUE"
+
+def sql_false():
+    """
+    Returns the SQL literal for FALSE.
+    Postgres: FALSE
+    SQLite: 0
+    """
+    db = get_db()
+    if db.dialect.name == 'sqlite':
+        return "0"
+    else:
+        return "FALSE"
+
 def close_db(error=None):
     """
     Closes the SQLAlchemy Connection at the end of the request.
@@ -44,6 +91,7 @@ def close_db(error=None):
 
 def init_db():
     db = get_db()
+    is_sqlite = db.dialect.name == 'sqlite'
 
     # Use a transaction context manager
     with db.begin():
@@ -136,29 +184,55 @@ def init_db():
             );
             """
         ]
+        
         for ddl in ddl_statements:
+            if is_sqlite:
+                # Basic replacements for SQLite compatibility
+                ddl = ddl.replace("SERIAL PRIMARY KEY", "INTEGER PRIMARY KEY AUTOINCREMENT")
+                ddl = ddl.replace("JSONB", "TEXT")
+                ddl = ddl.replace("TIMESTAMP WITHOUT TIME ZONE DEFAULT now()", "DATETIME DEFAULT CURRENT_TIMESTAMP")
+                ddl = ddl.replace("BOOLEAN", "INTEGER") # SQLite uses 0/1
+                ddl = ddl.replace("TRUE", "1").replace("FALSE", "0")
+            
             # exec_driver_sql allows raw SQL strings
             db.exec_driver_sql(ddl)
 
         # ── 1b) Ensure surgeons table has required columns/constraints ──
         # Add columns if they are missing
-        db.exec_driver_sql(
-            """
-            ALTER TABLE surgeons
-            ADD COLUMN IF NOT EXISTS nlth BOOLEAN DEFAULT FALSE
-            """
-        )
-        db.exec_driver_sql(
-            """
-            ALTER TABLE surgeons
-            ADD COLUMN IF NOT EXISTS team TEXT DEFAULT ''
-            """
-        )
+        if is_sqlite:
+            # SQLite ADD COLUMN support is good, but IF NOT EXISTS is syntax dependent.
+            # safe to catch error if column exists
+            try:
+                db.exec_driver_sql("ALTER TABLE surgeons ADD COLUMN nlth INTEGER DEFAULT 0")
+            except Exception:
+                pass
+            try:
+                db.exec_driver_sql("ALTER TABLE surgeons ADD COLUMN team TEXT DEFAULT ''")
+            except Exception:
+                pass
+        else:
+            db.exec_driver_sql(
+                """
+                ALTER TABLE surgeons
+                ADD COLUMN IF NOT EXISTS nlth BOOLEAN DEFAULT FALSE
+                """
+            )
+            db.exec_driver_sql(
+                """
+                ALTER TABLE surgeons
+                ADD COLUMN IF NOT EXISTS team TEXT DEFAULT ''
+                """
+            )
+
         # Backfill NULLs, then enforce NOT NULL
-        db.exec_driver_sql("UPDATE surgeons SET nlth = FALSE WHERE nlth IS NULL")
+        false_val = "0" if is_sqlite else "FALSE"
+        db.exec_driver_sql(f"UPDATE surgeons SET nlth = {false_val} WHERE nlth IS NULL")
         db.exec_driver_sql("UPDATE surgeons SET team = '' WHERE team IS NULL")
-        db.exec_driver_sql("ALTER TABLE surgeons ALTER COLUMN nlth SET NOT NULL")
-        db.exec_driver_sql("ALTER TABLE surgeons ALTER COLUMN team SET NOT NULL")
+        
+        if not is_sqlite:
+            db.exec_driver_sql("ALTER TABLE surgeons ALTER COLUMN nlth SET NOT NULL")
+            db.exec_driver_sql("ALTER TABLE surgeons ALTER COLUMN team SET NOT NULL")
+
 
         # ── 2) Seed global_config defaults ──
         defaults = {
@@ -448,10 +522,10 @@ def get_published_schedule_version(year: int, month: int):
     # Try published version first
     row = db.execute(
         text(
-            """
+            f"""
             SELECT schedule_data
             FROM saved_schedule_versions
-            WHERE year = :y AND month = :m AND published = TRUE
+            WHERE year = :y AND month = :m AND published = {sql_true()}
             ORDER BY version DESC
             LIMIT 1
             """
@@ -597,11 +671,11 @@ def save_prior_last_two(year: int, month: int, m2: dict, m1: dict):
     db = get_db()
     with db.begin():
         stmt = text(
-            """
+            f"""
             INSERT INTO prior_last_two (year, month, m2, m1, updated_at)
-            VALUES (:y, :m, CAST(:m2 AS JSONB), CAST(:m1 AS JSONB), now())
+            VALUES (:y, :m, {json_cast('m2')}, {json_cast('m1')}, {sql_now()})
             ON CONFLICT (year, month) DO UPDATE
-            SET m2 = EXCLUDED.m2, m1 = EXCLUDED.m1, updated_at = now()
+            SET m2 = EXCLUDED.m2, m1 = EXCLUDED.m1, updated_at = {sql_now()}
             """
         )
         db.execute(stmt, {"y": year, "m": month, "m2": json.dumps(m2 or {}), "m1": json.dumps(m1 or {})})

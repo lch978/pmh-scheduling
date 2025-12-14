@@ -659,7 +659,7 @@ def create_app():
                 db.execute(
                     text(
                         "UPDATE saved_schedule "
-                        "SET schedule_data = CAST(:sched AS JSONB), date_saved = now() "
+                        f"SET schedule_data = {json_cast('sched')}, date_saved = {sql_now()} "
                         "WHERE year = :y AND month = :m"
                     ),
                     {"sched": data, "y": year, "m": month}
@@ -669,15 +669,16 @@ def create_app():
                     text(
                         "INSERT INTO saved_schedule "
                         "(year, month, schedule_data, date_saved) "
-                        "VALUES (:y, :m, CAST(:sched AS JSONB), now())"
+                        f"VALUES (:y, :m, {json_cast('sched')}, {sql_now()})"
                     ),
                     {"y": year, "m": month, "sched": data}
                 )
         # Also save as a new version in versioned table
+        db.commit()
         with db.begin():
             ver_row = db.execute(text("SELECT COALESCE(MAX(version),0) AS maxv FROM saved_schedule_versions WHERE year=:y AND month=:m"), {"y": year, "m": month}).mappings().fetchone()
             next_ver = (ver_row['maxv'] or 0) + 1
-            db.execute(text("INSERT INTO saved_schedule_versions (year, month, version, schedule_data, published) VALUES (:y, :m, :v, CAST(:d AS JSONB), FALSE)"), {"y": year, "m": month, "v": next_ver, "d": data})
+            db.execute(text(f"INSERT INTO saved_schedule_versions (year, month, version, schedule_data, published) VALUES (:y, :m, :v, {json_cast('d')}, {sql_false()})"), {"y": year, "m": month, "v": next_ver, "d": data})
         flash("Schedule saved.", "success")
         return redirect(url_for('new_schedule', year=year, month=month))
 
@@ -691,7 +692,7 @@ def create_app():
         db = get_db()
         # Prefer published versioned schedule if available
         row_pub = db.execute(
-            text("SELECT schedule_data FROM saved_schedule_versions WHERE year=:y AND month=:m AND published=TRUE ORDER BY version DESC LIMIT 1"),
+            text(f"SELECT schedule_data FROM saved_schedule_versions WHERE year=:y AND month=:m AND published={sql_true()} ORDER BY version DESC LIMIT 1"),
             {"y": year_sel, "m": month_sel}
         ).mappings().fetchone()
         if row_pub:
@@ -1572,32 +1573,42 @@ def create_app():
     @app.route('/edit_publish', methods=['GET'])
     @basic_auth.required
     def edit_publish():
-        # Default to next month when no params supplied
-        if not request.args.get('year') or not request.args.get('month'):
-            today = datetime.date.today()
-            year_sel = today.year + 1 if today.month == 12 else today.year
-            month_sel = 1 if today.month == 12 else today.month + 1
-        else:
-            year_sel, month_sel = get_year_month()
-        db = get_db()
-        versions = db.execute(text("SELECT version, published FROM saved_schedule_versions WHERE year=:y AND month=:m ORDER BY version"), {"y": year_sel, "m": month_sel}).mappings().all()
-        if not versions:
-            # Seed v1 from existing saved_schedule if present; otherwise create empty skeleton
-            row = db.execute(text("SELECT schedule_data FROM saved_schedule WHERE year=:y AND month=:m"), {"y": year_sel, "m": month_sel}).mappings().fetchone()
-            if row:
-                data = row['schedule_data'] if isinstance(row['schedule_data'], dict) else json.loads(row['schedule_data'])
+        try:
+            # Default to next month when no params supplied
+            if not request.args.get('year') or not request.args.get('month'):
+                today = datetime.date.today()
+                year_sel = today.year + 1 if today.month == 12 else today.year
+                month_sel = 1 if today.month == 12 else today.month + 1
             else:
-                # build empty schedule for the month
-                import calendar as _cal
-                num_days = _cal.monthrange(year_sel, month_sel)[1]
-                levels = ["1A","1B","2A","2B","3","4"]
-                data = { datetime.date(year_sel, month_sel, d).isoformat(): {lvl: None for lvl in levels} for d in range(1, num_days+1) }
-            with db.begin():
-                db.execute(text("INSERT INTO saved_schedule_versions (year, month, version, schedule_data, published) VALUES (:y, :m, 1, CAST(:d AS JSONB), FALSE)"), {"y": year_sel, "m": month_sel, "d": json.dumps(data)})
+                year_sel, month_sel = get_year_month()
+            db = get_db()
             versions = db.execute(text("SELECT version, published FROM saved_schedule_versions WHERE year=:y AND month=:m ORDER BY version"), {"y": year_sel, "m": month_sel}).mappings().all()
-        # latest published
-        pub_ver = next((v['version'] for v in versions if v['published']), None)
-        return render_template('edit_publish.html', year=year_sel, month=month_sel, versions=versions, published_version=pub_ver)
+            if not versions:
+                # Seed v1 from existing saved_schedule if present; otherwise create empty skeleton
+                row = db.execute(text("SELECT schedule_data FROM saved_schedule WHERE year=:y AND month=:m"), {"y": year_sel, "m": month_sel}).mappings().fetchone()
+                if row:
+                    data = row['schedule_data'] if isinstance(row['schedule_data'], dict) else json.loads(row['schedule_data'])
+                else:
+                    # build empty schedule for the month
+                    import calendar as _cal
+                    num_days = _cal.monthrange(year_sel, month_sel)[1]
+                    levels = ["1A","1B","2A","2B","3","4"]
+                    data = { datetime.date(year_sel, month_sel, d).isoformat(): {lvl: None for lvl in levels} for d in range(1, num_days+1) }
+                
+                # Commit any implicit transaction from previous reads before starting the write block
+                db.commit()
+                # Use a new connection for the transaction to avoid state issues
+                with db.begin():
+                    # Attempt to handle potential dialect issues with JSONB
+                    db.execute(text(f"INSERT INTO saved_schedule_versions (year, month, version, schedule_data, published) VALUES (:y, :m, 1, {json_cast('d')}, {sql_false()})"), {"y": year_sel, "m": month_sel, "d": json.dumps(data)})
+                versions = db.execute(text("SELECT version, published FROM saved_schedule_versions WHERE year=:y AND month=:m ORDER BY version"), {"y": year_sel, "m": month_sel}).mappings().all()
+            # latest published
+            pub_ver = next((v['version'] for v in versions if v['published']), None)
+            return render_template('edit_publish.html', year=year_sel, month=month_sel, versions=versions, published_version=pub_ver)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return f"Error in edit_publish: {e}", 500
 
     @app.route('/list_schedule_versions')
     @basic_auth.required
@@ -1619,8 +1630,10 @@ def create_app():
                 num_days = _cal.monthrange(year, month)[1]
                 levels = ["1A","1B","2A","2B","3","4"]
                 data = { datetime.date(year, month, d).isoformat(): {lvl: None for lvl in levels} for d in range(1, num_days+1) }
+            
+            db.commit()
             with db.begin():
-                db.execute(text("INSERT INTO saved_schedule_versions (year, month, version, schedule_data, published) VALUES (:y, :m, 1, CAST(:d AS JSONB), FALSE)"), {"y": year, "m": month, "d": json.dumps(data)})
+                db.execute(text(f"INSERT INTO saved_schedule_versions (year, month, version, schedule_data, published) VALUES (:y, :m, 1, {json_cast('d')}, {sql_false()})"), {"y": year, "m": month, "d": json.dumps(data)})
             rows = db.execute(text("SELECT version, published FROM saved_schedule_versions WHERE year=:y AND month=:m ORDER BY version"), {"y": year, "m": month}).mappings().all()
         return jsonify({"versions": [{"version": r['version'], "published": bool(r['published'])} for r in rows]})
 
@@ -1638,10 +1651,10 @@ def create_app():
         db = get_db()
         with db.begin():
             if published:
-                db.execute(text("UPDATE saved_schedule_versions SET published = FALSE WHERE year=:y AND month=:m"), {"y": year, "m": month})
-                res = db.execute(text("UPDATE saved_schedule_versions SET published = TRUE WHERE year=:y AND month=:m AND version=:v"), {"y": year, "m": month, "v": version})
+                db.execute(text(f"UPDATE saved_schedule_versions SET published = {sql_false()} WHERE year=:y AND month=:m"), {"y": year, "m": month})
+                res = db.execute(text(f"UPDATE saved_schedule_versions SET published = {sql_true()} WHERE year=:y AND month=:m AND version=:v"), {"y": year, "m": month, "v": version})
             else:
-                res = db.execute(text("UPDATE saved_schedule_versions SET published = FALSE WHERE year=:y AND month=:m AND version=:v"), {"y": year, "m": month, "v": version})
+                res = db.execute(text(f"UPDATE saved_schedule_versions SET published = {sql_false()} WHERE year=:y AND month=:m AND version=:v"), {"y": year, "m": month, "v": version})
         if res.rowcount == 0:
             return jsonify({"error": "Version not found"}), 404
         return jsonify({"ok": True})
@@ -1735,13 +1748,13 @@ def create_app():
                              {"y": year, "m": month}).mappings().fetchone()
             next_ver = (row['maxv'] or 0) + 1
             db.execute(
-                text("INSERT INTO saved_schedule_versions (year, month, version, schedule_data, published) "
-                     "VALUES (:y, :m, :v, CAST(:d AS JSONB), :p)"),
+                text(f"INSERT INTO saved_schedule_versions (year, month, version, schedule_data, published) "
+                     f"VALUES (:y, :m, :v, {json_cast('d')}, :p)"),
                 {"y": year, "m": month, "v": next_ver, "d": json.dumps(sched_by_name), "p": publish}
             )
             if publish:
                 db.execute(
-                    text("UPDATE saved_schedule_versions SET published = FALSE "
+                    text(f"UPDATE saved_schedule_versions SET published = {sql_false()} "
                          "WHERE year=:y AND month=:m AND version <> :v"),
                     {"y": year, "m": month, "v": next_ver}
                 )
@@ -1770,13 +1783,13 @@ def create_app():
                              {"y": year, "m": month}).mappings().fetchone()
             next_ver = (row['maxv'] or 0) + 1
             db.execute(
-                text("INSERT INTO saved_schedule_versions (year, month, version, schedule_data, published) "
-                     "VALUES (:y, :m, :v, CAST(:d AS JSONB), :p)"),
+                text(f"INSERT INTO saved_schedule_versions (year, month, version, schedule_data, published) "
+                     f"VALUES (:y, :m, :v, {json_cast('d')}, :p)"),
                 {"y": year, "m": month, "v": next_ver, "d": json.dumps(sched_by_name), "p": publish}
             )
             if publish:
                 db.execute(
-                    text("UPDATE saved_schedule_versions SET published = FALSE "
+                    text(f"UPDATE saved_schedule_versions SET published = {sql_false()} "
                          "WHERE year=:y AND month=:m AND version <> :v"),
                     {"y": year, "m": month, "v": next_ver}
                 )
@@ -1959,12 +1972,12 @@ def create_app():
                 if row:
                     row_dict = row._mapping  # Access the row as a mapping object
                     db.execute(
-                        text("UPDATE preassignments SET preassignment_data = :data, date_updated = now() WHERE id = :id"),
+                        text(f"UPDATE preassignments SET preassignment_data = {json_cast('data')}, date_updated = {sql_now()} WHERE id = :id"),
                         {"data": json.dumps(preassignments), "id": row_dict["id"]}
                     )
                 else:
                     db.execute(
-                        text("INSERT INTO preassignments (year, month, preassignment_data) VALUES (:year, :month, :data)"),
+                        text(f"INSERT INTO preassignments (year, month, preassignment_data) VALUES (:year, :month, {json_cast('data')})"),
                         {"year": year, "month": month, "data": json.dumps(preassignments)}
                     )
                 flash("Preassignments updated successfully!", "success")
