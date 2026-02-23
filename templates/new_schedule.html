@@ -328,12 +328,68 @@
             document.getElementById('errors').innerHTML = '';
           } else if (data.status === 'failed') {
             const errBox = document.getElementById('errors');
-            const errs = Array.isArray(data.errors) ? data.errors : [];
-            if (errs.length) {
-              errBox.innerHTML = '<ul style="text-align:left; display:inline-block;">' +
-                errs.map(e => `<li>${e}</li>`).join('') + '</ul>';
+            const analysis = data.analysis;
+
+            if (analysis && analysis.culprits && analysis.culprits.length) {
+              let html = '<div style="text-align:left; display:inline-block; max-width:960px; font-size:14px;">';
+
+              // --- Summary box ---
+              html += '<div style="background:#fff3cd; border:1px solid #ffc107; border-radius:8px; padding:16px; margin-bottom:16px;">';
+              html += '<div style="font-size:16px; font-weight:bold; margin-bottom:10px;">🔍 Infeasibility Summary</div>';
+              html += '<div style="margin-bottom:8px; color:#555;">The schedule could not be generated. Most likely cause(s):</div>';
+              for (const c of analysis.culprits) {
+                const sev = c.severity;
+                const dot = sev === 'critical' ? '🔴' : (sev === 'high' ? '🟠' : '🟡');
+                html += `<div style="margin:6px 0; padding:8px 12px; background:${sev==='critical'?'#f8d7da':(sev==='high'?'#fff3cd':'#fff9e6')}; border-radius:4px; border-left:4px solid ${sev==='critical'?'#dc3545':(sev==='high'?'#fd7e14':'#ffc107')};">`;
+                html += `<span style="font-weight:bold;">${dot} ${c.day} — ${c.level}</span><br>`;
+                html += `<span style="color:#333;">${c.reason}</span>`;
+                html += '</div>';
+              }
+              html += '</div>';
+
+              // --- Eligibility overview table ---
+              if (analysis.eligibility && analysis.eligibility.length) {
+                html += '<div style="background:#f8f9fa; border:1px solid #dee2e6; border-radius:8px; padding:16px; margin-bottom:16px;">';
+                html += '<div style="font-weight:bold; margin-bottom:8px;">📊 Eligibility Overview</div>';
+                html += '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
+                html += '<tr style="background:#e9ecef;"><th style="padding:6px 10px; text-align:left;">Level</th><th style="padding:6px 10px;">Pool Size</th><th style="padding:6px 10px;">Min Eligible</th><th style="padding:6px 10px;">Tightest Day</th><th style="padding:6px 10px;">Avg Eligible</th></tr>';
+                for (const e of analysis.eligibility) {
+                  const minColor = e.min <= 2 ? '#dc3545' : (e.min <= 3 ? '#fd7e14' : '#28a745');
+                  html += `<tr style="border-bottom:1px solid #dee2e6;">`;
+                  html += `<td style="padding:6px 10px; font-weight:bold;">${e.level}</td>`;
+                  html += `<td style="padding:6px 10px; text-align:center;">${e.pool}</td>`;
+                  html += `<td style="padding:6px 10px; text-align:center; color:${minColor}; font-weight:bold;">${e.min}</td>`;
+                  html += `<td style="padding:6px 10px; text-align:center; font-family:monospace;">${e.min_day}</td>`;
+                  html += `<td style="padding:6px 10px; text-align:center;">${e.avg}</td>`;
+                  html += `</tr>`;
+                }
+                html += '</table></div>';
+              }
+
+              // --- Detail sections (collapsible) ---
+              if (analysis.sections && analysis.sections.length) {
+                for (const sec of analysis.sections) {
+                  html += `<details style="margin-bottom:12px; border:1px solid #dee2e6; border-radius:8px; overflow:hidden;">`;
+                  html += `<summary style="padding:12px 16px; background:#f8f9fa; cursor:pointer; font-weight:bold; font-size:14px;">${sec.icon || '📋'} ${sec.title} <span style="font-weight:normal; color:#666;">(${sec.items.length} items)</span></summary>`;
+                  html += `<div style="padding:12px 16px;">`;
+                  if (sec.subtitle) html += `<div style="color:#666; margin-bottom:8px; font-size:13px;">${sec.subtitle}</div>`;
+                  for (const item of sec.items.slice(0, 25)) {
+                    const sev = item.severity || 'medium';
+                    const border = sev === 'critical' ? '#dc3545' : (sev === 'high' ? '#fd7e14' : '#ffc107');
+                    html += `<div style="padding:6px 10px; margin:4px 0; border-left:3px solid ${border}; background:#fafafa; font-family:monospace; font-size:13px;">${item.text}</div>`;
+                  }
+                  if (sec.items.length > 25) {
+                    html += `<div style="color:#666; font-style:italic; margin-top:4px;">… and ${sec.items.length - 25} more</div>`;
+                  }
+                  html += '</div></details>';
+                }
+              }
+
+              html += '</div>';
+              errBox.innerHTML = html;
             } else {
-              errBox.textContent = 'No feasible schedule found. Try relaxing constraints or adjusting surgeon eligibility.';
+              const errs = Array.isArray(data.errors) ? data.errors : [];
+              errBox.textContent = errs.join(' ') || 'No feasible schedule found. Try relaxing constraints or adjusting surgeon eligibility.';
             }
           }
         }

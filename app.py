@@ -1204,46 +1204,39 @@ def create_app():
         except (TypeError, ValueError):
             flash("Invalid year or month provided.", category="error")
             return redirect(url_for('new_schedule'))
-        
-        # Compute month day range and metadata
+
         import calendar as _cal
         from datetime import date
+        from openpyxl import Workbook
+        from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+
         num_days = _cal.monthrange(year, month)[1]
         days = [date(year, month, d) for d in range(1, num_days + 1)]
 
-        # Weekend and holiday sets
         hk_h = holidays.HK(years=[year])
         holiday_dates = {d for d in hk_h if d.year == year and d.month == month}
         weekend_idx = {d.day for d in days if d.weekday() >= 5}
 
-        # Load surgeons and sort by team then call level rank then name
-        surgeons = get_all_surgeons()
+        all_surgeons = get_all_surgeons()
         level_rank = {"1A": 1, "1B": 1, "2A": 2, "2B": 3, "3": 4, "4": 5}
+
         def get_call_rank(call_levels):
             levels = parse_call_levels(call_levels or "")
             if not levels:
                 return 99
             return min(level_rank.get(l, 99) for l in levels)
-        surgeons.sort(key=lambda s: (
-            (s.get('team') or 'zzz'),
-            get_call_rank(s.get('call_levels')),
-            s.get('name','').lower()
-        ))
 
-        # Build row mapping with a blank row between teams for legibility
-        surgeon_id_to_row = {}
-        row_cursor = 2  # header at row 1
-        prev_team = None
-        for s in surgeons:
-            team = s.get('team')
-            if prev_team is not None and team != prev_team:
-                row_cursor += 1  # insert one empty separator row
-            surgeon_id_to_row[s['id']] = row_cursor
-            row_cursor += 1
-            prev_team = team
-        last_row = row_cursor - 1
+        def call_levels_label(call_levels):
+            levels = parse_call_levels(call_levels or "")
+            return ",".join(sorted(levels, key=lambda l: level_rank.get(l, 99))) if levels else ""
 
-        # Fetch requests for the month
+        def get_primary_level(call_levels):
+            levels = parse_call_levels(call_levels or "")
+            if not levels:
+                return "Other"
+            best = min(levels, key=lambda l: level_rank.get(l, 99))
+            return best
+
         start_date = date(year, month, 1)
         next_date = date(year + (1 if month == 12 else 0), 1 if month == 12 else month + 1, 1)
         db = get_db()
@@ -1256,77 +1249,70 @@ def create_app():
         )
         req_rows = db.execute(stmt, {"start_date": start_date.isoformat(), "next_date": next_date.isoformat()}).mappings().all()
 
-        # Build a matrix of marks with request types for coloring/labels
         marks = {}
         for r in req_rows:
             rtype = r['request_type']
             if rtype in ('unavailable', 'no_call', 'study_leave'):
                 marks[(r['surgeon_id'], r['date'].day)] = rtype
 
-        # Build workbook
-        from openpyxl import Workbook
-        from openpyxl.styles import PatternFill, Font, Alignment
-        wb = Workbook()
-        ws = wb.active
-        ws.title = "Requests"
-
-        # Header row
-        ws.cell(row=1, column=1, value="Surgeon")
-        for d in range(1, num_days + 1):
-            ws.cell(row=1, column=1 + d, value=d)
-
-        # Write surgeon names with separator rows preserved
-            for s in surgeons:
-                row = surgeon_id_to_row[s['id']]
-                name = s.get('name')
-                team = s.get('team')
-                ws.cell(row=row, column=1, value=f"{team or ''} - {name}")
-
-        # Styles
+        # Shared styles
         dark_red = PatternFill(start_color="8B0000", end_color="8B0000", fill_type="solid")
         orange_fill = PatternFill(start_color="FFD580", end_color="FFD580", fill_type="solid")
         green_fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
         weekend_fill = PatternFill(start_color="D3D3D3", end_color="D3D3D3", fill_type="solid")
         holiday_fill = PatternFill(start_color="ADD8E6", end_color="ADD8E6", fill_type="solid")
+        pct_green = PatternFill(start_color="28A745", end_color="28A745", fill_type="solid")
+        pct_yellow = PatternFill(start_color="FFC107", end_color="FFC107", fill_type="solid")
+        pct_red = PatternFill(start_color="DC3545", end_color="DC3545", fill_type="solid")
         header_font = Font(bold=True)
+        summary_font = Font(bold=True, size=10)
+        white_font = Font(bold=True, color="FFFFFF")
         center = Alignment(horizontal="center", vertical="center")
+        thin_border_top = Border(top=Side(style='thin'))
 
-        # Apply header style
-        for cell in ws[1]:
-            cell.font = header_font
-            cell.alignment = center
+        def _write_header(ws):
+            ws.cell(row=1, column=1, value="Surgeon")
+            ws.cell(row=1, column=2, value="Levels")
+            for d in range(1, num_days + 1):
+                ws.cell(row=1, column=2 + d, value=d)
+            for cell in ws[1]:
+                cell.font = header_font
+                cell.alignment = center
 
-        # Pre-color weekend/holiday columns
-        for d in range(1, num_days + 1):
-            col_idx = 1 + d
-            the_date = date(year, month, d)
-            base_fill = None
-            if the_date in holiday_dates:
-                base_fill = holiday_fill
-            elif d in weekend_idx:
-                base_fill = weekend_fill
-            if base_fill:
-                for r in range(2, last_row + 1):
-                    ws.cell(row=r, column=col_idx).fill = base_fill
+        def _apply_weekend_holiday_bg(ws, last_row):
+            for d in range(1, num_days + 1):
+                col_idx = 2 + d
+                the_date = date(year, month, d)
+                base_fill = None
+                if the_date in holiday_dates:
+                    base_fill = holiday_fill
+                elif d in weekend_idx:
+                    base_fill = weekend_fill
+                if base_fill:
+                    for r in range(2, last_row + 1):
+                        c = ws.cell(row=r, column=col_idx)
+                        if c.fill == PatternFill():
+                            c.fill = base_fill
 
-        # Fill marks
-        for (sid, d), rtype in marks.items():
-            row = surgeon_id_to_row.get(sid)
-            if not row:
-                continue
-            cell = ws.cell(row=row, column=1 + d)
-            if rtype == 'unavailable':
-                cell.value = 'U'
-                cell.fill = dark_red
-            elif rtype == 'no_call':
-                cell.value = 'N'
-                cell.fill = orange_fill
-            elif rtype == 'study_leave':
-                cell.value = 'SL'
-                cell.fill = green_fill
-            cell.alignment = center
+        def _fill_marks(ws, surgeon_id_to_row):
+            for (sid, d), rtype in marks.items():
+                row = surgeon_id_to_row.get(sid)
+                if not row:
+                    continue
+                cell = ws.cell(row=row, column=2 + d)
+                if rtype == 'unavailable':
+                    cell.value = 'U'
+                    cell.fill = dark_red
+                    cell.font = white_font
+                elif rtype == 'no_call':
+                    cell.value = 'N'
+                    cell.fill = orange_fill
+                elif rtype == 'study_leave':
+                    cell.value = 'SL'
+                    cell.fill = green_fill
+                cell.alignment = center
 
-        # Autosize columns
+        def _autosize(ws):
             for col in ws.columns:
                 max_len = 0
                 col_letter = col[0].column_letter
@@ -1335,7 +1321,125 @@ def create_app():
                         max_len = max(max_len, len(str(cell.value)))
                 ws.column_dimensions[col_letter].width = min(18, max(6, max_len + 2))
 
-        # Return file
+        # ---- Tab 1: By Team → Level ----
+        surgeons_team = sorted(all_surgeons, key=lambda s: (
+            (s.get('team') or 'zzz'),
+            get_call_rank(s.get('call_levels')),
+            s.get('name', '').lower()
+        ))
+        wb = Workbook()
+        ws1 = wb.active
+        ws1.title = "By Team"
+        _write_header(ws1)
+
+        id_to_row_t = {}
+        row_cursor = 2
+        prev_team = None
+        for s in surgeons_team:
+            team = s.get('team')
+            if prev_team is not None and team != prev_team:
+                row_cursor += 1
+            id_to_row_t[s['id']] = row_cursor
+            ws1.cell(row=row_cursor, column=1, value=f"{team or ''} - {s.get('name')}")
+            ws1.cell(row=row_cursor, column=2, value=call_levels_label(s.get('call_levels')))
+            row_cursor += 1
+            prev_team = team
+        last_row_t = row_cursor - 1
+
+        _fill_marks(ws1, id_to_row_t)
+        _apply_weekend_holiday_bg(ws1, last_row_t)
+        _autosize(ws1)
+
+        # ---- Tab 2: By Level → Team (with availability % summary rows) ----
+        surgeons_level = sorted(all_surgeons, key=lambda s: (
+            get_call_rank(s.get('call_levels')),
+            (s.get('team') or 'zzz'),
+            s.get('name', '').lower()
+        ))
+        ws2 = wb.create_sheet("By Level")
+        _write_header(ws2)
+
+        id_to_row_l = {}
+        summary_rows = []
+        row_cursor = 2
+        prev_rank = None
+        group_start = 2
+        group_ids = []
+
+        for s in surgeons_level:
+            rank = get_call_rank(s.get('call_levels'))
+            if prev_rank is not None and rank != prev_rank:
+                summary_rows.append((row_cursor, list(group_ids), prev_rank))
+                row_cursor += 1
+                row_cursor += 1
+                group_ids = []
+                group_start = row_cursor
+            id_to_row_l[s['id']] = row_cursor
+            ws2.cell(row=row_cursor, column=1, value=f"{s.get('name')} ({s.get('team') or ''})")
+            ws2.cell(row=row_cursor, column=2, value=call_levels_label(s.get('call_levels')))
+            group_ids.append(s['id'])
+            row_cursor += 1
+            prev_rank = rank
+
+        if group_ids:
+            summary_rows.append((row_cursor, list(group_ids), prev_rank))
+            row_cursor += 1
+
+        last_row_l = row_cursor - 1
+
+        _fill_marks(ws2, id_to_row_l)
+
+        rank_to_label = {}
+        for lvl, rk in level_rank.items():
+            rank_to_label.setdefault(rk, []).append(lvl)
+        for rk in rank_to_label:
+            rank_to_label[rk] = "/".join(sorted(rank_to_label[rk]))
+
+        for summary_row, sids, rank_val in summary_rows:
+            pool_size = len(sids)
+            label = rank_to_label.get(rank_val, "Other")
+            ws2.cell(row=summary_row, column=1, value=f"% Available ({label})")
+            ws2.cell(row=summary_row, column=1).font = summary_font
+            ws2.cell(row=summary_row, column=1).border = thin_border_top
+
+            for d in range(1, num_days + 1):
+                unavail_count = sum(1 for sid in sids if (sid, d) in marks)
+                avail_pct = ((pool_size - unavail_count) / pool_size * 100) if pool_size > 0 else 0
+                cell = ws2.cell(row=summary_row, column=2 + d)
+                cell.value = f"{avail_pct:.0f}%"
+                cell.alignment = center
+                cell.font = summary_font
+                cell.border = thin_border_top
+                if avail_pct > 50:
+                    cell.fill = pct_green
+                    cell.font = Font(bold=True, color="FFFFFF", size=10)
+                elif avail_pct > 25:
+                    cell.fill = pct_yellow
+                else:
+                    cell.fill = pct_red
+                    cell.font = Font(bold=True, color="FFFFFF", size=10)
+
+        _apply_weekend_holiday_bg(ws2, last_row_l)
+        _autosize(ws2)
+
+        # ---- Tab 3: By Name (A-Z) ----
+        surgeons_name = sorted(all_surgeons, key=lambda s: s.get('name', '').lower())
+        ws3 = wb.create_sheet("By Name")
+        _write_header(ws3)
+
+        id_to_row_n = {}
+        row_cursor = 2
+        for s in surgeons_name:
+            id_to_row_n[s['id']] = row_cursor
+            ws3.cell(row=row_cursor, column=1, value=s.get('name'))
+            ws3.cell(row=row_cursor, column=2, value=call_levels_label(s.get('call_levels')))
+            row_cursor += 1
+        last_row_n = row_cursor - 1
+
+        _fill_marks(ws3, id_to_row_n)
+        _apply_weekend_holiday_bg(ws3, last_row_n)
+        _autosize(ws3)
+
         out = io.BytesIO()
         wb.save(out)
         out.seek(0)
@@ -1918,6 +2022,7 @@ def create_app():
             resp['solution'] = job['solution']
         elif job['status'] == 'failed':
             resp['errors'] = job.get('solution', {}).get('errors') if isinstance(job.get('solution'), dict) else None
+            resp['analysis'] = job.get('solution', {}).get('analysis') if isinstance(job.get('solution'), dict) else None
         return jsonify(resp)
 
     # --- Route to cancel a running job ---

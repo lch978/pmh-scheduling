@@ -531,18 +531,21 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
         indicator_1B[d] = b1B
 
     # --- Force 1B to be filled on weekends and public holidays (toggle) ---
-    if enable_force_1B_weekend and not allow_empty:
+    if enable_force_1B_weekend:
         for d, day_str in enumerate(days):
             dt = datetime.datetime.strptime(day_str, "%Y-%m-%d").date()
             is_weekend_day = dt.weekday() >= 5
             is_holiday_day = public_holidays and (day_str in public_holidays)
             if is_weekend_day or is_holiday_day:
+                if allow_empty:
+                    real_1b = [sid for sid in domains_by_day[d]["1B"] if sid != -1]
+                    if not real_1b:
+                        continue
                 add_named_constraint(f"Force 1B on {day_str}: 1B != -1",
                     model.Add, X[(d, "1B")] != -1)
     
     # --- Level‑2 Grouping & Supervision Constraints (toggle) ---
-    # In allow-empty mode, skip Level-2 supervision hard rules to guarantee feasibility.
-    if enable_level2_supervision and not allow_empty:
+    if enable_level2_supervision:
         for d in range(num_days):
             # 1) If a group‑1 surgeon is on 2A, must have someone in 2B.
             for s in group1_ids:
@@ -1160,6 +1163,192 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
             diagnostics.append(f"Fairness hard cap within call-level cohorts could not be satisfied (cap ≤ {fairness_hard_cap_range}) under current eligibility/availability.")
         else:
             diagnostics.append("No feasible assignment exists under current constraints. Try relaxing constraints or adding eligible surgeons.")
+
+        # --- Detailed Availability & Constraint Analysis ---
+        analysis = None
+        try:
+            analysis = {"culprits": [], "sections": [], "eligibility": []}
+
+            # -- Collect all scored issues for culprit ranking --
+            scored_issues = []
+
+            # 1) Bottleneck slots: days/levels with ≤3 eligible surgeons
+            bn_items = []
+            for d_idx, day_str in enumerate(days):
+                for lvl in all_levels:
+                    if lvl == "2B":
+                        continue
+                    eligible = [sid for sid in domains_by_day[d_idx][lvl] if sid != -1]
+                    base_count = len([sid for sid in base_domains.get(lvl, []) if sid != -1])
+                    if base_count == 0:
+                        continue
+                    unavail = base_count - len(eligible)
+                    if len(eligible) <= 3:
+                        dt = datetime.datetime.strptime(day_str, "%Y-%m-%d").date()
+                        is_wk = dt.weekday() >= 5
+                        is_hol = day_str in (public_holidays or set())
+                        names = [id_to_surgeon[sid]["name"] for sid in eligible if sid in id_to_surgeon]
+                        severity = "critical" if len(eligible) <= 1 else ("high" if len(eligible) <= 2 else "medium")
+                        tag = " [Weekend]" if is_wk else (" [Holiday]" if is_hol else "")
+                        item = {
+                            "day": day_str, "level": lvl, "eligible": len(eligible),
+                            "pool": base_count, "names": names, "tag": tag.strip(),
+                            "severity": severity,
+                            "text": f"{day_str}{tag} {lvl}: {len(eligible)}/{base_count} eligible → {', '.join(names) or 'NONE'}"
+                        }
+                        bn_items.append(item)
+                        score = (3 - len(eligible)) * 10 + (5 if is_wk or is_hol else 0)
+                        scored_issues.append((score, "bottleneck", item))
+
+            if bn_items:
+                bn_items.sort(key=lambda x: (x["eligible"], x["day"]))
+                analysis["sections"].append({
+                    "title": "Bottleneck Slots",
+                    "subtitle": f"{len(bn_items)} day/level slots with ≤3 eligible surgeons after availability pruning",
+                    "icon": "🔴",
+                    "items": bn_items
+                })
+
+            # 2) Supervision conflicts
+            sup_items = []
+            supervisors_set = set(group3_ids + group4_ids)
+            for d_idx, day_str in enumerate(days):
+                cand_2a = [sid for sid in domains_by_day[d_idx]["2A"] if sid != -1]
+                cand_2b_super = [sid for sid in domains_by_day[d_idx]["2B"] if sid in supervisors_set]
+                if not cand_2a:
+                    continue
+                all_need_super = all(sid in group1_ids for sid in cand_2a)
+                if all_need_super and not cand_2b_super:
+                    names_2a = [id_to_surgeon[sid]["name"] for sid in cand_2a if sid in id_to_surgeon]
+                    item = {
+                        "day": day_str, "level": "2A/2B", "severity": "critical",
+                        "names_2a": names_2a,
+                        "text": f"{day_str}: all 2A candidates need supervision ({', '.join(names_2a)}) but no 2B supervisor available"
+                    }
+                    sup_items.append(item)
+                    scored_issues.append((50, "supervision", item))
+
+            if sup_items:
+                analysis["sections"].append({
+                    "title": "Supervision Conflicts",
+                    "subtitle": f"{len(sup_items)} day(s) where 2A needs a 2B supervisor but none is available",
+                    "icon": "⛔",
+                    "items": sup_items
+                })
+
+            # 3) Leave clustering
+            level_pools = {
+                "1A/1B": sorted(set(sid for sid in (domain_1A + domain_1B) if sid != -1)),
+                "2A (group 1+2)": sorted(set(group1_ids + group2_ids)),
+                "2B supervisors (group 3+4)": sorted(set(group3_ids + group4_ids)),
+                "Level 3": sorted(set(sid for sid in domain_3 if sid != -1)),
+                "Level 4": sorted(set(sid for sid in domain_4 if sid != -1)),
+            }
+            cluster_items = []
+            for pool_label, pool_ids in level_pools.items():
+                if len(pool_ids) < 2:
+                    continue
+                for d_idx, day_str in enumerate(days):
+                    unavail_names = []
+                    for sid in pool_ids:
+                        for req in availability.get(sid, []):
+                            req_date = _parse_req_date(req.get('date'))
+                            if req_date and req_date.isoformat() == day_str and req.get('request_type') in ('unavailable', 'study_leave', 'no_call'):
+                                unavail_names.append(id_to_surgeon.get(sid, {}).get("name", f"ID {sid}"))
+                                break
+                    threshold = max(2, len(pool_ids) // 2)
+                    if len(unavail_names) >= threshold:
+                        pct = round(100 * len(unavail_names) / len(pool_ids))
+                        severity = "critical" if pct >= 75 else ("high" if pct >= 60 else "medium")
+                        item = {
+                            "day": day_str, "pool": pool_label, "unavailable": len(unavail_names),
+                            "total": len(pool_ids), "pct": pct, "names": unavail_names,
+                            "severity": severity,
+                            "text": f"{day_str} {pool_label}: {len(unavail_names)}/{len(pool_ids)} ({pct}%) unavailable — {', '.join(unavail_names)}"
+                        }
+                        cluster_items.append(item)
+                        scored_issues.append((pct // 10, "clustering", item))
+
+            if cluster_items:
+                cluster_items.sort(key=lambda x: (-x["pct"], x["day"]))
+                analysis["sections"].append({
+                    "title": "Leave Clustering",
+                    "subtitle": f"{len(cluster_items)} instances where ≥50% of a level pool is unavailable on the same day",
+                    "icon": "📋",
+                    "items": cluster_items
+                })
+
+            # 4) Weekend/holiday pressure
+            wk_items = []
+            for d_idx, day_str in enumerate(days):
+                if not (is_weekend[d_idx] or is_ph[d_idx]):
+                    continue
+                tight = []
+                for lvl in ["1A", "1B", "2A", "3", "4"]:
+                    eligible = [sid for sid in domains_by_day[d_idx][lvl] if sid != -1]
+                    base_count = len([sid for sid in base_domains.get(lvl, []) if sid != -1])
+                    unavail = base_count - len(eligible)
+                    if len(eligible) <= 3 and unavail > 0:
+                        tight.append({"level": lvl, "eligible": len(eligible), "pool": base_count})
+                if tight:
+                    tag = "Weekend" if is_weekend[d_idx] else "Holiday"
+                    wk_items.append({
+                        "day": day_str, "tag": tag, "levels": tight, "severity": "medium",
+                        "text": f"{day_str} [{tag}] " + ", ".join(f"{t['level']}: {t['eligible']}/{t['pool']}" for t in tight)
+                    })
+
+            if wk_items:
+                analysis["sections"].append({
+                    "title": "Weekend / Holiday Pressure",
+                    "subtitle": f"{len(wk_items)} weekend/holiday day(s) with tight staffing",
+                    "icon": "📅",
+                    "items": wk_items
+                })
+
+            # 5) Per-level eligibility summary
+            for lvl in all_levels:
+                if lvl == "2B":
+                    continue
+                counts = [len([sid for sid in domains_by_day[d][lvl] if sid != -1]) for d in range(num_days)]
+                base_count = len([sid for sid in base_domains.get(lvl, []) if sid != -1])
+                min_c = min(counts) if counts else 0
+                avg_c = round(sum(counts) / len(counts), 1) if counts else 0
+                min_day = days[counts.index(min_c)] if counts else ""
+                analysis["eligibility"].append({
+                    "level": lvl, "pool": base_count, "min": min_c,
+                    "min_day": min_day, "avg": avg_c
+                })
+
+            # -- Build culprits: top issues by score --
+            scored_issues.sort(key=lambda x: -x[0])
+            seen_keys = set()
+            for score, issue_type, item in scored_issues:
+                key = (item.get("day"), item.get("level", item.get("pool", "")))
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                reason = ""
+                if issue_type == "supervision":
+                    reason = "All 2A candidates need a 2B supervisor but none is available"
+                elif issue_type == "bottleneck":
+                    reason = f"Only {item['eligible']} of {item['pool']} surgeons eligible (rest on leave or blocked by 3-day rule)"
+                elif issue_type == "clustering":
+                    reason = f"{item['unavailable']} of {item['total']} ({item['pct']}%) surgeons in {item['pool']} are on leave"
+                analysis["culprits"].append({
+                    "day": item.get("day", ""),
+                    "level": item.get("level", item.get("pool", "")),
+                    "severity": item.get("severity", "medium"),
+                    "reason": reason
+                })
+                if len(analysis["culprits"]) >= 5:
+                    break
+
+        except Exception as _analysis_err:
+            import traceback
+            print(f"[ANALYSIS] ERROR: {_analysis_err}")
+            print(traceback.format_exc())
+            diagnostics.append(f"[Analysis error: {_analysis_err}]")
+
         # Try a diagnostic run with caps relaxed to identify violating cohorts and their ranges (only if cap enabled)
         if enable_fairness_hard_cap and not _diagnostic_run:
             try:
@@ -1300,4 +1489,7 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                 pass
         if not diagnostics:
             diagnostics.append("No feasible assignment exists under current constraints. Try relaxing constraints or adding eligible surgeons.")
-        return {"errors": diagnostics}, None
+        result = {"errors": diagnostics}
+        if analysis:
+            result["analysis"] = analysis
+        return result, None
