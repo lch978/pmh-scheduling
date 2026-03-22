@@ -73,29 +73,78 @@
     button {
       cursor: pointer;
       color: #333;
-      background-color: #e0f7fa; /* Light blue background */
+      background-color: #e0f7fa;
     }
     button:hover {
       background-color: #e6f7ff;
     }
+
+    /* Surgeon selector table */
+    .surgeon-grid { max-width:900px; margin:0 auto 20px; border:1px solid #ddd; border-radius:8px; overflow:hidden; background:#fff; }
+    .surgeon-grid-header { display:flex; background:#f5f5f5; border-bottom:1px solid #ddd; font-weight:700; font-size:13px; text-align:center; }
+    .surgeon-grid-header > div { flex:1; padding:8px 4px; border-right:1px solid #eee; }
+    .surgeon-grid-header > div:last-child { border-right:none; }
+    .surgeon-grid-body { display:flex; }
+    .surgeon-grid-col { flex:1; border-right:1px solid #eee; min-width:0; }
+    .surgeon-grid-col:last-child { border-right:none; }
+    .surgeon-cell { padding:6px 10px; font-size:13px; cursor:pointer; transition:background .12s; border-bottom:1px solid #f0f0f0; display:flex; align-items:center; gap:6px; }
+    .surgeon-cell:last-child { border-bottom:none; }
+    .surgeon-cell:hover { background:#e3f2fd; }
+    .surgeon-cell.selected { background:#bbdefb; font-weight:600; }
+    .surgeon-cell .cell-level { font-size:10px; color:#888; flex-shrink:0; }
+    .surgeon-cell .cell-name { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   </style>
 {% endblock %}
 {% block content %}
   <h1 style="text-align: center;">Surgeon Availability & No Call Requests</h1>
   <br>
-  <!-- Single surgeon selection with default "--Please select--" -->
-  <form method="get" action="{{ url_for('availability') }}" style="text-align: center; margin-bottom: 20px;">
-      <select name="surgeon_id" id="surgeon_id_get" required>
-         <option value="">--Please select--</option>
-         {% for surgeon in surgeons %}
-              <option value="{{ surgeon.id }}"
-                {% if selected_surgeon_id and surgeon.id == selected_surgeon_id %}selected{% endif %}>
-                {{ surgeon.name }}
-              </option>
-         {% endfor %}
-      </select>
-      <button type="submit">Show My Requests</button>
+  <!-- Surgeon selection grid: columns = teams, rows ordered by call level -->
+  <p style="text-align:center; margin-bottom:8px; font-size:14px; color:#555;">Select a surgeon to view or submit requests:</p>
+  <div class="surgeon-grid" id="surgeonGrid">
+    {% set level_order = {'1A':0,'1B':1,'2A':2,'2B':3,'3':4,'4':5} %}
+    {% set teams = surgeons | map(attribute='team') | select('string') | unique | sort | list %}
+    {% if teams | length == 0 %}{% set teams = [''] %}{% endif %}
+    <div class="surgeon-grid-header">
+      {% for t in teams %}
+      <div>{{ t if t else 'No Team' }}</div>
+      {% endfor %}
+    </div>
+    <div class="surgeon-grid-body">
+      {% for t in teams %}
+      <div class="surgeon-grid-col">
+        {% set ns = namespace(team_surgeons=[]) %}
+        {% for s in surgeons %}
+          {% if (s.team or '') == (t or '') %}
+            {% set lvls = s.call_levels.split(',') if s.call_levels else [] %}
+            {% set ns2 = namespace(best=99) %}
+            {% for l in lvls %}
+              {% set lv = level_order.get(l.strip(), 99) %}
+              {% if lv < ns2.best %}{% set ns2.best = lv %}{% endif %}
+            {% endfor %}
+            {% set ns.team_surgeons = ns.team_surgeons + [(ns2.best, s)] %}
+          {% endif %}
+        {% endfor %}
+        {% for rank, s in ns.team_surgeons | sort(attribute='0') %}
+        <div class="surgeon-cell{% if selected_surgeon_id and s.id == selected_surgeon_id %} selected{% endif %}"
+             data-sid="{{ s.id }}" onclick="selectSurgeon({{ s.id }})">
+          <span class="cell-level">{{ s.call_levels or '' }}</span>
+          <span class="cell-name">{{ s.name }}</span>
+        </div>
+        {% endfor %}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  <!-- Hidden form for surgeon selection (replaces old select+submit) -->
+  <form id="surgeonSelectForm" method="get" action="{{ url_for('availability') }}" style="display:none;">
+    <input type="hidden" name="surgeon_id" id="surgeon_id_get" value="{{ selected_surgeon_id or '' }}">
   </form>
+  <script>
+    function selectSurgeon(sid) {
+      document.getElementById('surgeon_id_get').value = sid;
+      document.getElementById('surgeonSelectForm').submit();
+    }
+  </script>
 
   {% if deadline_dt %}
     <div style="max-width: 900px; margin: 0 auto 20px auto; padding: 12px; border-radius: 6px; background-color: #f0f4ff; border: 1px solid #c3d4ff;">

@@ -2,66 +2,136 @@
 {% block title %}Edit and Publish{% endblock %}
 {% block head %}
 <style>
-  .controls {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    justify-content: center;
-    align-items: center;
-    margin: 8px 0;
-  }
-  .btn {
-    padding: 10px 15px;
-    font-size: 14px;
-    margin: 4px;
-    border: none;
-    border-radius: 4px;
-    color: #fff;
-    cursor: pointer;
-    transition: background-color 0.2s ease-in-out;
-  }
-  .btn-primary { background-color: #0077ff; }
-  .btn-primary:hover { background-color: #0062cc; }
-  .btn-success { background-color: #2e7d32; }
-  .btn-success:hover { background-color: #256628; }
-  .btn-secondary { background-color: #6c757d; }
-  .btn-secondary:hover { background-color: #5a6268; }
-  .btn-green { background-color: #5cb85c; }
-  .btn-green:hover { background-color: #4cae4c; }
+  .ep-container { max-width:1400px; margin:auto; background:#fff; padding:20px; border-radius:8px; box-shadow:0 2px 4px rgba(0,0,0,0.1); }
+  .ep-container h1 { text-align:center; margin-bottom:12px; font-size:1.5rem; }
+  .ep-controls { display:flex; flex-wrap:wrap; gap:10px; justify-content:center; align-items:center; margin-bottom:12px; }
+  .ep-controls label { font-weight:600; font-size:14px; }
+  .ep-controls select { padding:6px 10px; border-radius:4px; border:1px solid #ccc; font-size:14px; }
+  .btn { padding:8px 14px; font-size:13px; border:none; border-radius:4px; color:#fff; cursor:pointer; transition:background-color .15s, box-shadow .15s; }
+  .btn:hover { box-shadow:0 1px 4px rgba(0,0,0,0.15); }
+  .btn-primary { background:#0077ff; } .btn-primary:hover { background:#0062cc; }
+  .btn-success { background:#2e7d32; } .btn-success:hover { background:#256628; }
+  .btn-secondary { background:#6c757d; } .btn-secondary:hover { background:#5a6268; }
+  .btn-green { background:#5cb85c; } .btn-green:hover { background:#4cae4c; }
+  .btn-danger { background:#c62828; } .btn-danger:hover { background:#a52222; }
+  .btn-sm { padding:5px 10px; font-size:12px; }
+
+  .ep-layout { display:flex; gap:12px; align-items:flex-start; }
+  .ep-versions { width:220px; min-width:220px; border:1px solid #ddd; border-radius:8px; padding:10px; position:sticky; top:12px; max-height:calc(100vh - 200px); overflow-y:auto; }
+  .ep-versions-title { font-weight:bold; margin-bottom:8px; font-size:14px; }
+  .ep-ver-item { border:1px solid #eee; border-radius:6px; padding:8px; margin-bottom:6px; }
+  .ep-ver-item .ver-label { font-weight:600; font-size:13px; }
+  .ep-ver-item .ver-pub { font-size:11px; color:#2e7d32; margin-left:4px; }
+  .ep-ver-actions { display:flex; gap:4px; margin-top:6px; flex-wrap:wrap; }
+  .ep-main { flex:1; min-width:0; }
+  .ep-actions { display:flex; flex-wrap:wrap; gap:8px; justify-content:center; margin-top:12px; }
+
+  /* Violations banner */
+  .vb-container { margin-bottom:12px; border-radius:6px; overflow:hidden; border:1px solid #e0e0e0; }
+  .vb-header { display:flex; justify-content:space-between; align-items:center; padding:8px 14px; cursor:pointer; user-select:none; }
+  .vb-header.has-hard { background:#ffebee; border-bottom:1px solid #ef9a9a; }
+  .vb-header.has-soft { background:#fff3e0; border-bottom:1px solid #ffcc80; }
+  .vb-header.all-clear { background:#e8f5e9; border-bottom:1px solid #a5d6a7; }
+  .vb-count { font-weight:600; font-size:14px; }
+  .vb-toggle { font-size:12px; color:#555; cursor:pointer; border:none; background:none; text-decoration:underline; }
+  .vb-list { max-height:220px; overflow-y:auto; }
+  .vb-item { display:flex; align-items:center; gap:10px; padding:6px 14px; border-bottom:1px solid #f0f0f0; font-size:13px; }
+  .vb-item:last-child { border-bottom:none; }
+  .vb-severity { display:inline-block; padding:2px 7px; border-radius:3px; font-size:11px; font-weight:600; color:#fff; flex-shrink:0; }
+  .vb-severity.hard { background:#c62828; }
+  .vb-severity.soft { background:#e65100; }
+  .vb-msg { flex:1; }
+  .vb-override label { font-size:12px; cursor:pointer; white-space:nowrap; }
+
+  /* Schedule table */
+  .sched-table { width:100%; border-collapse:collapse; font-size:13px; }
+  .sched-table th { border:1px solid #ccc; padding:6px 8px; background:#f5f5f5; position:sticky; top:0; z-index:2; text-align:center; font-size:13px; }
+  .sched-table td { border:1px solid #ccc; padding:0; text-align:center; position:relative; }
+  .sched-table tr.weekend-row > td { background:#f0f3fa; }
+  .sched-table tr.holiday-row > td { background:#fef3e8; }
+  .sched-table tr.weekend-row.holiday-row > td { background:#ede8f5; }
+  .sched-table tr.is-expanded > td { border-bottom-color:transparent; background:#e3f2fd; }
+  .sched-table .day-cell { font-weight:600; font-size:12px; white-space:nowrap; min-width:70px; text-align:left; padding:6px 8px; cursor:pointer; user-select:none; }
+  .sched-table .day-cell:hover { background:#e3f2fd; }
+
+  /* Block cells */
+  .block { padding:7px 6px; font-size:12px; cursor:pointer; user-select:none; transition:background .12s; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-height:30px; display:flex; align-items:center; justify-content:center; }
+  .block:hover { background:#e3f2fd; }
+  .block.empty { color:#aaa; font-style:italic; }
+  .block.nc-assigned { color:#bf360c; font-weight:600; background:#fff8e1; }
+  .block.al-assigned { color:#999; background:#f5f5f5; }
+
+  /* Cell validation highlights (on td) */
+  .sched-table td.cell-error { outline:2px solid #c62828; outline-offset:-2px; }
+  .sched-table td.cell-warning { outline:2px solid #e65100; outline-offset:-2px; }
+  .sched-table td.cell-overridden { outline:2px dashed #ff9800; outline-offset:-2px; }
+
+  /* Expansion row */
+  .expanded-row > td { padding:0 !important; border-top:none !important; background:#f7f9fc; }
+  .expand-panel { display:flex; border-top:2px solid #1565c0; }
+  .expand-close-col { display:flex; align-items:flex-start; justify-content:center; padding:8px 4px; min-width:70px; }
+  .expand-close-btn { background:none; border:1px solid #ccc; border-radius:4px; padding:3px 8px; cursor:pointer; font-size:11px; color:#555; }
+  .expand-close-btn:hover { background:#eee; }
+  .expand-col { flex:1; border-right:1px solid #e0e0e0; min-width:0; }
+  .expand-col:last-child { border-right:none; }
+  .expand-col-header { font-weight:700; font-size:11px; text-align:center; padding:6px 4px 4px; color:#1565c0; border-bottom:1px solid #e0e0e0; background:#eef3fb; }
+  .expand-items { max-height:220px; overflow-y:auto; padding:2px 0; }
+  .expand-item { padding:4px 8px; font-size:12px; cursor:pointer; border-radius:0; transition:background .1s; display:flex; align-items:center; gap:5px; }
+  .expand-item:hover { background:#e3f2fd; }
+  .expand-item.selected { background:#bbdefb; font-weight:600; }
+  .expand-item .dot { width:7px; height:7px; border-radius:50%; flex-shrink:0; }
+  .expand-item .dot.avail { background:#4caf50; }
+  .expand-item .dot.nc { background:#ff9800; }
+  .expand-item .dot.al { background:#bdbdbd; }
+  .expand-item .ename { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .expand-item.status-nc .ename { color:#e65100; }
+  .expand-item.status-al .ename { color:#999; }
+  .expand-item .etag { font-size:10px; color:#999; flex-shrink:0; }
+  .expand-item.status-al { opacity:.7; }
+  .expand-item.status-al:hover { opacity:1; }
+  .expand-item.unassign-item { justify-content:center; color:#999; font-style:italic; font-size:11px; border-bottom:1px solid #eee; padding:5px 8px; }
+  .expand-item.unassign-item:hover { background:#fce4ec; color:#c62828; }
 </style>
 {% endblock %}
 {% block content %}
-<div class="schedule-container" style="max-width:1200px;margin:auto;background:#fff;padding:20px;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,0.1);">
-  <h1 style="text-align:center;margin-bottom:12px;">Edit and Publish</h1>
-  <div class="controls" style="margin-bottom:12px;">
-    <div>
-      <label>Year:</label>
-      <select id="year">
-        {% for y in range(2020, 2031) %}
-          <option value="{{ y }}" {% if y==year %}selected{% endif %}>{{ y }}</option>
-        {% endfor %}
-      </select>
-      <label>Month:</label>
-      <select id="month">
-        {% for m in range(1,13) %}
-          <option value="{{ m }}" {% if m==month %}selected{% endif %}>{{ m }}</option>
-        {% endfor %}
-      </select>
-    </div>
+<div class="ep-container">
+  <h1>Edit and Publish</h1>
+
+  <div class="ep-controls">
+    <label>Year:</label>
+    <select id="year">
+      {% for y in range(2020, 2031) %}
+      <option value="{{ y }}" {% if y==year %}selected{% endif %}>{{ y }}</option>
+      {% endfor %}
+    </select>
+    <label>Month:</label>
+    <select id="month">
+      {% for m in range(1,13) %}
+      <option value="{{ m }}" {% if m==month %}selected{% endif %}>{{ m }}</option>
+      {% endfor %}
+    </select>
     <button id="btnLoad" class="btn btn-secondary">Load Month</button>
   </div>
 
-  <div style="display:flex; gap:16px; align-items:flex-start;">
-    <div id="versionsPanel" style="width:280px; border:1px solid #ddd; border-radius:8px; padding:10px; position:sticky; top:12px; height: calc(100vh - 200px); overflow:auto;">
-      <div style="font-weight:bold; margin-bottom:8px;">Versions</div>
-      <div id="versionsList" style="display:flex; flex-direction:column; gap:6px;"></div>
+  <div id="violationsBanner" class="vb-container" style="display:none;">
+    <div id="vbHeader" class="vb-header all-clear">
+      <span id="vbCount" class="vb-count"></span>
+      <button id="vbToggle" class="vb-toggle">Show details</button>
+    </div>
+    <div id="vbList" class="vb-list" style="display:none;"></div>
+  </div>
+
+  <div class="ep-layout">
+    <div id="versionsPanel" class="ep-versions">
+      <div class="ep-versions-title">Versions</div>
+      <div id="versionsList"></div>
     </div>
 
-    <div style="flex:1;">
+    <div class="ep-main">
       <div id="errors" style="color:#b00020;text-align:center;margin:8px 0;"></div>
       <div id="tableContainer"></div>
 
-      <div class="controls" style="margin-top:12px;">
+      <div class="ep-actions">
         <button id="btnSave" class="btn btn-secondary">Save New Version</button>
         <button id="btnPublish" class="btn btn-success">Save and Publish</button>
         <form id="fallbackSaveForm" method="post" action="{{ url_for('save_schedule_version_form') }}" style="display:none;">
@@ -69,25 +139,23 @@
           <input type="hidden" name="year" id="fb_year" value="{{ year }}">
           <input type="hidden" name="month" id="fb_month" value="{{ month }}">
           <input type="hidden" name="publish" id="fb_publish" value="0">
-          <!-- schedule_json_ids holds id-valued selections; backend converts to names -->
           <input type="hidden" name="schedule_json_ids" id="fb_schedule_json_ids" value="{}">
         </form>
       </div>
 
-      <div class="controls" style="margin-top:16px;">
+      <div class="ep-actions" style="margin-top:10px;">
         <form id="formExportSchedule" method="post" action="{{ url_for('export_schedule') }}" style="display:inline;">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="year" id="exp_year_ep" value="{{ year }}">
           <input type="hidden" name="month" id="exp_month_ep" value="{{ month }}">
           <input type="hidden" name="schedule_json" id="export_schedule_json_ep" value="">
-          <button type="submit" id="btnExportEP" class="btn btn-primary">Download Schedule as Excel</button>
+          <button type="submit" class="btn btn-primary">Download Schedule (Excel)</button>
         </form>
-
         <form id="formExportRequests" method="post" action="{{ url_for('export_requests') }}" style="display:inline;">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="year" id="req_year_ep" value="{{ year }}">
           <input type="hidden" name="month" id="req_month_ep" value="{{ month }}">
-          <button type="submit" id="btnExportRequestsEP" class="btn btn-green">Export Requests Matrix (Excel)</button>
+          <button type="submit" class="btn btn-green">Export Requests (Excel)</button>
         </form>
       </div>
     </div>
@@ -96,213 +164,568 @@
 
 <script>
 document.addEventListener('DOMContentLoaded', () => {
-  const btnLoad = document.getElementById('btnLoad');
-  const btnSave = document.getElementById('btnSave');
-  const btnPublish = document.getElementById('btnPublish');
+  const LEVELS = ['1A','1B','2A','2B','3','4'];
+  const DAY_NAMES = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
   const container = document.getElementById('tableContainer');
   const errBox = document.getElementById('errors');
-  const formExportSchedule = document.getElementById('formExportSchedule');
-  const formExportRequests = document.getElementById('formExportRequests');
   const versionsList = document.getElementById('versionsList');
+  const vbBanner = document.getElementById('violationsBanner');
+  const vbHeader = document.getElementById('vbHeader');
+  const vbCount = document.getElementById('vbCount');
+  const vbToggle = document.getElementById('vbToggle');
+  const vbList = document.getElementById('vbList');
 
-  // Safari-safe JSON fetch helper: tolerant of bad/missing content-type
+  // ── State ──
+  let monthData = null;
+  let preData = null;
+  let byId = {}, byName = {};
+  let currentSchedule = {};
+  let expandedDays = new Set();
+  let violations = [];
+  let overrides = new Set();
+  let scheduleLoaded = false;
+
+  // ── Helpers ──
+  function csrfToken() { return document.querySelector('meta[name="csrf-token"]').getAttribute('content'); }
+  function currentYM() { return { year: +document.getElementById('year').value, month: +document.getElementById('month').value }; }
+
   async function fetchJSONSafe(url, options) {
     const res = await fetch(url, options);
     if (!res.ok) throw new Error('Network error');
     try {
-      const ct = res.headers && res.headers.get ? (res.headers.get('content-type') || '') : '';
+      const ct = (res.headers.get('content-type') || '');
       if (ct.includes('application/json')) return await res.json();
-    } catch (e) {
-      // continue to text fallback
-    }
+    } catch (e) {}
     const txt = await res.text();
     try { return JSON.parse(txt); } catch { throw new Error('Invalid server response'); }
   }
 
-  function currentYM() {
-    return {
-      year: +document.getElementById('year').value,
-      month: +document.getElementById('month').value
-    };
+  function parseLevels(str) { return (str || '').split(',').map(s => s.trim()).filter(Boolean); }
+  function formatDay(iso) {
+    const d = new Date(iso + 'T00:00:00');
+    return `${d.getDate()} ${DAY_NAMES[d.getDay()]}`;
   }
+  function formatDayLong(iso) {
+    const d = new Date(iso + 'T00:00:00');
+    return `${DAY_NAMES[d.getDay()]}, ${MONTH_NAMES[d.getMonth()]} ${d.getDate()}`;
+  }
+  function isWeekend(iso) {
+    const d = new Date(iso + 'T00:00:00');
+    return d.getDay() === 0 || d.getDay() === 6;
+  }
+  function dayDiff(a, b) {
+    return Math.abs((new Date(b + 'T00:00:00') - new Date(a + 'T00:00:00')) / 86400000);
+  }
+  function sname(sid) { return byId[+sid] || ('ID:' + sid); }
 
-  document.getElementById('year').addEventListener('change', () => { renderVersions(); container.innerHTML=''; errBox.textContent=''; });
-  document.getElementById('month').addEventListener('change', () => { renderVersions(); container.innerHTML=''; errBox.textContent=''; });
+  // ── Versions ──
+  document.getElementById('year').addEventListener('change', resetView);
+  document.getElementById('month').addEventListener('change', resetView);
+  function resetView() { renderVersions(); container.innerHTML = ''; errBox.textContent = ''; hideViolations(); scheduleLoaded = false; expandedDays.clear(); }
   renderVersions();
 
   async function renderVersions() {
     versionsList.innerHTML = '';
-    const y = +document.getElementById('year').value;
-    const m = +document.getElementById('month').value;
-    const res = await fetch(`/list_schedule_versions?year=${y}&month=${m}`);
-    const data = await res.json();
-    const versions = (data.versions||[]).sort((a,b)=>b.version-a.version);
+    const { year: y, month: m } = currentYM();
+    let versions = [];
+    try {
+      const res = await fetch(`/list_schedule_versions?year=${y}&month=${m}`);
+      const data = await res.json();
+      versions = (data.versions || []).sort((a, b) => b.version - a.version);
+    } catch {}
     versions.forEach(v => {
-      const row = document.createElement('div');
-      row.style.border = '1px solid #eee';
-      row.style.borderRadius = '6px';
-      row.style.padding = '8px';
-      row.innerHTML = `
-        <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
-          <div>
-            <div style="font-weight:600;">v${v.version} ${v.published ? '<span style="font-size:12px;color:#2e7d32;">(published)</span>' : ''}</div>
-          </div>
-          <div>
-            <button data-v="${v.version}" class="btn btn-secondary js-load">Load</button>
-            ${v.published ? `<button data-v="${v.version}" class="btn btn-secondary js-unpublish">Unpublish</button>` : `<button data-v="${v.version}" class="btn btn-success js-publish">Publish</button>`}
-            <button data-v="${v.version}" class="btn btn-secondary js-delete" style="background:#a33;">Delete</button>
-          </div>
+      const el = document.createElement('div');
+      el.className = 'ep-ver-item';
+      el.innerHTML = `
+        <div class="ver-label">v${v.version}${v.published ? '<span class="ver-pub">(published)</span>' : ''}</div>
+        <div class="ep-ver-actions">
+          <button data-v="${v.version}" class="btn btn-secondary btn-sm js-load">Load</button>
+          ${v.published
+            ? `<button data-v="${v.version}" class="btn btn-secondary btn-sm js-unpublish">Unpublish</button>`
+            : `<button data-v="${v.version}" class="btn btn-success btn-sm js-publish">Publish</button>`}
+          <button data-v="${v.version}" class="btn btn-danger btn-sm js-delete">Delete</button>
         </div>`;
-      versionsList.appendChild(row);
+      versionsList.appendChild(el);
     });
-    // wire actions
-    versionsList.querySelectorAll('.js-load').forEach(b=>b.addEventListener('click', async (e)=>{
-      const v = +e.target.getAttribute('data-v');
-      await loadSchedule(v);
-    }));
-    versionsList.querySelectorAll('.js-publish').forEach(b=>b.addEventListener('click', async (e)=>{
-      const v = +e.target.getAttribute('data-v');
-      const y = +document.getElementById('year').value;
-      const m = +document.getElementById('month').value;
-      await fetch('/publish_schedule_version', {method:'POST', headers:{'Content-Type':'application/json','X-CSRFToken': document.querySelector('meta[name="csrf-token"]').getAttribute('content')}, body: JSON.stringify({year:y, month:m, version:v, published:true})});
+    versionsList.querySelectorAll('.js-load').forEach(b => b.addEventListener('click', e => loadSchedule(+e.target.dataset.v)));
+    versionsList.querySelectorAll('.js-publish').forEach(b => b.addEventListener('click', async e => {
+      const { year: y, month: m } = currentYM();
+      await fetch('/publish_schedule_version', { method:'POST', headers:{'Content-Type':'application/json','X-CSRFToken':csrfToken()}, body:JSON.stringify({year:y,month:m,version:+e.target.dataset.v,published:true}) });
       await renderVersions();
     }));
-    versionsList.querySelectorAll('.js-unpublish').forEach(b=>b.addEventListener('click', async (e)=>{
-      const v = +e.target.getAttribute('data-v');
-      const y = +document.getElementById('year').value;
-      const m = +document.getElementById('month').value;
-      await fetch('/publish_schedule_version', {method:'POST', headers:{'Content-Type':'application/json','X-CSRFToken': document.querySelector('meta[name="csrf-token"]').getAttribute('content')}, body: JSON.stringify({year:y, month:m, version:v, published:false})});
+    versionsList.querySelectorAll('.js-unpublish').forEach(b => b.addEventListener('click', async e => {
+      const { year: y, month: m } = currentYM();
+      await fetch('/publish_schedule_version', { method:'POST', headers:{'Content-Type':'application/json','X-CSRFToken':csrfToken()}, body:JSON.stringify({year:y,month:m,version:+e.target.dataset.v,published:false}) });
       await renderVersions();
     }));
-    versionsList.querySelectorAll('.js-delete').forEach(b=>b.addEventListener('click', async (e)=>{
-      const v = +e.target.getAttribute('data-v');
-      if (!confirm(`Delete version v${v}?`)) return;
-      const y = +document.getElementById('year').value;
-      const m = +document.getElementById('month').value;
-      await fetch('/delete_schedule_version', {method:'POST', headers:{'Content-Type':'application/json','X-CSRFToken': document.querySelector('meta[name="csrf-token"]').getAttribute('content')}, body: JSON.stringify({year:y, month:m, version:v})});
+    versionsList.querySelectorAll('.js-delete').forEach(b => b.addEventListener('click', async e => {
+      if (!confirm(`Delete version v${e.target.dataset.v}?`)) return;
+      const { year: y, month: m } = currentYM();
+      await fetch('/delete_schedule_version', { method:'POST', headers:{'Content-Type':'application/json','X-CSRFToken':csrfToken()}, body:JSON.stringify({year:y,month:m,version:+e.target.dataset.v}) });
       await renderVersions();
     }));
   }
 
-  function candidateOptions(day, level, candidates) {
-    const opts = candidates.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
-    return `<select data-day="${day}" data-level="${level}">${opts}</select>`;
-  }
-
-  async function fetchCandidatesMonth(y, m){
-    const [elig, pre] = await Promise.all([
-      fetchJSONSafe(`/eligible_for_month?year=${y}&month=${m}`),
+  // ── Data Loading ──
+  async function loadMonthData(y, m) {
+    const [data, pre] = await Promise.all([
+      fetchJSONSafe(`/edit_month_data?year=${y}&month=${m}`),
       fetchJSONSafe(`/preassignments_for_month?year=${y}&month=${m}`)
     ]);
-    // Merge preassigned surgeons into eligibility lists by level for each day
-    // Preassignments use names; eligible_for_month uses IDs+names
-    const ensureInList = (arr, id, name) => {
-      if (!id) return;
-      if (!Array.isArray(arr)) return;
-      if (!arr.some(x => String(x.id) === String(id))) {
-        arr.push({ id, name });
-      }
-    };
-    for (const day of Object.keys(pre)) {
-      const lvls = pre[day] || {};
-      const dayMap = elig[day] || {};
+    monthData = data;
+    preData = pre;
+    byId = {}; byName = {};
+    for (const s of (monthData.all_surgeons || [])) {
+      byId[s.id] = s.name;
+      byName[s.name] = s.id;
+    }
+    for (const day of Object.keys(preData)) {
+      const lvls = preData[day] || {};
+      const dayElig = monthData.eligibility[day] || {};
       for (const lvl of Object.keys(lvls)) {
         const entry = lvls[lvl];
         if (entry && entry.id) {
-          dayMap[lvl] = dayMap[lvl] || [];
-          ensureInList(dayMap[lvl], entry.id, entry.name);
+          dayElig[lvl] = dayElig[lvl] || [];
+          if (!dayElig[lvl].some(x => String(x.id) === String(entry.id)))
+            dayElig[lvl].push({ id: entry.id, name: entry.name });
         }
       }
-      elig[day] = dayMap;
+      monthData.eligibility[day] = dayElig;
     }
-    return elig;
   }
 
+  function normalizeSchedule(sched) {
+    const out = {};
+    for (const [day, levels] of Object.entries(sched)) {
+      out[day] = {};
+      for (const [lvl, val] of Object.entries(levels || {})) {
+        if (val == null || val === '') { out[day][lvl] = null; continue; }
+        if (!isNaN(Number(val))) { out[day][lvl] = Number(val); continue; }
+        out[day][lvl] = byName[val] != null ? byName[val] : null;
+      }
+    }
+    return out;
+  }
+
+  // ── Load Schedule ──
   async function loadSchedule(version) {
     errBox.textContent = '';
     const { year, month } = currentYM();
     try {
-      const data = await fetchJSONSafe(`/load_schedule_version?year=${year}&month=${month}&version=${version}`);
-      const sched = data.schedule || {};
-      const days = Object.keys(sched);
-      const elig = await fetchCandidatesMonth(year, month);
-      // Fetch surgeon lookup for id/name reconciliation so current assignments appear in dropdowns even if filtered
-      let byName = {}, byId = {};
-      try {
-        const lkData = await fetchJSONSafe('/surgeons_lookup');
-        byName = lkData.by_name || {};
-        byId = lkData.by_id || {};
-      } catch {}
-      let html = '<table class="schedule-table" style="width:100%;border-collapse:collapse;">';
-      html += '<thead><tr><th style="border:1px solid #ccc;padding:6px;">Date</th>' + ['1A','1B','2A','2B','3','4'].map(l=>`<th style="border:1px solid #ccc;padding:6px;">${l}</th>`).join('') + '</tr></thead><tbody>';
-      for (const day of days) {
-        html += `<tr><td style="border:1px solid #ccc;padding:6px;">${day}</td>`;
-        for (const lvl of ['1A','1B','2A','2B','3','4']) {
-          const cands = (elig[day] && elig[day][lvl]) ? [...elig[day][lvl]] : [];
-          const cur = sched[day] ? sched[day][lvl] : null;
-          // Ensure current assignment appears in the dropdown even if not eligible
-          if (cur) {
-            let curId = null;
-            let curName = null;
-            if (!isNaN(Number(cur))) {
-              curId = Number(cur);
-              curName = byId[curId] || String(cur);
-            } else {
-              curName = String(cur);
-              curId = byName[curName] != null ? Number(byName[curName]) : null;
-            }
-            if (curId != null && !cands.some(s => String(s.id) === String(curId))) {
-              cands.push({ id: curId, name: curName });
-            }
-          }
-          const opts = cands.map(s => {
-            const isSel = String(cur) === String(s.id) || cur === s.name;
-            return `<option value="${s.id}" ${isSel ? 'selected' : ''}>${s.name}</option>`;
-          }).join('');
-          html += `<td style="border:1px solid #ccc;padding:6px;"><select data-day="${day}" data-level="${lvl}"><option value="">—</option>${opts}</select></td>`;
-        }
-        html += '</tr>';
-      }
-      html += '</tbody></table>';
-      container.innerHTML = html;
+      const schedData = await fetchJSONSafe(`/load_schedule_version?year=${year}&month=${month}&version=${version}`);
+      await loadMonthData(year, month);
+      currentSchedule = normalizeSchedule(schedData.schedule || {});
+      expandedDays.clear();
+      scheduleLoaded = true;
+      renderTable();
+      validateSchedule();
     } catch (e) {
       errBox.textContent = e.message || 'Failed to load schedule';
     }
   }
 
-  btnLoad.addEventListener('click', async () => {
-    // Reload sidebar; auto-load published if exists
+  // ── Surgeon options for a level on a day, ordered by availability ──
+  function surgeonOptions(day, level) {
+    if (!monthData) return [];
+    const avail = monthData.availability[day] || {};
+    const opts = [];
+    for (const s of monthData.all_surgeons) {
+      if (!parseLevels(s.call_levels).includes(level)) continue;
+      const status = avail[String(s.id)] || 'available';
+      opts.push({ id: s.id, name: s.name, status });
+    }
+    const order = { available: 0, no_call: 1, study_leave: 1, unavailable: 2 };
+    opts.sort((a, b) => (order[a.status] ?? 0) - (order[b.status] ?? 0));
+    return opts;
+  }
+
+  function statusOf(day, sid) {
+    if (!monthData || !sid) return 'available';
+    return (monthData.availability[day] || {})[String(sid)] || 'available';
+  }
+
+  // ── Render Table (blocks) ──
+  function renderTable() {
+    const days = Object.keys(currentSchedule).sort();
+    const ph = new Set((monthData && monthData.public_holidays) || []);
+    let html = '<table class="sched-table"><thead><tr><th>Date</th>';
+    for (const lvl of LEVELS) html += `<th>${lvl}</th>`;
+    html += '</tr></thead><tbody>';
+    for (const day of days) {
+      const we = isWeekend(day);
+      const hol = ph.has(day);
+      let rowCls = '';
+      if (we) rowCls += ' weekend-row';
+      if (hol) rowCls += ' holiday-row';
+      html += `<tr class="${rowCls.trim()}" data-day="${day}">`;
+      const dayLabel = formatDay(day) + (hol ? ' *' : '');
+      html += `<td class="day-cell" data-day="${day}"${hol ? ' title="Public Holiday"' : ''}>${dayLabel}</td>`;
+      for (const lvl of LEVELS) {
+        const sid = currentSchedule[day][lvl];
+        const st = statusOf(day, sid);
+        let cls = 'block';
+        let label = '---';
+        if (sid) {
+          label = sname(sid);
+          if (st === 'no_call') { cls += ' nc-assigned'; label += ' (NC)'; }
+          else if (st === 'unavailable' || st === 'study_leave') { cls += ' al-assigned'; label += ' (AL)'; }
+        } else {
+          cls += ' empty';
+        }
+        html += `<td data-day="${day}" data-level="${lvl}"><div class="${cls}">${label}</div></td>`;
+      }
+      html += '</tr>';
+    }
+    html += '</tbody></table>';
+    container.innerHTML = html;
+    container.addEventListener('click', onTableClick);
+  }
+
+  // ── Update a single block's display ──
+  function refreshBlock(day, lvl) {
+    const td = container.querySelector(`td[data-day="${day}"][data-level="${lvl}"]`);
+    if (!td) return;
+    const sid = currentSchedule[day] && currentSchedule[day][lvl];
+    const st = statusOf(day, sid);
+    let cls = 'block';
+    let label = '---';
+    if (sid) {
+      label = sname(sid);
+      if (st === 'no_call') { cls += ' nc-assigned'; label += ' (NC)'; }
+      else if (st === 'unavailable' || st === 'study_leave') { cls += ' al-assigned'; label += ' (AL)'; }
+    } else {
+      cls += ' empty';
+    }
+    td.innerHTML = `<div class="${cls}">${label}</div>`;
+  }
+
+  // ── Expansion (multi-day) ──
+  function collapseDay(day) {
+    const expRow = container.querySelector(`.expanded-row[data-expand-day="${day}"]`);
+    if (expRow) expRow.remove();
+    const dayRow = container.querySelector(`tr[data-day="${day}"]`);
+    if (dayRow) dayRow.classList.remove('is-expanded');
+    expandedDays.delete(day);
+  }
+
+  function collapseAll() {
+    container.querySelectorAll('.expanded-row').forEach(r => r.remove());
+    container.querySelectorAll('tr.is-expanded').forEach(tr => tr.classList.remove('is-expanded'));
+    expandedDays.clear();
+  }
+
+  function toggleExpansion(day) {
+    if (expandedDays.has(day)) { collapseDay(day); return; }
+    expandedDays.add(day);
+    const dayRow = container.querySelector(`tr[data-day="${day}"]`);
+    if (!dayRow) return;
+    dayRow.classList.add('is-expanded');
+    const tr = document.createElement('tr');
+    tr.className = 'expanded-row';
+    tr.dataset.expandDay = day;
+    tr.innerHTML = `<td colspan="7">${buildExpansionHTML(day)}</td>`;
+    dayRow.after(tr);
+    wireExpansionClicks(day);
+  }
+
+  function buildExpansionHTML(day) {
+    let html = '<div class="expand-panel">';
+    html += '<div class="expand-close-col"><button class="expand-close-btn js-expand-close">Close</button></div>';
+    for (const lvl of LEVELS) {
+      const opts = surgeonOptions(day, lvl);
+      const curId = currentSchedule[day] ? currentSchedule[day][lvl] : null;
+      html += '<div class="expand-col">';
+      html += `<div class="expand-col-header">${lvl}</div>`;
+      html += '<div class="expand-items">';
+      html += `<div class="expand-item unassign-item${!curId ? ' selected' : ''}" data-level="${lvl}" data-sid="">--- None ---</div>`;
+      for (const o of opts) {
+        const isSel = curId && o.id === curId;
+        let dotCls = 'avail', statusCls = 'status-avail', tag = '';
+        if (o.status === 'no_call') { dotCls = 'nc'; statusCls = 'status-nc'; tag = 'NC'; }
+        else if (o.status === 'study_leave') { dotCls = 'nc'; statusCls = 'status-nc'; tag = 'SL'; }
+        else if (o.status === 'unavailable') { dotCls = 'al'; statusCls = 'status-al'; tag = 'AL'; }
+        html += `<div class="expand-item ${statusCls}${isSel ? ' selected' : ''}" data-level="${lvl}" data-sid="${o.id}">`;
+        html += `<span class="dot ${dotCls}"></span>`;
+        html += `<span class="ename">${isSel ? '&#10003; ' : ''}${o.name}</span>`;
+        if (tag) html += `<span class="etag">${tag}</span>`;
+        html += '</div>';
+      }
+      html += '</div></div>';
+    }
+    html += '</div>';
+    return html;
+  }
+
+  function wireExpansionClicks(day) {
+    const expRow = container.querySelector(`.expanded-row[data-expand-day="${day}"]`);
+    if (!expRow) return;
+    expRow.querySelector('.js-expand-close').addEventListener('click', () => collapseDay(day));
+    expRow.querySelectorAll('.expand-item[data-sid]').forEach(item => {
+      item.addEventListener('click', () => {
+        const lvl = item.dataset.level;
+        const sid = item.dataset.sid ? +item.dataset.sid : null;
+        assignSurgeon(day, lvl, sid);
+      });
+    });
+  }
+
+  function assignSurgeon(day, lvl, sid) {
+    if (!currentSchedule[day]) currentSchedule[day] = {};
+    currentSchedule[day][lvl] = sid || null;
+    refreshBlock(day, lvl);
+    refreshExpansionColumn(day, lvl);
+    validateSchedule();
+  }
+
+  function refreshExpansionColumn(day, lvl) {
+    const expRow = container.querySelector(`.expanded-row[data-expand-day="${day}"]`);
+    if (!expRow) return;
+    const cols = expRow.querySelectorAll('.expand-col');
+    const idx = LEVELS.indexOf(lvl);
+    if (idx < 0 || !cols[idx]) return;
+    const opts = surgeonOptions(day, lvl);
+    const curId = currentSchedule[day] ? currentSchedule[day][lvl] : null;
+    let html = `<div class="expand-col-header">${lvl}</div><div class="expand-items">`;
+    html += `<div class="expand-item unassign-item${!curId ? ' selected' : ''}" data-level="${lvl}" data-sid="">--- None ---</div>`;
+    for (const o of opts) {
+      const isSel = curId && o.id === curId;
+      let dotCls = 'avail', statusCls = 'status-avail', tag = '';
+      if (o.status === 'no_call') { dotCls = 'nc'; statusCls = 'status-nc'; tag = 'NC'; }
+      else if (o.status === 'study_leave') { dotCls = 'nc'; statusCls = 'status-nc'; tag = 'SL'; }
+      else if (o.status === 'unavailable') { dotCls = 'al'; statusCls = 'status-al'; tag = 'AL'; }
+      html += `<div class="expand-item ${statusCls}${isSel ? ' selected' : ''}" data-level="${lvl}" data-sid="${o.id}">`;
+      html += `<span class="dot ${dotCls}"></span><span class="ename">${isSel ? '&#10003; ' : ''}${o.name}</span>`;
+      if (tag) html += `<span class="etag">${tag}</span>`;
+      html += '</div>';
+    }
+    html += '</div>';
+    cols[idx].innerHTML = html;
+    cols[idx].querySelectorAll('.expand-item[data-sid]').forEach(item => {
+      item.addEventListener('click', () => {
+        assignSurgeon(day, item.dataset.level, item.dataset.sid ? +item.dataset.sid : null);
+      });
+    });
+  }
+
+  // ── Table Click Handler ──
+  function onTableClick(e) {
+    if (e.target.closest('.js-expand-close')) return;
+    if (e.target.closest('.expand-item')) return;
+    if (e.target.closest('.expanded-row')) return;
+
+    const td = e.target.closest('td[data-level]') || e.target.closest('td.day-cell');
+    if (!td) return;
+    const tr = td.closest('tr[data-day]');
+    if (!tr) return;
+    toggleExpansion(tr.dataset.day);
+  }
+
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') collapseAll();
+  });
+
+  // ── Read schedule from state ──
+  function readCurrentSchedule() { return currentSchedule; }
+
+  // ── Constraint Validation ──
+  function validateSchedule() {
+    violations = [];
+    if (!monthData || !scheduleLoaded) { renderViolations(); highlightCells(); return; }
+    const sched = currentSchedule;
+    const days = Object.keys(sched).sort();
+    const avail = monthData.availability || {};
+
+    for (const day of days) {
+      const seen = {};
+      for (const lvl of LEVELS) {
+        const sid = sched[day][lvl];
+        if (!sid) continue;
+        if (seen[sid]) {
+          violations.push({ id:`sameday-${day}-${sid}`, type:'Same Day', severity:'hard',
+            message:`${sname(sid)} assigned to both ${seen[sid]} and ${lvl} on ${formatDay(day)}`,
+            cells:[{day,level:seen[sid]},{day,level:lvl}] });
+        } else { seen[sid] = lvl; }
+      }
+    }
+
+    for (let i = 0; i < days.length; i++) {
+      for (let j = i + 1; j < days.length; j++) {
+        const diff = dayDiff(days[i], days[j]);
+        if (diff > 2) break;
+        for (const l1 of LEVELS) {
+          const s1 = sched[days[i]][l1]; if (!s1) continue;
+          for (const l2 of LEVELS) {
+            const s2 = sched[days[j]][l2]; if (!s2) continue;
+            if (s1 === s2) {
+              const vid = `gap3-${days[i]}-${days[j]}-${s1}`;
+              if (!violations.some(v => v.id === vid))
+                violations.push({ id:vid, type:'3-Day Gap', severity:'hard',
+                  message:`${sname(s1)} on ${formatDay(days[i])} (${l1}) and ${formatDay(days[j])} (${l2}) — only ${diff} day(s) apart`,
+                  cells:[{day:days[i],level:l1},{day:days[j],level:l2}] });
+            }
+          }
+        }
+      }
+    }
+
+    for (const day of days) {
+      const da = avail[day] || {};
+      for (const lvl of LEVELS) {
+        const sid = sched[day][lvl]; if (!sid) continue;
+        const st = da[String(sid)];
+        if (st === 'unavailable' || st === 'study_leave')
+          violations.push({ id:`avail-${day}-${lvl}-${sid}`, type:'Unavailable', severity:'hard',
+            message:`${sname(sid)} is ${st.replace('_',' ')} on ${formatDay(day)} but assigned to ${lvl}`,
+            cells:[{day,level:lvl}] });
+      }
+    }
+
+    for (const day of days) {
+      const da = avail[day] || {};
+      for (const lvl of LEVELS) {
+        const sid = sched[day][lvl]; if (!sid) continue;
+        if (da[String(sid)] === 'no_call')
+          violations.push({ id:`nocall-${day}-${lvl}-${sid}`, type:'No Call', severity:'soft',
+            message:`${sname(sid)} requested no call on ${formatDay(day)} but assigned to ${lvl}`,
+            cells:[{day,level:lvl}] });
+      }
+    }
+
+    if (monthData.prior_last_two && days.length > 0) {
+      const m2 = monthData.prior_last_two.m2 || {};
+      const m1 = monthData.prior_last_two.m1 || {};
+      const rid = v => { if (v==null||v==='') return null; if (!isNaN(Number(v))) return Number(v); return byName[v]!=null?byName[v]:null; };
+      const ban0 = new Set(), ban1 = new Set();
+      for (const v of Object.values(m2)) { const s=rid(v); if(s) ban0.add(s); }
+      for (const v of Object.values(m1)) { const s=rid(v); if(s){ban0.add(s);ban1.add(s);} }
+      for (const lvl of LEVELS) {
+        const s0 = sched[days[0]] && sched[days[0]][lvl];
+        if (s0 && ban0.has(s0))
+          violations.push({ id:`carry-${days[0]}-${lvl}-${s0}`, type:'Carry-over', severity:'hard',
+            message:`${sname(s0)} was on call end of prev month — too close to ${formatDay(days[0])} ${lvl}`,
+            cells:[{day:days[0],level:lvl}] });
+      }
+      if (days.length > 1) {
+        for (const lvl of LEVELS) {
+          const s1 = sched[days[1]] && sched[days[1]][lvl];
+          if (s1 && ban1.has(s1))
+            violations.push({ id:`carry-${days[1]}-${lvl}-${s1}`, type:'Carry-over', severity:'hard',
+              message:`${sname(s1)} was on call last day of prev month — too close to ${formatDay(days[1])} ${lvl}`,
+              cells:[{day:days[1],level:lvl}] });
+        }
+      }
+    }
+
+    renderViolations();
+    highlightCells();
+  }
+
+  // ── Violations Banner ──
+  function renderViolations() {
+    if (!violations.length) { vbBanner.style.display = 'none'; return; }
+    vbBanner.style.display = '';
+    const hc = violations.filter(v => v.severity==='hard' && !overrides.has(v.id)).length;
+    const sc = violations.filter(v => v.severity==='soft' && !overrides.has(v.id)).length;
+    const oc = violations.filter(v => overrides.has(v.id)).length;
+    let lbl = '';
+    if (hc) lbl += `${hc} constraint violation${hc>1?'s':''}`;
+    if (sc) lbl += `${lbl?', ':''}${sc} warning${sc>1?'s':''}`;
+    if (oc) lbl += `${lbl?' ':''}(${oc} overridden)`;
+    if (!hc && !sc && oc) lbl = `All ${oc} issue${oc>1?'s':''} overridden`;
+    vbCount.textContent = lbl;
+    vbHeader.className = 'vb-header ' + (hc ? 'has-hard' : sc ? 'has-soft' : 'all-clear');
+
+    let html = '';
+    for (const v of violations) {
+      const ov = overrides.has(v.id);
+      html += `<div class="vb-item" data-vid="${v.id}" style="${ov?'opacity:0.5;':''}">
+        <span class="vb-severity ${v.severity}">${v.type}</span>
+        <span class="vb-msg">${v.message}</span>
+        <span class="vb-override"><label><input type="checkbox" data-vid="${v.id}" ${ov?'checked':''}> Override</label></span>
+      </div>`;
+    }
+    vbList.innerHTML = html;
+    vbList.querySelectorAll('input[data-vid]').forEach(cb => {
+      cb.addEventListener('change', () => {
+        if (cb.checked) overrides.add(cb.dataset.vid); else overrides.delete(cb.dataset.vid);
+        renderViolations(); highlightCells();
+      });
+    });
+    vbList.querySelectorAll('.vb-item').forEach(item => {
+      item.addEventListener('mouseenter', () => {
+        const v = violations.find(x => x.id === item.dataset.vid);
+        if (v) v.cells.forEach(c => {
+          const td = container.querySelector(`td[data-day="${c.day}"][data-level="${c.level}"]`);
+          if (td) td.style.boxShadow = '0 0 0 3px #1565c0';
+        });
+      });
+      item.addEventListener('mouseleave', () => {
+        container.querySelectorAll('td[data-level]').forEach(td => td.style.boxShadow = '');
+      });
+    });
+  }
+
+  function hideViolations() { vbBanner.style.display='none'; violations=[]; overrides.clear(); }
+
+  vbToggle.addEventListener('click', () => {
+    const open = vbList.style.display !== 'none';
+    vbList.style.display = open ? 'none' : '';
+    vbToggle.textContent = open ? 'Show details' : 'Hide details';
+  });
+
+  // ── Cell Highlighting ──
+  function highlightCells() {
+    container.querySelectorAll('td[data-level]').forEach(td => {
+      td.classList.remove('cell-error','cell-warning','cell-overridden');
+      td.title = '';
+    });
+    const cm = {};
+    for (const v of violations) for (const c of v.cells) {
+      const k = `${c.day}|${c.level}`;
+      (cm[k] = cm[k] || []).push(v);
+    }
+    for (const [k, vs] of Object.entries(cm)) {
+      const [day,level] = k.split('|');
+      const td = container.querySelector(`td[data-day="${day}"][data-level="${level}"]`);
+      if (!td) continue;
+      const allOv = vs.every(v => overrides.has(v.id));
+      const hard = vs.some(v => v.severity==='hard' && !overrides.has(v.id));
+      const soft = vs.some(v => v.severity==='soft' && !overrides.has(v.id));
+      if (allOv) td.classList.add('cell-overridden');
+      else if (hard) td.classList.add('cell-error');
+      else if (soft) td.classList.add('cell-warning');
+      td.title = vs.map(v => `[${v.type}] ${v.message}${overrides.has(v.id)?' (overridden)':''}`).join('\n');
+    }
+  }
+
+  // ── Load Month Button ──
+  document.getElementById('btnLoad').addEventListener('click', async () => {
     await renderVersions();
-    // Try auto-load published
-    const y = +document.getElementById('year').value;
-    const m = +document.getElementById('month').value;
+    const { year: y, month: m } = currentYM();
     try {
       const res = await fetch(`/list_schedule_versions?year=${y}&month=${m}`);
       const data = await res.json();
-      const published = (data.versions||[]).find(v=>v.published);
-      if (published) {
-        await loadSchedule(published.version);
-      }
+      const pub = (data.versions || []).find(v => v.published);
+      if (pub) await loadSchedule(pub.version);
     } catch {}
   });
 
+  // ── Save ──
   async function saveVersion(publish) {
     errBox.textContent = '';
     const { year, month } = currentYM();
-    // collect from table
-    const selects = container.querySelectorAll('select[data-day]');
     const sched = {};
-    selects.forEach(sel => {
-      const day = sel.getAttribute('data-day');
-      const lvl = sel.getAttribute('data-level');
-      const val = sel.value;
-      if (!sched[day]) sched[day] = {};
-      // store by ID to be consistent server-side, but display uses names
-      sched[day][lvl] = val ? +val : null;
-    });
-    // Prefer fetch; on Safari issues, fallback to form POST
+    for (const [day, lvls] of Object.entries(currentSchedule)) {
+      sched[day] = {};
+      for (const [lvl, sid] of Object.entries(lvls)) sched[day][lvl] = sid || null;
+    }
+    const hardUnresolved = violations.filter(v => v.severity === 'hard' && !overrides.has(v.id));
+    if (hardUnresolved.length > 0) {
+      if (!confirm(`There are ${hardUnresolved.length} unresolved constraint violation(s).\n\nDo you still want to save?`)) return;
+    }
     try {
-      // Feature-detect AbortController, but do not rely on it
       let controller, signal, timeout;
       try {
         controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
@@ -311,65 +734,48 @@ document.addEventListener('DOMContentLoaded', () => {
       } catch (_) { controller = null; signal = undefined; timeout = null; }
 
       const data = await fetchJSONSafe('/save_schedule_version', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json', 'X-CSRFToken': document.querySelector('meta[name="csrf-token"]').getAttribute('content')},
-        body: JSON.stringify({ year, month, schedule: sched, publish }),
-        signal
-      });
+        method:'POST', headers:{'Content-Type':'application/json','X-CSRFToken':csrfToken()},
+        body: JSON.stringify({ year, month, schedule: sched, publish }), signal });
       if (timeout) clearTimeout(timeout);
       alert(`Saved version v${data.version}${data.published?' and published':''}.`);
       window.location.reload();
-      return;
     } catch (e) {
-      // Fallback submit via hidden form (improves Safari/iPad reliability)
       try {
         document.getElementById('fb_year').value = year;
         document.getElementById('fb_month').value = month;
         document.getElementById('fb_publish').value = publish ? '1' : '0';
         document.getElementById('fb_schedule_json_ids').value = JSON.stringify(sched);
         document.getElementById('fallbackSaveForm').submit();
-        return;
-      } catch (err) {
-        errBox.textContent = 'Failed to save.';
-      }
+      } catch (err) { errBox.textContent = 'Failed to save.'; }
     }
   }
 
-  btnSave.addEventListener('click', () => saveVersion(false));
-  btnPublish.addEventListener('click', () => saveVersion(true));
+  document.getElementById('btnSave').addEventListener('click', () => saveVersion(false));
+  document.getElementById('btnPublish').addEventListener('click', () => saveVersion(true));
 
-  // Build a name-based schedule from the current table selections
+  // ── Export ──
   function buildScheduleByName() {
-    const selects = container.querySelectorAll('select[data-day]');
-    const sched = {};
-    selects.forEach(sel => {
-      const day = sel.getAttribute('data-day');
-      const lvl = sel.getAttribute('data-level');
-      const val = sel.value;
-      const nameText = sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text : '';
-      if (!sched[day]) sched[day] = {};
-      sched[day][lvl] = val ? nameText : null;
-    });
-    return sched;
+    const out = {};
+    for (const [day, lvls] of Object.entries(currentSchedule)) {
+      out[day] = {};
+      for (const [lvl, sid] of Object.entries(lvls))
+        out[day][lvl] = sid ? sname(sid) : null;
+    }
+    return out;
   }
 
-  // Populate export forms just before submit
-  formExportSchedule.addEventListener('submit', (e) => {
+  document.getElementById('formExportSchedule').addEventListener('submit', () => {
     const { year, month } = currentYM();
     document.getElementById('exp_year_ep').value = year;
     document.getElementById('exp_month_ep').value = month;
-    const sched = buildScheduleByName();
-    document.getElementById('export_schedule_json_ep').value = JSON.stringify(sched);
+    document.getElementById('export_schedule_json_ep').value = JSON.stringify(buildScheduleByName());
   });
 
-  formExportRequests.addEventListener('submit', (e) => {
+  document.getElementById('formExportRequests').addEventListener('submit', () => {
     const { year, month } = currentYM();
     document.getElementById('req_year_ep').value = year;
     document.getElementById('req_month_ep').value = month;
   });
-
-  // initial render handled earlier to avoid double-render race
 });
 </script>
 {% endblock %}
-

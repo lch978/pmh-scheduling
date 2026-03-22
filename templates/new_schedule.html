@@ -190,7 +190,7 @@
 </div>
 
   <div id="scheduleContainer">
-    {% if schedule %}
+    {% if schedule is mapping and schedule %}
       <table class="schedule-table">
         <thead>
           <tr>
@@ -202,13 +202,14 @@
         </thead>
         <tbody>
           {% for day, assigns in schedule.items() %}
+            {% set row = assigns if assigns is mapping else {} %}
             {% set classes = [] %}
             {% if day in weekend_set %}{% set _=classes.append('weekend') %}{% endif %}
             {% if day in public_holidays %}{% set _=classes.append('holiday') %}{% endif %}
             <tr class="{{ classes|join(' ') }}">
               <td>{{ day }}</td>
               {% for lev in ['1A','1B','2A','2B','3','4'] %}
-                <td>{{ assigns[lev] or '' }}</td>
+                <td>{{ row[lev]|default('', true) }}</td>
               {% endfor %}
             </tr>
           {% endfor %}
@@ -221,8 +222,11 @@
 
 <script>
   document.addEventListener('DOMContentLoaded', () => {
-    // 1) Capture the existing schedule from the server:
-    const initialSchedule = {{ schedule|tojson }};
+    // 1) Capture the existing schedule from the server (must be a plain object, not array/null):
+    let initialSchedule = {{ (schedule if schedule is mapping else {})|tojson }};
+    if (initialSchedule === null || typeof initialSchedule !== 'object' || Array.isArray(initialSchedule)) {
+      initialSchedule = {};
+    }
     const weekendSet      = new Set({{ weekend_set|list|tojson }});
     const publicHolidays  = new Set({{ public_holidays|list|tojson }});
 
@@ -265,6 +269,9 @@
 
     // redraw the table and update hidden fields + URL + forms
     function renderSchedule(sol) {
+      if (!sol || typeof sol !== 'object' || Array.isArray(sol)) {
+        sol = {};
+      }
       // rebuild HTML
       const container = document.getElementById('scheduleContainer');
       let html = '<table class="schedule-table"><thead><tr><th>Date</th>'
@@ -275,9 +282,10 @@
         const classes = [];
         if (weekendSet.has(day))   classes.push('weekend');
         if (publicHolidays.has(day)) classes.push('holiday');
+        const row = (sol[day] && typeof sol[day] === 'object' && !Array.isArray(sol[day])) ? sol[day] : {};
         html += `<tr class="${classes.join(' ')}"><td>${day}</td>`;
         for (const lvl of ['1A','1B','2A','2B','3','4']) {
-          html += `<td>${sol[day][lvl]||''}</td>`;
+          html += `<td>${row[lvl] != null && row[lvl] !== '' ? row[lvl] : ''}</td>`;
         }
         html += '</tr>';
       }
@@ -294,16 +302,18 @@
       // update forms in case year/month changed in the selects
       const y = document.getElementById('year').value;
       const m = document.getElementById('month').value;
-      // save form
       const saveForm = document.querySelector('form[action$="save_schedule"]');
-      saveForm.elements['year'].value          = y;
-      saveForm.elements['month'].value         = m;
-      saveForm.elements['schedule_json'].value = schedJSON;
-      // export form
+      if (saveForm && saveForm.elements) {
+        saveForm.elements['year'].value = y;
+        saveForm.elements['month'].value = m;
+        saveForm.elements['schedule_json'].value = schedJSON;
+      }
       const expForm = document.querySelector('form[action$="export_schedule"]');
-      expForm.elements['year'].value          = y;
-      expForm.elements['month'].value         = m;
-      expForm.elements['schedule_json'].value = schedJSON;
+      if (expForm && expForm.elements) {
+        expForm.elements['year'].value = y;
+        expForm.elements['month'].value = m;
+        expForm.elements['schedule_json'].value = schedJSON;
+      }
 
       // bump the URL so “Save”/“Export” will post to the right ?year=…&month=…
       window.history.replaceState(null, '', `?year=${y}&month=${m}`);

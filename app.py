@@ -18,6 +18,24 @@ from flask import Flask, render_template, request, redirect, url_for, flash, jso
 from flask_wtf import CSRFProtect
 from flask_wtf.csrf import generate_csrf
 
+
+def coerce_json_column(value):
+    """
+    Read JSON from a DB column that may be NULL or already decoded as dict
+    (e.g. Postgres JSON/JSONB). Never call json.loads on None.
+    """
+    if value is None or value == "":
+        return None
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, (str, bytes, bytearray)):
+        try:
+            return json.loads(value)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return None
+    return None
+
+
 def create_app():
     
     app = Flask(__name__)
@@ -62,6 +80,28 @@ def create_app():
                 except Exception:
                     sched_by_name[day][lvl] = val
         return sched_by_name
+
+    def normalize_schedule_for_template(sched):
+        """
+        Ensure schedule is a day -> {level: name} dict for new_schedule template/JS.
+        Handles null/malformed per-day payloads and accidental error payloads in DB.
+        """
+        if sched is None:
+            return None
+        if not isinstance(sched, dict):
+            return None
+        # Solver/validation error objects saved or returned as dict
+        if "errors" in sched and set(sched.keys()) <= {"errors", "analysis"}:
+            return None
+        out = {}
+        for day, assigns in sched.items():
+            if isinstance(assigns, dict):
+                out[day] = assigns
+            elif assigns is None:
+                out[day] = {}
+            else:
+                out[day] = {}
+        return out
 
     @app.context_processor
     def utility_processor():
@@ -580,6 +620,7 @@ def create_app():
             if sched is None:
                 flash("No feasible schedule found.", "error")
                 return render_template('no_schedule.html')
+            sched = normalize_schedule_for_template(sched)
         else:
             # ▶︎ No preview request → show the saved one (if any)
             cost = None
@@ -593,14 +634,10 @@ def create_app():
             row = result.mappings().fetchone()
 
             if row:
-                data = row['schedule_data']
-                # If Supabase returned a dict, use it directly; otherwise parse the JSON string
-                if isinstance(data, dict):
-                    sched = data
-                else:
-                    sched = json.loads(data)
+                sched = coerce_json_column(row['schedule_data'])
             else:
                 sched = None
+            sched = normalize_schedule_for_template(sched)
 
         # ── 7) Compute weekends set ──
         weekend_set = {
@@ -696,8 +733,7 @@ def create_app():
             {"y": year_sel, "m": month_sel}
         ).mappings().fetchone()
         if row_pub:
-            data = row_pub['schedule_data']
-            sched = data if isinstance(data, dict) else json.loads(data)
+            sched = coerce_json_column(row_pub['schedule_data']) or {}
         else:
             # Fallback: show message and empty content (do not show unpublished)
             flash("No published schedule for the selected month.", "warning")
@@ -1544,6 +1580,91 @@ def create_app():
         by_name = {s['name']: int(s['id']) for s in surgeons}
         return jsonify({"by_id": by_id, "by_name": by_name})
 
+    @app.route('/edit_month_data')
+    @basic_auth.required
+    def edit_month_data():
+        """Comprehensive data for the edit/publish page: eligibility, availability details, surgeon list, prior-month carry-over."""
+        try:
+            year = int(request.args.get('year'))
+            month = int(request.args.get('month'))
+        except Exception:
+            return jsonify({"error": "Invalid parameters"}), 400
+
+        import calendar as _cal
+        num_days = _cal.monthrange(year, month)[1]
+        days = [datetime.date(year, month, d) for d in range(1, num_days + 1)]
+        surgeons = get_all_surgeons()
+        availability = get_availability_requests()
+
+        blocked = {}
+        blocked_reasons = {}
+        for s in surgeons:
+            sid = s['id']
+            bset = set()
+            rmap = {}
+            for req in availability.get(sid, []):
+                raw = req.get('date')
+                d = raw if isinstance(raw, datetime.date) else None
+                if not d:
+                    try:
+                        d = datetime.date.fromisoformat(raw)
+                    except Exception:
+                        continue
+                if d.year == year and d.month == month:
+                    rtype = req.get('request_type', '')
+                    if rtype in ('unavailable', 'study_leave', 'no_call'):
+                        bset.add(d)
+                        rmap[d.isoformat()] = rtype
+            blocked[sid] = bset
+            blocked_reasons[sid] = rmap
+
+        def has_level(s, lvl):
+            return lvl in parse_call_levels(s.get('call_levels', ''))
+
+        levels = ["1A", "1B", "2A", "2B", "3", "4"]
+        base_by_level = {lvl: [s for s in surgeons if has_level(s, lvl)] for lvl in levels}
+
+        eligibility = {}
+        avail_map = {}
+        for d in days:
+            dkey = d.isoformat()
+            eligibility[dkey] = {}
+            day_avail = {}
+            for s in surgeons:
+                sid = s['id']
+                reason = blocked_reasons.get(sid, {}).get(dkey)
+                day_avail[str(sid)] = reason if reason else "available"
+            avail_map[dkey] = day_avail
+            for lvl in levels:
+                elig = []
+                for s in base_by_level[lvl]:
+                    if d not in blocked.get(s['id'], set()):
+                        elig.append({"id": s['id'], "name": s['name']})
+                eligibility[dkey][lvl] = elig
+
+        all_surgeons_list = [
+            {"id": s['id'], "name": s['name'],
+             "call_levels": s.get('call_levels', ''),
+             "team": s.get('team', '')}
+            for s in surgeons
+        ]
+
+        prior = get_prior_last_two(year, month)
+
+        hk_h = holidays.HK(years=[year])
+        public_holidays_list = sorted(
+            d.isoformat() for d in hk_h
+            if d.year == year and d.month == month
+        )
+
+        return jsonify({
+            "eligibility": eligibility,
+            "availability": avail_map,
+            "all_surgeons": all_surgeons_list,
+            "prior_last_two": prior,
+            "public_holidays": public_holidays_list
+        })
+
     #############################################
     # Delete Surgeon Endpoint
     #############################################
@@ -1690,9 +1811,8 @@ def create_app():
             if not versions:
                 # Seed v1 from existing saved_schedule if present; otherwise create empty skeleton
                 row = db.execute(text("SELECT schedule_data FROM saved_schedule WHERE year=:y AND month=:m"), {"y": year_sel, "m": month_sel}).mappings().fetchone()
-                if row:
-                    data = row['schedule_data'] if isinstance(row['schedule_data'], dict) else json.loads(row['schedule_data'])
-                else:
+                data = coerce_json_column(row['schedule_data']) if row else None
+                if data is None:
                     # build empty schedule for the month
                     import calendar as _cal
                     num_days = _cal.monthrange(year_sel, month_sel)[1]
@@ -1727,9 +1847,8 @@ def create_app():
         if not rows:
             # Seed v1 like the page handler does
             row = db.execute(text("SELECT schedule_data FROM saved_schedule WHERE year=:y AND month=:m"), {"y": year, "m": month}).mappings().fetchone()
-            if row:
-                data = row['schedule_data'] if isinstance(row['schedule_data'], dict) else json.loads(row['schedule_data'])
-            else:
+            data = coerce_json_column(row['schedule_data']) if row else None
+            if data is None:
                 import calendar as _cal
                 num_days = _cal.monthrange(year, month)[1]
                 levels = ["1A","1B","2A","2B","3","4"]
@@ -1793,7 +1912,9 @@ def create_app():
         row = db.execute(text("SELECT schedule_data FROM saved_schedule_versions WHERE year=:y AND month=:m AND version=:v"), {"y": year, "m": month, "v": version}).mappings().fetchone()
         if not row:
             return jsonify({"error": "Not found"}), 404
-        data = row['schedule_data'] if isinstance(row['schedule_data'], dict) else json.loads(row['schedule_data'])
+        data = coerce_json_column(row['schedule_data'])
+        if data is None:
+            return jsonify({"error": "Invalid or empty schedule data"}), 400
         return jsonify({"schedule": data})
 
     @app.route('/preassignments_for_month')
@@ -2112,7 +2233,7 @@ def create_app():
             ).fetchone()
             if row:
                 row_dict = row._mapping
-                preassignments = row_dict["preassignment_data"] if isinstance(row_dict["preassignment_data"], dict) else json.loads(row_dict["preassignment_data"])
+                preassignments = coerce_json_column(row_dict["preassignment_data"]) or {}
             else:
                 preassignments = {}
             return render_template(
