@@ -16,8 +16,52 @@
       height: 100%;
       background-color: #f8f8f8;
     }
-    /* Sidebar styling */
-    .sidebar {
+    /* Mobile dropdown nav + desktop sidebar */
+    .mobile-nav {
+      position: sticky;
+      top: 0;
+      z-index: 1000;
+      background-color: #333;
+      color: #f2f2f2;
+      padding: 10px 12px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    }
+    .mobile-nav-inner {
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+    .mobile-nav .nav-brand {
+      display: flex;
+      justify-content: center;
+      margin-bottom: 8px;
+    }
+    .mobile-nav .nav-brand img {
+      width: 90px;
+      height: auto;
+      display: block;
+    }
+    .nav-select-wrap {
+      width: 100%;
+      max-width: 460px;
+      margin: 0 auto;
+    }
+    .nav-select-label {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 13px;
+      color: #ddd;
+    }
+    .nav-select {
+      width: 100%;
+      padding: 10px 12px;
+      border-radius: 4px;
+      border: 1px solid #666;
+      background: #fff;
+      color: #222;
+      font-size: 14px;
+    }
+    .desktop-sidebar {
+      display: none;
       position: fixed;
       top: 0;
       left: 0;
@@ -27,31 +71,48 @@
       overflow-y: auto;
       padding-top: 20px;
     }
-    .sidebar a {
+    .desktop-sidebar img {
+      display: block;
+      margin: 0 auto 20px;
+      width: 80%;
+      max-width: 150px;
+      height: auto;
+    }
+    .desktop-sidebar a {
       display: block;
       color: #f2f2f2;
       text-decoration: none;
       padding: 12px 16px;
-      transition: background-color 0.3s;
+      transition: background-color 0.2s ease;
     }
-     .sidebar a.public {
-    background-color: #396344;
-  }
-    .sidebar a:hover {
+    .desktop-sidebar a.public {
+      background-color: #396344;
+    }
+    .desktop-sidebar a.active {
+      background-color: #575757;
+      font-weight: 600;
+    }
+    .desktop-sidebar a:hover {
       background-color: #575757;
     }
-.sidebar img {
-  display: block;
-  margin: 0 auto 20px;
-  width: 80%;      /* take 80% of the sidebar’s width */
-  max-width: 150px;/* but never wider than 150px */
-  height: auto;    /* keep its aspect ratio */
-}
     /* Main content styling */
     .main-content {
-      margin-left: 240px; /* Make room for the sidebar */
+      margin: 0 auto;
+      max-width: 1400px;
       padding: 20px;
       min-height: 100vh;
+    }
+    @media (min-width: 901px) {
+      .mobile-nav {
+        display: none;
+      }
+      .desktop-sidebar {
+        display: block;
+      }
+      .main-content {
+        margin-left: 240px;
+        max-width: none;
+      }
     }
     /* Flash messages */
     .toast-container { position: fixed; top: 16px; right: 16px; z-index: 9999; display: flex; flex-direction: column; gap: 10px; }
@@ -66,25 +127,50 @@
   {% block head %}{% endblock %}
 </head>
 <body>
-  <aside class="sidebar">
+  <header class="mobile-nav">
+    <div class="mobile-nav-inner">
+      <div class="nav-brand">
+        <img
+          src="{{ url_for('static', filename='img/logo.svg') }}"
+          alt="My App Logo"
+        />
+      </div>
 
-      <img
-        src="{{ url_for('static', filename='img/logo.svg') }}"
-        alt="My App Logo"
-      />
+      <div class="nav-select-wrap">
+        <label class="nav-select-label" for="mobileNav">Navigate</label>
+        <select id="mobileNav" class="nav-select">
+          <option value="{{ url_for('index') }}" {% if request.endpoint == 'index' %}selected{% endif %}>Home</option>
+          <option value="{{ url_for('saved_schedule') }}" {% if request.endpoint == 'saved_schedule' %}selected{% endif %}>Saved Schedule (Public)</option>
+          <option value="{{ url_for('availability') }}" {% if request.endpoint == 'availability' %}selected{% endif %}>Availability (Public)</option>
+          <option value="{{ url_for('new_schedule') }}" {% if request.endpoint == 'new_schedule' %}selected{% endif %}>New Schedule</option>
+          <option value="{{ url_for('edit_publish') }}" {% if request.endpoint == 'edit_publish' %}selected{% endif %}>Edit and Publish</option>
+          <option value="{{ url_for('list_surgeons') }}" {% if request.endpoint == 'list_surgeons' %}selected{% endif %}>Surgeon Management</option>
+          <option value="{{ url_for('preassignment') }}" {% if request.endpoint == 'preassignment' %}selected{% endif %}>Preassignment</option>
+          <option value="{{ url_for('config_max_calls') }}" {% if request.endpoint == 'config_max_calls' %}selected{% endif %}>Configure Max Calls</option>
+          <option value="{{ url_for('global_config_page') }}" {% if request.endpoint == 'global_config_page' %}selected{% endif %}>Global Config</option>
+          <option value="{{ url_for('stats') }}" {% if request.endpoint == 'stats' %}selected{% endif %}>Stats</option>
+        </select>
+      </div>
 
-  <!-- Sidebar Navigation -->
-    <a href="{{ url_for('index') }}">Home</a>
-    <a href="{{ url_for('saved_schedule') }}" class="public">Saved Schedule</a>
-    <a href="{{ url_for('availability') }}" class="public">Availability</a>
-    <a href="{{ url_for('new_schedule') }}">New Schedule</a>
-    <a href="{{ url_for('edit_publish') }}">Edit and Publish</a>
-    <a href="{{ url_for('list_surgeons') }}">Surgeon Management</a>
-    <a href="{{ url_for('preassignment') }}">Preassignment</a>
-    <a href="{{ url_for('config_max_calls') }}">Configure Max Calls</a>
-    <a href="{{ url_for('global_config_page') }}">Global Config</a>
-    <a href="{{ url_for('stats') }}">Stats</a>
- </aside>
+    </div>
+  </header>
+
+  <aside class="desktop-sidebar">
+    <img
+      src="{{ url_for('static', filename='img/logo.svg') }}"
+      alt="My App Logo"
+    />
+    <a href="{{ url_for('index') }}" class="{% if request.endpoint == 'index' %}active{% endif %}">Home</a>
+    <a href="{{ url_for('saved_schedule') }}" class="public {% if request.endpoint == 'saved_schedule' %}active{% endif %}">Saved Schedule</a>
+    <a href="{{ url_for('availability') }}" class="public {% if request.endpoint == 'availability' %}active{% endif %}">Availability</a>
+    <a href="{{ url_for('new_schedule') }}" class="{% if request.endpoint == 'new_schedule' %}active{% endif %}">New Schedule</a>
+    <a href="{{ url_for('edit_publish') }}" class="{% if request.endpoint == 'edit_publish' %}active{% endif %}">Edit and Publish</a>
+    <a href="{{ url_for('list_surgeons') }}" class="{% if request.endpoint == 'list_surgeons' %}active{% endif %}">Surgeon Management</a>
+    <a href="{{ url_for('preassignment') }}" class="{% if request.endpoint == 'preassignment' %}active{% endif %}">Preassignment</a>
+    <a href="{{ url_for('config_max_calls') }}" class="{% if request.endpoint == 'config_max_calls' %}active{% endif %}">Configure Max Calls</a>
+    <a href="{{ url_for('global_config_page') }}" class="{% if request.endpoint == 'global_config_page' %}active{% endif %}">Global Config</a>
+    <a href="{{ url_for('stats') }}" class="{% if request.endpoint == 'stats' %}active{% endif %}">Stats</a>
+  </aside>
   
   <!-- Main Content Area -->
   <div class="main-content">
@@ -115,5 +201,16 @@
     
     {% block content %}{% endblock %}
   </div>
+  <script>
+    (function () {
+      var navSelect = document.getElementById('mobileNav');
+      if (!navSelect) return;
+      navSelect.addEventListener('change', function () {
+        if (this.value) {
+          window.location.href = this.value;
+        }
+      });
+    })();
+  </script>
 </body>
 </html>

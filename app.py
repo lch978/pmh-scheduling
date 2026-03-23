@@ -182,18 +182,46 @@ def create_app():
             call_levels_list = request.form.getlist('call_levels')
             call_levels = ','.join(call_levels_list)
             team  = request.form['team']
+            try:
+                less_credit = int(request.form.get('manual_less_calls_credit', 0))
+            except Exception:
+                less_credit = 0
+            try:
+                more_credit = int(request.form.get('manual_more_calls_credit', 0))
+            except Exception:
+                more_credit = 0
+            less_credit = max(0, less_credit)
+            more_credit = max(0, more_credit)
             db = get_db()
             with db.begin():
                 db.execute(
                     text(
-                        "INSERT INTO surgeons (name, call_levels, team) VALUES (:name, :levels, :team)"
+                        """
+                        INSERT INTO surgeons
+                            (name, call_levels, team, manual_less_calls_credit, manual_more_calls_credit)
+                        VALUES
+                            (:name, :levels, :team, :less_credit, :more_credit)
+                        """
                     ),
-                    {"name": name, "levels": call_levels, "team": team}
+                    {
+                        "name": name,
+                        "levels": call_levels,
+                        "team": team,
+                        "less_credit": less_credit,
+                        "more_credit": more_credit,
+                    }
                 )
             flash("Surgeon added successfully!")
             return redirect(url_for('list_surgeons'))
     # Pass a default surgeon dict with "call_levels" defined so the template doesn't error out.
-        default_surgeon = {"name": "", "call_levels": "", "team": "", "id": 0}
+        default_surgeon = {
+            "name": "",
+            "call_levels": "",
+            "team": "",
+            "id": 0,
+            "manual_less_calls_credit": 0,
+            "manual_more_calls_credit": 0,
+        }
         return render_template('surgeon_form.html', surgeon=default_surgeon, action="Add")
     @app.route('/surgeons/edit/<int:surgeon_id>', methods=['GET', 'POST'])
     @basic_auth.required
@@ -205,10 +233,37 @@ def create_app():
                 call_levels_list = request.form.getlist('call_levels')
                 call_levels = ','.join(call_levels_list)
                 team = request.form.get('team', '')
+                try:
+                    less_credit = int(request.form.get('manual_less_calls_credit', 0))
+                except Exception:
+                    less_credit = 0
+                try:
+                    more_credit = int(request.form.get('manual_more_calls_credit', 0))
+                except Exception:
+                    more_credit = 0
+                less_credit = max(0, less_credit)
+                more_credit = max(0, more_credit)
                 with db.begin():
                     db.execute(
-                        text("UPDATE surgeons SET name = :name, call_levels = :levels, team = :team WHERE id = :id"),
-                        {"name": name, "levels": call_levels, "team": team, "id": surgeon_id}
+                        text(
+                            """
+                            UPDATE surgeons
+                            SET name = :name,
+                                call_levels = :levels,
+                                team = :team,
+                                manual_less_calls_credit = :less_credit,
+                                manual_more_calls_credit = :more_credit
+                            WHERE id = :id
+                            """
+                        ),
+                        {
+                            "name": name,
+                            "levels": call_levels,
+                            "team": team,
+                            "less_credit": less_credit,
+                            "more_credit": more_credit,
+                            "id": surgeon_id,
+                        }
                     )
                 flash("Surgeon updated successfully!")
                 return redirect(url_for('list_surgeons'))
@@ -235,12 +290,39 @@ def create_app():
         call_levels_list = request.form.getlist('call_levels')
         call_levels = ','.join(call_levels_list)
         team = request.form['team']
+        try:
+            less_credit = int(request.form.get('manual_less_calls_credit', 0))
+        except Exception:
+            less_credit = 0
+        try:
+            more_credit = int(request.form.get('manual_more_calls_credit', 0))
+        except Exception:
+            more_credit = 0
+        less_credit = max(0, less_credit)
+        more_credit = max(0, more_credit)
 
         db = get_db()
         with db.begin():
             db.execute(
-                    text("UPDATE surgeons SET name = :name, call_levels = :levels, team = :team WHERE id = :id"),
-                    {"name": name, "levels": call_levels, "team": team, "id": surgeon_id}
+                    text(
+                        """
+                        UPDATE surgeons
+                        SET name = :name,
+                            call_levels = :levels,
+                            team = :team,
+                            manual_less_calls_credit = :less_credit,
+                            manual_more_calls_credit = :more_credit
+                        WHERE id = :id
+                        """
+                    ),
+                    {
+                        "name": name,
+                        "levels": call_levels,
+                        "team": team,
+                        "less_credit": less_credit,
+                        "more_credit": more_credit,
+                        "id": surgeon_id,
+                    }
             )
             flash("Surgeon updated successfully!")
             return redirect(url_for('list_surgeons'))
@@ -597,6 +679,7 @@ def create_app():
         def candidates_for(level: str):
             return [s for s in surgeons if level in parse_call_levels(s.get("call_levels", ""))]
         candidates = {lvl: sorted(candidates_for(lvl), key=lambda s: s["name"]) for lvl in ["1A","1B","2A","2B","3","4"]}
+        cohort_summary = build_half_year_cohort_summary(year_sel, month_sel, surgeons=surgeons)
 
         generate_flag = request.args.get('generate')
         if generate_flag:
@@ -659,7 +742,8 @@ def create_app():
             candidates=candidates,
             prev_day_minus_2=prev_day_minus_2,
             prev_day_minus_1=prev_day_minus_1,
-            saved_prior=saved_prior
+            saved_prior=saved_prior,
+            cohort_summary=cohort_summary
         )
 
     @app.route('/save_schedule', methods=['POST'])
@@ -717,6 +801,8 @@ def create_app():
             next_ver = (ver_row['maxv'] or 0) + 1
             db.execute(text(f"INSERT INTO saved_schedule_versions (year, month, version, schedule_data, published) VALUES (:y, :m, :v, {json_cast('d')}, {sql_false()})"), {"y": year, "m": month, "v": next_ver, "d": data})
         flash("Schedule saved.", "success")
+        if request.form.get("after_save") == "edit_publish":
+            return redirect(url_for('edit_publish', year=year, month=month))
         return redirect(url_for('new_schedule', year=year, month=month))
 
     @app.route('/saved_schedule', methods=['GET'])
@@ -765,6 +851,51 @@ def create_app():
             return jsonify({'error': 'Invalid payload'}), 400
         save_prior_last_two_db(year, month, m2, m1)
         return jsonify({'ok': True})
+
+    @app.route('/save_surgeon_call_credits', methods=['POST'])
+    @basic_auth.required
+    def save_surgeon_call_credits():
+        data = request.get_json() or {}
+        raw_credits = data.get("credits") or {}
+        surgeons = get_all_surgeons()
+        valid_ids = {int(s["id"]) for s in surgeons if s.get("id") is not None}
+        payload = {}
+        for sid_raw, row in raw_credits.items():
+            try:
+                sid = int(sid_raw)
+            except Exception:
+                continue
+            if sid not in valid_ids:
+                continue
+            row = row or {}
+
+            # New semantics: signed value (negative=fewer calls, positive=more calls).
+            if "call_credit" in row:
+                try:
+                    signed_credit = int(row.get("call_credit", 0))
+                except Exception:
+                    return jsonify({"error": f"Invalid call_credit for surgeon {sid}"}), 400
+                less_credit = max(0, -signed_credit)
+                more_credit = max(0, signed_credit)
+            else:
+                # Backward compatibility with older split payload shape.
+                try:
+                    less_credit = int(row.get("less_calls_credit", 0))
+                except Exception:
+                    return jsonify({"error": f"Invalid less_calls_credit for surgeon {sid}"}), 400
+                try:
+                    more_credit = int(row.get("more_calls_credit", 0))
+                except Exception:
+                    return jsonify({"error": f"Invalid more_calls_credit for surgeon {sid}"}), 400
+                if less_credit < 0 or more_credit < 0:
+                    return jsonify({"error": f"Credits must be non-negative for surgeon {sid}"}), 400
+            payload[sid] = {
+                "less_calls_credit": less_credit,
+                "more_calls_credit": more_credit,
+            }
+
+        update_surgeon_manual_call_credits(payload)
+        return jsonify({"ok": True, "updated": len(payload)})
 
     @app.route('/export_schedule', methods=['POST'])
     @basic_auth.required

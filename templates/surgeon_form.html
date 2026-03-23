@@ -106,6 +106,30 @@
       </select>
     </div>
 
+    <div style="margin-bottom:18px;">
+      <label for="manual_less_calls_credit">Manual Less-Calls Credit</label>
+      <input
+        type="number"
+        id="manual_less_calls_credit"
+        name="manual_less_calls_credit"
+        min="0"
+        step="1"
+        value="{{ surgeon.manual_less_calls_credit or 0 }}"
+      >
+    </div>
+
+    <div style="margin-bottom:18px;">
+      <label for="manual_more_calls_credit">Manual More-Calls Credit</label>
+      <input
+        type="number"
+        id="manual_more_calls_credit"
+        name="manual_more_calls_credit"
+        min="0"
+        step="1"
+        value="{{ surgeon.manual_more_calls_credit or 0 }}"
+      >
+    </div>
+
     <div class="surgeon-form-actions">
       <button type="submit" class="btn-primary">{{ action }} Surgeon</button>
       <a href="{{ url_for('list_surgeons') }}" class="btn-secondary">Cancel</a>

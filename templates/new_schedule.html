@@ -76,6 +76,120 @@
   #btnExportRequests:hover {
     background-color: #4cae4c;
   }
+  .cohort-credit-panel {
+    margin: 20px 0;
+    padding: 16px;
+    border: 1px solid #d8dee9;
+    border-radius: 10px;
+    background: linear-gradient(180deg, #ffffff 0%, #fbfcfe 100%);
+    box-shadow: 0 4px 12px rgba(15, 23, 42, 0.06);
+  }
+  .cohort-credit-title {
+    font-weight: bold;
+    margin-bottom: 8px;
+    font-size: 17px;
+    color: #1f2937;
+  }
+  .cohort-credit-subtitle {
+    color: #4b5563;
+    font-size: 13px;
+    margin-bottom: 12px;
+  }
+  .cohort-block {
+    margin-bottom: 18px;
+  }
+  .cohort-block h3 {
+    margin: 0 0 10px 0;
+    font-size: 16px;
+    color: #253041;
+  }
+  .cohort-tables-wrap {
+    margin-top: 8px;
+  }
+  .cohort-tables-wrap.hidden {
+    display: none;
+  }
+  .cohort-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    margin-bottom: 10px;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    overflow: hidden;
+    background: #fff;
+  }
+  .cohort-table th,
+  .cohort-table td {
+    border-bottom: 1px solid #eef2f7;
+    padding: 9px 10px;
+    text-align: center;
+    font-size: 13px;
+  }
+  .cohort-table th {
+    background: #f6f9fc;
+    color: #374151;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+  }
+  .cohort-table tbody tr:nth-child(odd) td {
+    background: #fcfdff;
+  }
+  .cohort-table tbody tr:hover td {
+    background: #f4f9ff;
+  }
+  .delta-above {
+    color: #b00020;
+    font-weight: bold;
+  }
+  .delta-below {
+    color: #2e7d32;
+    font-weight: bold;
+  }
+  .delta-at {
+    color: #555;
+    font-weight: bold;
+  }
+  .cohort-average-row td {
+    background: #f0f5fb !important;
+    font-weight: bold;
+    border-bottom: none;
+  }
+  .credit-controls {
+    margin-bottom: 12px;
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+  .credit-stepper {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .credit-stepper button {
+    width: 24px;
+    height: 24px;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    background: #f8fafc;
+    cursor: pointer;
+    font-weight: bold;
+    line-height: 1;
+    padding: 0;
+    color: #334155;
+    transition: background-color 0.15s ease;
+  }
+  .credit-stepper button:hover {
+    background: #e7eef8;
+  }
+  .credit-input {
+    width: 72px;
+    padding: 4px 6px;
+    text-align: center;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    background: #fff;
+  }
 </style>
 {% endblock %}
 
@@ -113,6 +227,75 @@
       <button type="button" id="btnSavePrior" style="padding:8px 12px; font-size:14px; border:none; border-radius:4px; background-color:#5cb85c; color:#fff;">Save Prior On-Call</button>
     </div>
   </div>
+  <div class="cohort-credit-panel">
+    <div class="cohort-credit-title">Half-Year Running Call Counts (Cohort Balancing)</div>
+    <div class="cohort-credit-subtitle">
+      Prior-month totals only, in the current half-year window:
+      {{ year }}-{{ '%02d'|format(cohort_summary.window_start_month) }} to month before {{ year }}-{{ '%02d'|format(month) }}.
+      {% if cohort_summary.months_included %}
+        Included months: {{ cohort_summary.months_included|join(', ') }}.
+      {% else %}
+        No prior months in this half-year yet.
+      {% endif %}
+    </div>
+    <div class="credit-controls">
+      <button type="button" id="btnToggleCohortTable" style="padding:8px 12px; font-size:14px; border:none; border-radius:4px; background-color:#5f6b7a; color:#fff;">Show Cohort Tables</button>
+      <button type="button" id="btnSaveCredits" style="padding:8px 12px; font-size:14px; border:none; border-radius:4px; background-color:#337ab7; color:#fff;">Save Call Credits</button>
+    </div>
+
+    <div id="cohortTablesWrap" class="cohort-tables-wrap hidden">
+      {% for group in cohort_summary.groups %}
+        <div class="cohort-block">
+          <h3>{{ group.label }}</h3>
+          <table class="cohort-table">
+            <thead>
+              <tr>
+                <th>Surgeon</th>
+                <th>Past Calls</th>
+                <th>Delta vs Cohort Avg</th>
+                <th>Call Credit (- less, + more)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for member in group.members %}
+                <tr data-credit-row data-surgeon-id="{{ member.surgeon_id }}">
+                  <td>{{ member.name }}</td>
+                  <td>{{ member.count }}</td>
+                  <td>
+                    {% if member.status == 'above' %}
+                      <span class="delta-above">Above {{ '%+.1f'|format(member.delta) }}</span>
+                    {% elif member.status == 'below' %}
+                      <span class="delta-below">Below {{ '%.1f'|format(member.delta|abs) }}</span>
+                    {% else %}
+                      <span class="delta-at">At Avg (0.0)</span>
+                    {% endif %}
+                  </td>
+                  <td>
+                    <div class="credit-stepper">
+                      <button type="button" class="js-credit-minus" data-surgeon-id="{{ member.surgeon_id }}">-</button>
+                      <input
+                        type="number"
+                        step="1"
+                        class="credit-input js-call-credit"
+                        data-surgeon-id="{{ member.surgeon_id }}"
+                        value="{{ member.manual_call_credit }}"
+                      >
+                      <button type="button" class="js-credit-plus" data-surgeon-id="{{ member.surgeon_id }}">+</button>
+                    </div>
+                  </td>
+                </tr>
+              {% endfor %}
+              <tr class="cohort-average-row">
+                <td>Cohort Average</td>
+                <td colspan="2">{{ '%.2f'|format(group.average) }}</td>
+                <td></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      {% endfor %}
+    </div>
+  </div>
 <div class="schedule-form" style="text-align: center; margin-bottom: 10px;">
     <!-- Row 1: Year/Month selection -->
   <div style="margin-bottom: 10px;">
@@ -131,11 +314,8 @@
   </div>
   <div style="margin-bottom: 10px;"></div>
     <!-- All buttons are now inline and use the same styling -->
-    <button type="button" id="btnLoad" style="padding:10px 15px; font-size:14px; margin: 5px;">Load Saved Schedule</button>
-    <button type="button" id="btnGen30" style="padding:10px 15px; font-size:14px; margin: 5px;">Generate New Schedule (30s)</button>
-    <button type="button" id="btnGen120" style="padding:10px 15px; font-size:14px; margin: 5px;">Generate New Schedule (120s)</button>
-    <button type="button" id="btnGenAllowEmpty30" style="padding:10px 15px; font-size:14px; margin: 5px; background-color:#8a6d3b;">Generate Allow-Empty (30s)</button>
-    <button type="button" id="btnGenAllowEmpty120" style="padding:10px 15px; font-size:14px; margin: 5px; background-color:#8a6d3b;">Generate Allow-Empty (120s)</button>
+    <button type="button" id="btnGenerate" style="padding:10px 15px; font-size:14px; margin: 5px;">Generate Schedule</button>
+    <button type="button" id="btnGenerateAllowEmpty" style="padding:10px 15px; font-size:14px; margin: 5px; background-color:#8a6d3b;">Generate Allow-Empty</button>
     <button type="button" id="btnStop" disabled style="padding:10px 15px; font-size:14px; margin: 5px;">Stop</button>
     
     <form method="post" action="{{ url_for('save_schedule') }}" style="display:inline;">
@@ -144,6 +324,7 @@
       <input type="hidden" name="month" value="{{ month }}">
       <input type="hidden" name="schedule_json" id="schedule_json">
       <button type="submit" id="btnSave" style="padding:10px 15px; font-size:14px; margin:5px;">Save Current Schedule</button>
+      <button type="submit" id="btnSaveGoEditPublish" name="after_save" value="edit_publish" style="padding:10px 15px; font-size:14px; margin:5px; background-color:#4f46e5; color:#fff; border:none; border-radius:4px;">Save and Go to Edit/Publish</button>
     </form>
     
     <form method="post" action="{{ url_for('export_schedule') }}" style="display:inline;">
@@ -233,13 +414,13 @@
     // grab references
     const modal   = document.getElementById('loadingModal');
     const bar     = document.getElementById('modalLoadingBar');
-    const btnGen30  = document.getElementById('btnGen30');
-    const btnGen120 = document.getElementById('btnGen120');
-    const btnGenAllowEmpty30 = document.getElementById('btnGenAllowEmpty30');
-    const btnGenAllowEmpty120 = document.getElementById('btnGenAllowEmpty120');
-    const btnLoad = document.getElementById('btnLoad');
+    const btnGenerate = document.getElementById('btnGenerate');
+    const btnGenerateAllowEmpty = document.getElementById('btnGenerateAllowEmpty');
     const btnStop = document.getElementById('btnStop');
     const btnSavePrior = document.getElementById('btnSavePrior');
+    const btnToggleCohortTable = document.getElementById('btnToggleCohortTable');
+    const cohortTablesWrap = document.getElementById('cohortTablesWrap');
+    const btnSaveCredits = document.getElementById('btnSaveCredits');
     let   currentJob = null;
 
     // initialize both hidden JSON fields
@@ -410,14 +591,6 @@
       }
     }
 
-    // handlers
-    btnLoad.addEventListener('click', () => {
-      hidePopupProgress();
-      const y = document.getElementById('year').value;
-      const m = document.getElementById('month').value;
-      window.location = `?year=${y}&month=${m}`;
-    });
-
     async function startSolve(timeLimitMs, allowEmpty = false) {
       showPopupProgress(timeLimitMs + 15000);
       const y = +document.getElementById('year').value;
@@ -445,10 +618,8 @@
       pollStatus();
     }
 
-    btnGen30.addEventListener('click', () => startSolve(30000));
-    btnGen120.addEventListener('click', () => startSolve(120000));
-    btnGenAllowEmpty30.addEventListener('click', () => startSolve(30000, true));
-    btnGenAllowEmpty120.addEventListener('click', () => startSolve(120000, true));
+    btnGenerate.addEventListener('click', () => startSolve(120000));
+    btnGenerateAllowEmpty.addEventListener('click', () => startSolve(120000, true));
 
     btnStop.addEventListener('click', () => {
       if (!currentJob) return;
@@ -488,6 +659,78 @@
         alert('Failed to save.');
       }
     });
+
+    function normalizeCreditValue(raw) {
+      const parsed = parseInt(String(raw ?? '').trim(), 10);
+      return Number.isFinite(parsed) ? parsed : 0;
+    }
+    function setCreditForSurgeon(sid, nextValue) {
+      const normalized = normalizeCreditValue(nextValue);
+      document.querySelectorAll(`.js-call-credit[data-surgeon-id="${sid}"]`).forEach((input) => {
+        input.value = String(normalized);
+      });
+    }
+
+    document.querySelectorAll('.js-call-credit').forEach((input) => {
+      input.addEventListener('change', () => {
+        const sid = input.getAttribute('data-surgeon-id');
+        setCreditForSurgeon(sid, input.value);
+      });
+    });
+    document.querySelectorAll('.js-credit-plus').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const sid = btn.getAttribute('data-surgeon-id');
+        const probe = document.querySelector(`.js-call-credit[data-surgeon-id="${sid}"]`);
+        const current = normalizeCreditValue(probe ? probe.value : 0);
+        setCreditForSurgeon(sid, current + 1);
+      });
+    });
+    document.querySelectorAll('.js-credit-minus').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const sid = btn.getAttribute('data-surgeon-id');
+        const probe = document.querySelector(`.js-call-credit[data-surgeon-id="${sid}"]`);
+        const current = normalizeCreditValue(probe ? probe.value : 0);
+        setCreditForSurgeon(sid, current - 1);
+      });
+    });
+    if (btnToggleCohortTable && cohortTablesWrap) {
+      btnToggleCohortTable.addEventListener('click', () => {
+        const isHidden = cohortTablesWrap.classList.toggle('hidden');
+        btnToggleCohortTable.textContent = isHidden ? 'Show Cohort Tables' : 'Hide Cohort Tables';
+      });
+    }
+
+    if (btnSaveCredits) {
+      btnSaveCredits.addEventListener('click', async () => {
+        const inputs = document.querySelectorAll('.js-call-credit');
+        const credits = {};
+        for (const input of inputs) {
+          const sid = input.getAttribute('data-surgeon-id');
+          const value = normalizeCreditValue(input.value);
+          setCreditForSurgeon(sid, value);
+          credits[sid] = { call_credit: value };
+        }
+
+        try {
+          const res = await fetch('/save_surgeon_call_credits', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-CSRFToken': document.querySelector('meta[name="csrf-token"]').getAttribute('content')
+            },
+            body: JSON.stringify({ credits })
+          });
+          if (res.ok) {
+            alert('Saved call-credit preferences.');
+          } else {
+            const data = await res.json().catch(() => ({}));
+            alert(data.error || 'Failed to save call-credit preferences.');
+          }
+        } catch (err) {
+          alert('Failed to save call-credit preferences.');
+        }
+      });
+    }
   });
 </script>
 

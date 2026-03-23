@@ -104,7 +104,9 @@ def init_db():
                 name TEXT NOT NULL,
                 call_levels TEXT NOT NULL,
                 nlth BOOLEAN NOT NULL DEFAULT FALSE,
-                team TEXT NOT NULL
+                team TEXT NOT NULL,
+                manual_less_calls_credit INTEGER NOT NULL DEFAULT 0,
+                manual_more_calls_credit INTEGER NOT NULL DEFAULT 0
             );
             """,
             """
@@ -210,6 +212,14 @@ def init_db():
                 db.exec_driver_sql("ALTER TABLE surgeons ADD COLUMN team TEXT DEFAULT ''")
             except Exception:
                 pass
+            try:
+                db.exec_driver_sql("ALTER TABLE surgeons ADD COLUMN manual_less_calls_credit INTEGER DEFAULT 0")
+            except Exception:
+                pass
+            try:
+                db.exec_driver_sql("ALTER TABLE surgeons ADD COLUMN manual_more_calls_credit INTEGER DEFAULT 0")
+            except Exception:
+                pass
         else:
             db.exec_driver_sql(
                 """
@@ -223,15 +233,31 @@ def init_db():
                 ADD COLUMN IF NOT EXISTS team TEXT DEFAULT ''
                 """
             )
+            db.exec_driver_sql(
+                """
+                ALTER TABLE surgeons
+                ADD COLUMN IF NOT EXISTS manual_less_calls_credit INTEGER DEFAULT 0
+                """
+            )
+            db.exec_driver_sql(
+                """
+                ALTER TABLE surgeons
+                ADD COLUMN IF NOT EXISTS manual_more_calls_credit INTEGER DEFAULT 0
+                """
+            )
 
         # Backfill NULLs, then enforce NOT NULL
         false_val = "0" if is_sqlite else "FALSE"
         db.exec_driver_sql(f"UPDATE surgeons SET nlth = {false_val} WHERE nlth IS NULL")
         db.exec_driver_sql("UPDATE surgeons SET team = '' WHERE team IS NULL")
+        db.exec_driver_sql("UPDATE surgeons SET manual_less_calls_credit = 0 WHERE manual_less_calls_credit IS NULL")
+        db.exec_driver_sql("UPDATE surgeons SET manual_more_calls_credit = 0 WHERE manual_more_calls_credit IS NULL")
         
         if not is_sqlite:
             db.exec_driver_sql("ALTER TABLE surgeons ALTER COLUMN nlth SET NOT NULL")
             db.exec_driver_sql("ALTER TABLE surgeons ALTER COLUMN team SET NOT NULL")
+            db.exec_driver_sql("ALTER TABLE surgeons ALTER COLUMN manual_less_calls_credit SET NOT NULL")
+            db.exec_driver_sql("ALTER TABLE surgeons ALTER COLUMN manual_more_calls_credit SET NOT NULL")
 
 
         # ── 2) Seed global_config defaults ──
@@ -246,7 +272,8 @@ def init_db():
             "spacing_threshold":     "7",
             "gamma_weekend_balance": "50",
             "gamma_consec_weekend":  "20",
-            "gamma_team_pref":       "10"
+            "gamma_team_pref":       "10",
+            "enable_two_pass_credit_priority": "1",
         }
         
         insert_gc = text("""
@@ -480,7 +507,66 @@ def get_all_surgeons():
     db = get_db()
     result = db.execute(text("SELECT * FROM surgeons"))
     rows = result.mappings().all()      # ← get list of dicts
-    return [dict(r) for r in rows]
+    surgeons = [dict(r) for r in rows]
+    for surgeon in surgeons:
+        try:
+            less_credit = int(surgeon.get("manual_less_calls_credit", 0) or 0)
+        except Exception:
+            less_credit = 0
+        try:
+            more_credit = int(surgeon.get("manual_more_calls_credit", 0) or 0)
+        except Exception:
+            more_credit = 0
+        less_credit = max(0, less_credit)
+        more_credit = max(0, more_credit)
+        # UI semantics: negative = fewer calls, positive = more calls
+        surgeon["manual_call_credit"] = more_credit - less_credit
+    return surgeons
+
+
+def update_surgeon_manual_call_credits(credits_by_surgeon_id: dict):
+    """
+    Persist per-surgeon manual call-credit preferences.
+    credits_by_surgeon_id format:
+      {
+        12: {"less_calls_credit": 2, "more_calls_credit": 0},
+        15: {"less_calls_credit": 0, "more_calls_credit": 1},
+      }
+    """
+    db = get_db()
+    stmt = text(
+        """
+        UPDATE surgeons
+        SET manual_less_calls_credit = :less_credit,
+            manual_more_calls_credit = :more_credit
+        WHERE id = :sid
+        """
+    )
+    with db.begin():
+        for sid_raw, values in (credits_by_surgeon_id or {}).items():
+            try:
+                sid = int(sid_raw)
+            except Exception:
+                continue
+            values = values or {}
+            try:
+                less_credit = int(values.get("less_calls_credit", 0))
+            except Exception:
+                less_credit = 0
+            try:
+                more_credit = int(values.get("more_calls_credit", 0))
+            except Exception:
+                more_credit = 0
+            less_credit = max(0, less_credit)
+            more_credit = max(0, more_credit)
+            db.execute(
+                stmt,
+                {
+                    "sid": sid,
+                    "less_credit": less_credit,
+                    "more_credit": more_credit,
+                },
+            )
 
 def get_max_calls_config():
     db = get_db()
@@ -645,6 +731,119 @@ def get_horizon_prior_levels_and_credit(year: int, month: int, surgeons: list):
         "prior_levels": prior_levels,
         "prior_unavail_days": prior_unavail_days,
         "prior_unavail_credit_calls": prior_unavail_credit_calls,
+    }
+
+
+def get_half_year_months_before(month: int):
+    """
+    Return prior months in the current half-year window.
+    - For Jan..Jun: Jan through month-1
+    - For Jul..Dec: Jul through month-1
+    """
+    if month < 1 or month > 12:
+        return []
+    if 1 <= month <= 6:
+        start_month, end_month_excl = 1, 7
+    else:
+        start_month, end_month_excl = 7, 13
+    return [m for m in range(start_month, min(month, end_month_excl))]
+
+
+def build_half_year_cohort_summary(year: int, month: int, surgeons: list | None = None):
+    """
+    Build Jan/Jul-to-date (prior months only) cohort counts used on New Schedule.
+    Data source: published schedules only (via get_published_schedule_version).
+    """
+    if surgeons is None:
+        surgeons = get_all_surgeons()
+
+    levels = ["1A", "1B", "2A", "2B", "3", "4"]
+    months = get_half_year_months_before(month)
+    id_by_name = {s.get("name"): s.get("id") for s in surgeons if s.get("name")}
+    counts_by_sid = {int(s["id"]): {L: 0 for L in levels} for s in surgeons if s.get("id") is not None}
+
+    for m in months:
+        sched = get_published_schedule_version(year, m)
+        if not sched:
+            continue
+        for _, assigns in (sched or {}).items():
+            if not isinstance(assigns, dict):
+                continue
+            for L in levels:
+                name = assigns.get(L)
+                if not name:
+                    continue
+                sid = id_by_name.get(name)
+                if sid is None or sid not in counts_by_sid:
+                    continue
+                counts_by_sid[sid][L] += 1
+
+    def has_level(surgeon_obj, level):
+        return level in parse_call_levels(surgeon_obj.get("call_levels", ""))
+
+    group1_members = sorted([s for s in surgeons if has_level(s, "1A") or has_level(s, "1B")], key=lambda s: s.get("name", ""))
+    group2_members = sorted([s for s in surgeons if get_level2_group(s) in (1, 2, 3)], key=lambda s: s.get("name", ""))
+    group4_l2_ids = {int(s["id"]) for s in surgeons if s.get("id") is not None and get_level2_group(s) == 4}
+    group3_members = sorted(
+        [s for s in surgeons if has_level(s, "3") or (s.get("id") is not None and int(s["id"]) in group4_l2_ids)],
+        key=lambda s: s.get("name", ""),
+    )
+    group4_members = sorted([s for s in surgeons if has_level(s, "4")], key=lambda s: s.get("name", ""))
+
+    group_definitions = [
+        ("g1", "G1 (1A+1B)", group1_members, lambda sid: counts_by_sid.get(sid, {}).get("1A", 0) + counts_by_sid.get(sid, {}).get("1B", 0)),
+        ("g2", "G2 (2A+2B)", group2_members, lambda sid: counts_by_sid.get(sid, {}).get("2A", 0) + counts_by_sid.get(sid, {}).get("2B", 0)),
+        ("g3", "G3 (3 + 2B if subgroup 4)", group3_members, lambda sid: counts_by_sid.get(sid, {}).get("3", 0) + (counts_by_sid.get(sid, {}).get("2B", 0) if sid in group4_l2_ids else 0)),
+        ("g4", "G4 (4)", group4_members, lambda sid: counts_by_sid.get(sid, {}).get("4", 0)),
+    ]
+
+    groups = []
+    for key, label, members, getter in group_definitions:
+        rows = []
+        member_counts = []
+        for surgeon_obj in members:
+            sid = int(surgeon_obj.get("id"))
+            count = int(getter(sid))
+            member_counts.append(count)
+            rows.append(
+                {
+                    "surgeon_id": sid,
+                    "name": surgeon_obj.get("name", ""),
+                    "count": count,
+                    "manual_call_credit": int(surgeon_obj.get("manual_call_credit", 0) or 0),
+                }
+            )
+        avg = (sum(member_counts) / len(member_counts)) if member_counts else 0.0
+        for row in rows:
+            delta = row["count"] - avg
+            if delta > 0:
+                status = "above"
+            elif delta < 0:
+                status = "below"
+            else:
+                status = "at"
+            row["delta"] = round(delta, 2)
+            row["status"] = status
+        groups.append(
+            {
+                "key": key,
+                "label": label,
+                "average": round(avg, 2),
+                "members": rows,
+            }
+        )
+
+    if 1 <= month <= 6:
+        window_start_month = 1
+    else:
+        window_start_month = 7
+
+    return {
+        "year": year,
+        "month": month,
+        "window_start_month": window_start_month,
+        "months_included": months,
+        "groups": groups,
     }
 
 #############################################
