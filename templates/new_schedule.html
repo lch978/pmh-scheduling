@@ -190,6 +190,71 @@
     border-radius: 4px;
     background: #fff;
   }
+  .cohort-mini-summary {
+    margin-top: 16px;
+    padding: 10px;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    background: #fafcff;
+  }
+  .cohort-mini-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+  }
+  .cohort-mini-card {
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    background: #fff;
+    overflow: hidden;
+    font-size: 12px;
+  }
+  .cohort-mini-card h4 {
+    margin: 0;
+    padding: 8px;
+    background: #f3f6fb;
+    font-size: 12px;
+    text-align: center;
+  }
+  .cohort-mini-table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+  .cohort-mini-table td {
+    border-top: 1px solid #f0f2f6;
+    padding: 6px 8px;
+  }
+  .cohort-mini-name {
+    display: inline-block;
+    padding: 2px 6px;
+    border-radius: 4px;
+    border: 1px solid #e5e7eb;
+    min-width: 90px;
+  }
+  .cohort-mini-name.above-soft {
+    background: #f8d7da;
+    border-color: #f2bfc5;
+    color: #8a1c26;
+  }
+  .cohort-mini-name.above-hard {
+    background: #b71c1c;
+    border-color: #9f1717;
+    color: #fff;
+  }
+  .cohort-mini-name.at {
+    background: #ffffff;
+    border-color: #d1d5db;
+    color: #111827;
+  }
+  .cohort-mini-name.below {
+    background: #dff3df;
+    border-color: #c3e7c3;
+    color: #1b5e20;
+  }
+  .cohort-mini-median td {
+    font-weight: 700;
+    background: #f7fafc;
+  }
 </style>
 {% endblock %}
 
@@ -400,6 +465,7 @@
       <p style="text-align:center; margin-top:20px;">No saved schedule yet.</p>
     {% endif %}
   </div>
+  <div id="cohortMiniSummary" class="cohort-mini-summary"></div>
 
 <script>
   document.addEventListener('DOMContentLoaded', () => {
@@ -410,6 +476,7 @@
     }
     const weekendSet      = new Set({{ weekend_set|list|tojson }});
     const publicHolidays  = new Set({{ public_holidays|list|tojson }});
+    const surgeonsMeta = {{ (surgeons_meta or [])|tojson }};
 
     // grab references
     const modal   = document.getElementById('loadingModal');
@@ -449,6 +516,121 @@
     }
 
     // redraw the table and update hidden fields + URL + forms
+    function escapeHtml(raw) {
+      return String(raw ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+    }
+
+    function parseLevels(s) {
+      if (!s) return [];
+      return String(s).split(',').map(v => v.trim()).filter(Boolean);
+    }
+
+    function getLevel2Group(surgeon) {
+      const levels = parseLevels(surgeon.call_levels);
+      const has2A = levels.includes('2A');
+      const has2B = levels.includes('2B');
+      const has3 = levels.includes('3');
+      if (has2A && !has2B) return 1;
+      if (has2A && has2B) return 2;
+      if (!has2A && has2B && !has3) return 3;
+      if (!has2A && has2B && has3) return 4;
+      return null;
+    }
+
+    function computeMedian(values) {
+      if (!values.length) return 0;
+      const arr = [...values].sort((a, b) => a - b);
+      const mid = Math.floor(arr.length / 2);
+      if (arr.length % 2 === 1) return arr[mid];
+      return (arr[mid - 1] + arr[mid]) / 2;
+    }
+
+    function renderCohortMiniSummary(sol) {
+      const host = document.getElementById('cohortMiniSummary');
+      if (!host) return;
+      if (!sol || typeof sol !== 'object' || Array.isArray(sol) || Object.keys(sol).length === 0) {
+        host.innerHTML = '<div style="font-size:12px;color:#6b7280;">No schedule loaded.</div>';
+        return;
+      }
+
+      const hasLevel = (surgeon, lvl) => parseLevels(surgeon.call_levels).includes(lvl);
+      const nonNlth = surgeonsMeta.filter(s => !s.nlth);
+      const group1Ids = new Set(nonNlth.filter(s => getLevel2Group(s) === 1).map(s => s.id));
+      const group2Ids = new Set(nonNlth.filter(s => getLevel2Group(s) === 2).map(s => s.id));
+      const group3Ids = new Set(nonNlth.filter(s => getLevel2Group(s) === 3).map(s => s.id));
+      const group4Ids = new Set(nonNlth.filter(s => getLevel2Group(s) === 4).map(s => s.id));
+
+      const cohorts = [
+        {
+          key: 'g1',
+          label: 'Group 1 (1A+1B)',
+          members: nonNlth.filter(s => hasLevel(s, '1A') || hasLevel(s, '1B')),
+          countFn: (dayRow, sid, name) => (dayRow['1A'] === name ? 1 : 0) + (dayRow['1B'] === name ? 1 : 0),
+        },
+        {
+          key: 'g2',
+          label: 'Group 2 (2A+2B)',
+          members: nonNlth.filter(s => group1Ids.has(s.id) || group2Ids.has(s.id) || group3Ids.has(s.id)),
+          countFn: (dayRow, sid, name) => (dayRow['2A'] === name ? 1 : 0) + (dayRow['2B'] === name ? 1 : 0),
+        },
+        {
+          key: 'g3',
+          label: 'Group 3 (3 +2B grp4)',
+          members: nonNlth.filter(s => hasLevel(s, '3') || group4Ids.has(s.id)),
+          countFn: (dayRow, sid, name) => (dayRow['3'] === name ? 1 : 0) + ((group4Ids.has(sid) && dayRow['2B'] === name) ? 1 : 0),
+        },
+        {
+          key: 'g4',
+          label: 'Group 4 (4)',
+          members: nonNlth.filter(s => hasLevel(s, '4')),
+          countFn: (dayRow, sid, name) => (dayRow['4'] === name ? 1 : 0),
+        }
+      ];
+
+      const cards = cohorts.map((cohort) => {
+        const counts = {};
+        cohort.members.forEach(m => { counts[m.id] = 0; });
+        for (const day of Object.keys(sol)) {
+          const row = (sol[day] && typeof sol[day] === 'object' && !Array.isArray(sol[day])) ? sol[day] : {};
+          cohort.members.forEach(m => { counts[m.id] += cohort.countFn(row, m.id, m.name); });
+        }
+
+        const vals = cohort.members.map(m => counts[m.id] || 0);
+        const median = computeMedian(vals);
+        const rows = cohort.members
+          .slice()
+          .sort((a, b) => a.name.localeCompare(b.name))
+          .map((m) => {
+            const v = counts[m.id] || 0;
+            const delta = v - median;
+            let cls = 'at';
+            if (delta > 1) cls = 'above-hard';
+            else if (delta === 1) cls = 'above-soft';
+            else if (delta < 0) cls = 'below';
+            return `<tr><td><span class="cohort-mini-name ${cls}">${escapeHtml(m.name)}</span></td><td style="text-align:right;font-weight:600;">${v}</td></tr>`;
+          }).join('');
+
+        return `
+          <div class="cohort-mini-card">
+            <h4>${escapeHtml(cohort.label)}</h4>
+            <table class="cohort-mini-table">
+              <tbody>
+                ${rows || '<tr><td colspan="2" style="text-align:center;color:#6b7280;">No surgeons</td></tr>'}
+                <tr class="cohort-mini-median"><td>Median</td><td style="text-align:right;">${Number.isInteger(median) ? median : median.toFixed(1)}</td></tr>
+              </tbody>
+            </table>
+          </div>
+        `;
+      }).join('');
+
+      host.innerHTML = `<div class="cohort-mini-grid">${cards}</div>`;
+    }
+
     function renderSchedule(sol) {
       if (!sol || typeof sol !== 'object' || Array.isArray(sol)) {
         sol = {};
@@ -498,6 +680,7 @@
 
       // bump the URL so “Save”/“Export” will post to the right ?year=…&month=…
       window.history.replaceState(null, '', `?year=${y}&month=${m}`);
+      renderCohortMiniSummary(sol);
     }
 
     // poll until done
@@ -731,6 +914,8 @@
         }
       });
     }
+
+    renderCohortMiniSummary(initialSchedule);
   });
 </script>
 

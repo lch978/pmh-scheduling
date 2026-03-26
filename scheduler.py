@@ -50,12 +50,22 @@ def _manual_credit_calls_from_surgeon(surgeon: dict) -> int:
     more_credit = max(0, more_credit)
     return less_credit - more_credit
 
+
+def _unified_fairness_credit_calls(unavailability_credit_calls: int, surgeon: dict) -> int:
+    """Unified fairness credit = unavailability credit + manual call credit."""
+    try:
+        base = int(unavailability_credit_calls or 0)
+    except Exception:
+        base = 0
+    return base + _manual_credit_calls_from_surgeon(surgeon or {})
+
 def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=None, preassignments=None, time_limit_seconds: int = 30, allow_empty: bool = False, _diagnostic_run: bool = False, _relax_fairness_caps: bool = False, horizon_prior_counts=None):
 
     from helper import (
         get_max_calls_config,
         get_global_config,
         get_availability_requests,
+        compute_unavailability_credit_by_surgeon,
         parse_call_levels,
         get_level2_group,
         get_team_day_prefs
@@ -141,7 +151,7 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
     unavail_credit_days = int(global_config.get("unavail_credit_days", "7")) or 7
     if unavail_credit_days < 1:
         unavail_credit_days = 7
-    enable_two_pass_credit_priority = str(global_config.get("enable_two_pass_credit_priority", "1")) == "1"
+    enable_two_pass_fairness_priority = str(global_config.get("enable_two_pass_fairness_priority", "1")) == "1"
 
     # Feature flags (on/off) for constraint families
     def is_enabled(key: str, default: str = "1") -> bool:
@@ -238,32 +248,22 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                     preassigned_early[(d_idx, lvl)] = int(sid)
                 except Exception:
                     continue
-    # Compute per-surgeon credit in call units (unavailability + manual bias).
-    day_set_str = set(days)
-    credit_calls_per_surgeon = {s['id']: 0 for s in surgeons}
-    try:
-        for s_id, req_list in availability.items():
-            count_unavail = 0
-            for req in req_list:
-                if req.get('request_type') not in ('unavailable','study_leave'):
-                    continue
-                raw = req.get('date')
-                if isinstance(raw, str):
-                    if raw in day_set_str:
-                        count_unavail += 1
-                elif isinstance(raw, datetime.date):
-                    if raw.isoformat() in day_set_str:
-                        count_unavail += 1
-            # Convert unavailable days to call-credit units.
-            credit_calls_per_surgeon[s_id] = _credit_calls_from_unavailability(count_unavail, unavail_credit_days)
-    except Exception:
-        # Fallback: no credits if any parsing error
-        credit_calls_per_surgeon = {s['id']: 0 for s in surgeons}
+    # Unified fairness credit per surgeon = unavailability credit + manual call credit.
+    # This is only used in fairness math (caps/objectives/diagnostics), not hard assignment constraints.
+    fairness_credit_calls_per_surgeon = compute_unavailability_credit_by_surgeon(
+        surgeons=surgeons,
+        availability=availability,
+        days=days,
+        unavail_credit_days=unavail_credit_days,
+    )
     for surgeon_obj in surgeons:
         sid = surgeon_obj.get("id")
         if sid is None:
             continue
-        credit_calls_per_surgeon[sid] = credit_calls_per_surgeon.get(sid, 0) + _manual_credit_calls_from_surgeon(surgeon_obj)
+        fairness_credit_calls_per_surgeon[sid] = _unified_fairness_credit_calls(
+            fairness_credit_calls_per_surgeon.get(sid, 0),
+            surgeon_obj,
+        )
     for d, day_str in enumerate(days):
         current_date = datetime.datetime.strptime(day_str, "%Y-%m-%d").date()
         for s_id, req_list in availability.items():
@@ -692,13 +692,11 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
 
     # --- Per-group fairness terms (replace overall fairness) ---
     group_fairness_diffs = []
-    cohort_count_maps = {}
 
     # Group 1: (1A + 1B)
     group_level1_ids = [s["id"] for s in surgeons if set(parse_call_levels(s.get("call_levels",""))).intersection({"1A","1B"}) and s["id"] not in nlth_ids]
     if len(group_level1_ids) > 1:
         lvl1_counts = {s: model.NewIntVar(0, num_days * 2, f"lvl1_count_{s}") for s in group_level1_ids}
-        cohort_count_maps["g1"] = lvl1_counts
         for s in group_level1_ids:
             add_named_constraint(f"(1A+1B) count for surgeon {s}",
                 model.Add, lvl1_counts[s] == sum(indicators[(d, lvl, s)] for d in range(num_days) for lvl in ["1A","1B"]))
@@ -719,7 +717,7 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
             cur_var = lvl1_counts[s]
             if cap_uses_credit:
                 cur_adj = model.NewIntVar(-num_days * 2, num_days * 2, f"lvl1_cur_adj_{s}")
-                add_named_constraint(f"(1A+1B) current adj {s}", model.Add, cur_adj == cur_var - credit_calls_per_surgeon.get(s, 0))
+                add_named_constraint(f"(1A+1B) current adj {s}", model.Add, cur_adj == cur_var - fairness_credit_calls_per_surgeon.get(s, 0))
                 cur_var = cur_adj
             prior_credit = prior_credit_calls_per_surgeon.get(s, 0) if cap_uses_credit else 0
             total = model.NewIntVar(-fairness_abs_bound, fairness_abs_bound, f"lvl1_total_{s}")
@@ -739,7 +737,6 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
     l2_union_ids = [s for s in (list(set(group1_ids + group2_ids + group3_ids))) if s not in nlth_ids]
     if len(l2_union_ids) > 1:
         lvl2_counts_all = {s: model.NewIntVar(0, num_days * 2, f"lvl2_all_count_{s}") for s in l2_union_ids}
-        cohort_count_maps["g2"] = lvl2_counts_all
         for s in l2_union_ids:
             add_named_constraint(f"(2A+2B) all-L2 count for surgeon {s}",
                 model.Add, lvl2_counts_all[s] == sum(indicators[(d, lvl, s)] for d in range(num_days) for lvl in ["2A","2B"]))
@@ -758,7 +755,7 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
             cur_var = lvl2_counts_all[s]
             if cap_uses_credit:
                 cur_adj = model.NewIntVar(-num_days * 2, num_days * 2, f"lvl2_all_cur_adj_{s}")
-                add_named_constraint(f"(2A+2B) all-L2 current adj {s}", model.Add, cur_adj == cur_var - credit_calls_per_surgeon.get(s, 0))
+                add_named_constraint(f"(2A+2B) all-L2 current adj {s}", model.Add, cur_adj == cur_var - fairness_credit_calls_per_surgeon.get(s, 0))
                 cur_var = cur_adj
             prior_credit = prior_credit_calls_per_surgeon.get(s, 0) if cap_uses_credit else 0
             total = model.NewIntVar(-fairness_abs_bound, fairness_abs_bound, f"lvl2_all_total_{s}")
@@ -780,7 +777,6 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
     s3_ids = [sid for sid in s3_union_ids if sid not in nlth_ids]
     if len(s3_ids) > 1:
         g3_counts = {s: model.NewIntVar(0, num_days * 2, f"lvl3_union_count_{s}") for s in s3_ids}
-        cohort_count_maps["g3"] = g3_counts
         for s in s3_ids:
             terms = [indicators[(d, "3", s)] for d in range(num_days)]
             if s in group4_ids:
@@ -803,7 +799,7 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
             cur_var = g3_counts[s]
             if cap_uses_credit:
                 cur_adj = model.NewIntVar(-num_days * 2, num_days * 2, f"lvl3_union_cur_adj_{s}")
-                add_named_constraint(f"lvl3 union current adj {s}", model.Add, cur_adj == cur_var - credit_calls_per_surgeon.get(s, 0))
+                add_named_constraint(f"lvl3 union current adj {s}", model.Add, cur_adj == cur_var - fairness_credit_calls_per_surgeon.get(s, 0))
                 cur_var = cur_adj
             prior_credit = prior_credit_calls_per_surgeon.get(s, 0) if cap_uses_credit else 0
             total = model.NewIntVar(-fairness_abs_bound, fairness_abs_bound, f"lvl3_union_total_{s}")
@@ -823,7 +819,6 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
     group4_level_ids = [s["id"] for s in surgeons if "4" in parse_call_levels(s.get("call_levels","")) and s["id"] not in nlth_ids]
     if len(group4_level_ids) > 1:
         lvl4_counts = {s: model.NewIntVar(0, num_days, f"lvl4_count_{s}") for s in group4_level_ids}
-        cohort_count_maps["g4"] = lvl4_counts
         for s in group4_level_ids:
             add_named_constraint(f"(4) count for surgeon {s}",
                 model.Add, lvl4_counts[s] == sum(indicators[(d, "4", s)] for d in range(num_days)))
@@ -839,7 +834,7 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
             cur_var = lvl4_counts[s]
             if cap_uses_credit:
                 cur_adj = model.NewIntVar(-num_days, num_days, f"lvl4_cur_adj_{s}")
-                add_named_constraint(f"(4) current adj {s}", model.Add, cur_adj == cur_var - credit_calls_per_surgeon.get(s, 0))
+                add_named_constraint(f"(4) current adj {s}", model.Add, cur_adj == cur_var - fairness_credit_calls_per_surgeon.get(s, 0))
                 cur_var = cur_adj
             prior_credit = prior_credit_calls_per_surgeon.get(s, 0) if cap_uses_credit else 0
             total = model.NewIntVar(-fairness_abs_bound, fairness_abs_bound, f"lvl4_total_{s}")
@@ -1150,41 +1145,6 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                 ).OnlyEnforceIf(b.Not())
                 empty_indicators.append(b)
     
-    # --- Cohort credit-advantage objective term (used in pass-1 lexicographic solve) ---
-    signed_credit_by_sid = {}
-    for surgeon_obj in surgeons:
-        sid = surgeon_obj.get("id")
-        if sid is None:
-            continue
-        try:
-            signed_credit = int(surgeon_obj.get("manual_call_credit", 0) or 0)
-        except Exception:
-            signed_credit = 0
-        signed_credit_by_sid[sid] = signed_credit
-
-    credit_adv_terms = []
-    for _, count_map in cohort_count_maps.items():
-        if not count_map:
-            continue
-        cohort_ids = list(count_map.keys())
-        for sid in cohort_ids:
-            credit_mag = max(0, int(signed_credit_by_sid.get(sid, 0)))
-            if credit_mag <= 0:
-                continue
-            # Primary baseline: zero-credit peers in same cohort.
-            peer_ids = [pid for pid in cohort_ids if pid != sid and int(signed_credit_by_sid.get(pid, 0)) == 0]
-            # Fallback baseline: non-positive peers, so objective remains meaningful.
-            if not peer_ids:
-                peer_ids = [pid for pid in cohort_ids if pid != sid and int(signed_credit_by_sid.get(pid, 0)) <= 0]
-            for pid in peer_ids:
-                credit_adv_terms.append(credit_mag * (count_map[sid] - count_map[pid]))
-
-    credit_adv_total = None
-    if credit_adv_terms:
-        adv_bound = max(1, fairness_abs_bound * len(credit_adv_terms))
-        credit_adv_total = model.NewIntVar(-adv_bound, adv_bound, "credit_adv_total")
-        add_named_constraint("Cohort credit advantage total", model.Add, credit_adv_total == sum(credit_adv_terms))
-
     objective_terms = []
     # Remove overall fairness term; use per-group fairness instead
     if enable_nocall_penalty:
@@ -1210,6 +1170,10 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
     # Add per-group fairness terms
     if group_fairness_diffs:
         objective_terms.extend([fairness_weight * diff for diff in group_fairness_diffs])
+    fairness_total = None
+    if group_fairness_diffs:
+        fairness_total = model.NewIntVar(0, fairness_abs_bound * 2 * len(group_fairness_diffs), "fairness_total")
+        add_named_constraint("Fairness total", model.Add, fairness_total == sum(group_fairness_diffs))
 
     # --- Soft penalty for using 2B (reduce supervisor overload when not required) ---
     # Apply whenever gamma_2b_usage > 0 (toggle is optional)
@@ -1250,14 +1214,16 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
         return _solver
 
     # --- Solve the Model ---
-    use_two_pass = enable_two_pass_credit_priority and (credit_adv_total is not None)
-    if use_two_pass:
-        add_named_constraint("Objective pass1 credit advantage", model.Maximize, credit_adv_total)
+    # Fairness-first multi-pass solve:
+    # pass-1 minimize fairness across cohorts, pass-2 optimize remaining soft goals.
+    use_two_pass_fairness = enable_two_pass_fairness_priority and (fairness_total is not None)
+    if use_two_pass_fairness:
+        add_named_constraint("Objective pass1 fairness total", model.Minimize, fairness_total)
         solver_pass1 = _build_solver()
         status_pass1 = solver_pass1.Solve(model)
         if status_pass1 in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-            best_credit_adv = int(solver_pass1.Value(credit_adv_total))
-            add_named_constraint("Lock pass1 credit advantage", model.Add, credit_adv_total >= best_credit_adv)
+            best_fairness = int(solver_pass1.Value(fairness_total))
+            add_named_constraint("Lock pass1 fairness total", model.Add, fairness_total <= best_fairness)
             add_named_constraint("Objective pass2 normal", model.Minimize, normal_objective_expr)
             solver = _build_solver()
             status = solver.Solve(model)
@@ -1526,7 +1492,7 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                             g1_raw.get(sid, 0)
                             + int(prior_levels.get("1A", {}).get(sid, 0))
                             + int(prior_levels.get("1B", {}).get(sid, 0))
-                            - (credit_calls_per_surgeon.get(sid, 0) if cap_uses_credit else 0)
+                            - (fairness_credit_calls_per_surgeon.get(sid, 0) if cap_uses_credit else 0)
                             - (int(prior_credit.get(sid, 0)) if cap_uses_credit else 0)
                         )
                         for sid in g1_raw
@@ -1548,7 +1514,7 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                             g2_raw.get(sid, 0)
                             + int(prior_levels.get("2A", {}).get(sid, 0))
                             + int(prior_levels.get("2B", {}).get(sid, 0))
-                            - (credit_calls_per_surgeon.get(sid, 0) if cap_uses_credit else 0)
+                            - (fairness_credit_calls_per_surgeon.get(sid, 0) if cap_uses_credit else 0)
                             - (int(prior_credit.get(sid, 0)) if cap_uses_credit else 0)
                         )
                         for sid in g2_raw
@@ -1575,7 +1541,7 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                             g3_raw.get(sid, 0)
                             + int(prior_levels.get("3", {}).get(sid, 0))
                             + (int(prior_levels.get("2B", {}).get(sid, 0)) if sid in group4_ids else 0)
-                            - (credit_calls_per_surgeon.get(sid, 0) if cap_uses_credit else 0)
+                            - (fairness_credit_calls_per_surgeon.get(sid, 0) if cap_uses_credit else 0)
                             - (int(prior_credit.get(sid, 0)) if cap_uses_credit else 0)
                         )
                         for sid in g3_raw
@@ -1595,7 +1561,7 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                         sid: (
                             g4_raw.get(sid, 0)
                             + int(prior_levels.get("4", {}).get(sid, 0))
-                            - (credit_calls_per_surgeon.get(sid, 0) if cap_uses_credit else 0)
+                            - (fairness_credit_calls_per_surgeon.get(sid, 0) if cap_uses_credit else 0)
                             - (int(prior_credit.get(sid, 0)) if cap_uses_credit else 0)
                         )
                         for sid in g4_raw
@@ -1617,6 +1583,15 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                         diagnostics.extend(violating)
                     else:
                         diagnostics.append("Diagnostics could not identify a specific cohort exceeding the cap; try increasing time or adjusting constraints.")
+                    if cap_uses_credit:
+                        diagnostics.append(
+                            "Unified fairness credit (current month): "
+                            + pretty_counts({sid: fairness_credit_calls_per_surgeon.get(sid, 0) for sid in fairness_credit_calls_per_surgeon})
+                        )
+                        diagnostics.append(
+                            "Unified fairness credit (prior horizon): "
+                            + pretty_counts({int(sid): int(prior_credit.get(sid, 0)) for sid in prior_credit})
+                        )
                     diagnostics.append(f"Group 1 adjusted counts: {pretty_counts(g1_counts)} (range={g1_range})")
                     diagnostics.append(f"Group 2 adjusted counts: {pretty_counts(g2_counts_all)} (range={g2_union_range})")
                     diagnostics.append(f"Group 3 adjusted counts: {pretty_counts(g3_counts)} (range={g3_range})")

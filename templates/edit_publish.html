@@ -16,15 +16,38 @@
   .btn-danger { background:#c62828; } .btn-danger:hover { background:#a52222; }
   .btn-sm { padding:5px 10px; font-size:12px; }
 
-  .ep-layout { display:flex; gap:12px; align-items:flex-start; }
-  .ep-versions { width:220px; min-width:220px; border:1px solid #ddd; border-radius:8px; padding:10px; position:sticky; top:12px; max-height:calc(100vh - 200px); overflow-y:auto; }
-  .ep-versions-title { font-weight:bold; margin-bottom:8px; font-size:14px; }
-  .ep-ver-item { border:1px solid #eee; border-radius:6px; padding:8px; margin-bottom:6px; }
-  .ep-ver-item .ver-label { font-weight:600; font-size:13px; }
-  .ep-ver-item .ver-pub { font-size:11px; color:#2e7d32; margin-left:4px; }
-  .ep-ver-actions { display:flex; gap:4px; margin-top:6px; flex-wrap:wrap; }
-  .ep-main { flex:1; min-width:0; }
+  .ep-layout { display:flex; flex-direction:column; gap:12px; align-items:stretch; }
+  .ep-main { min-width:0; }
+  .ep-versions-wrap { border:1px solid #ddd; border-radius:8px; overflow:hidden; background:#fff; }
+  .ep-versions-wrap summary { cursor:pointer; list-style:none; padding:10px 14px; background:#f7f8fa; font-weight:700; font-size:14px; border-bottom:1px solid #e5e7eb; user-select:none; }
+  .ep-versions-wrap summary::-webkit-details-marker { display:none; }
+  .ep-versions-inner { padding:10px 12px; }
+  .ep-save-row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:10px; }
+  .ep-save-row input, .ep-save-row select { padding:6px 8px; border:1px solid #d0d7de; border-radius:4px; font-size:13px; }
+  .ep-save-row input { min-width:180px; }
+  .ep-save-note { font-size:12px; color:#555; margin-bottom:10px; }
+  .ep-versions-table { width:100%; border-collapse:collapse; font-size:12px; }
+  .ep-versions-table th, .ep-versions-table td { border:1px solid #e5e7eb; padding:6px 7px; text-align:left; vertical-align:middle; }
+  .ep-versions-table th { background:#f8fafc; font-size:11px; text-transform:uppercase; letter-spacing:.02em; color:#475569; }
+  .ep-versions-table .is-published { color:#2e7d32; font-weight:700; }
+  .ep-row-actions { display:flex; gap:4px; flex-wrap:wrap; }
+  .ep-rename-row { display:flex; gap:4px; align-items:center; }
+  .ep-rename-row input { width:140px; padding:4px 6px; border:1px solid #d0d7de; border-radius:4px; font-size:12px; }
+  .ep-empty { color:#777; font-size:12px; padding:8px 0; }
   .ep-actions { display:flex; flex-wrap:wrap; gap:8px; justify-content:center; margin-top:12px; }
+  .cohort-mini-summary { margin-top: 14px; }
+  .cohort-mini-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap:10px; }
+  .cohort-mini-card { border:1px solid #e5e7eb; border-radius:8px; overflow:hidden; background:#fff; }
+  .cohort-mini-card h4 { margin:0; padding:7px 9px; font-size:12px; background:#f8fafc; border-bottom:1px solid #e5e7eb; }
+  .cohort-mini-table { width:100%; border-collapse:collapse; font-size:12px; }
+  .cohort-mini-table td { padding:6px 8px; border-bottom:1px solid #f3f4f6; }
+  .cohort-mini-table tr:last-child td { border-bottom:none; }
+  .cohort-mini-name { display:inline-block; padding:1px 6px; border-radius:999px; }
+  .cohort-mini-name.above-soft { background:#ffe5e5; color:#9f1239; }
+  .cohort-mini-name.above-hard { background:#fecaca; color:#7f1d1d; }
+  .cohort-mini-name.at { background:#ffffff; color:#111827; border:1px solid #e5e7eb; }
+  .cohort-mini-name.below { background:#dcfce7; color:#166534; }
+  .cohort-mini-median td { font-weight:700; background:#f9fafb; }
 
   /* Violations banner */
   .vb-container { margin-bottom:12px; border-radius:6px; overflow:hidden; border:1px solid #e0e0e0; }
@@ -122,23 +145,35 @@
   </div>
 
   <div class="ep-layout">
-    <div id="versionsPanel" class="ep-versions">
-      <div class="ep-versions-title">Versions</div>
-      <div id="versionsList"></div>
-    </div>
+    <details id="versionsPanel" class="ep-versions-wrap" open>
+      <summary>Versions</summary>
+      <div class="ep-versions-inner">
+        <div class="ep-save-row">
+          <input id="versionNameInput" type="text" placeholder="Version name (optional)">
+          <select id="saveTargetSelect">
+            <option value="">Save as new version</option>
+          </select>
+          <button id="btnSave" class="btn btn-secondary">Save</button>
+          <button id="btnPublish" class="btn btn-success">Save & Publish</button>
+        </div>
+        <div class="ep-save-note">Choose an existing version in the dropdown to overwrite it.</div>
+        <div id="versionsList"></div>
+      </div>
+    </details>
 
     <div class="ep-main">
       <div id="errors" style="color:#b00020;text-align:center;margin:8px 0;"></div>
       <div id="tableContainer"></div>
+      <div id="cohortMiniSummary" class="cohort-mini-summary"></div>
 
       <div class="ep-actions">
-        <button id="btnSave" class="btn btn-secondary">Save New Version</button>
-        <button id="btnPublish" class="btn btn-success">Save and Publish</button>
         <form id="fallbackSaveForm" method="post" action="{{ url_for('save_schedule_version_form') }}" style="display:none;">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="year" id="fb_year" value="{{ year }}">
           <input type="hidden" name="month" id="fb_month" value="{{ month }}">
           <input type="hidden" name="publish" id="fb_publish" value="0">
+          <input type="hidden" name="overwrite_version" id="fb_overwrite_version" value="">
+          <input type="hidden" name="version_name" id="fb_version_name" value="">
           <input type="hidden" name="schedule_json_ids" id="fb_schedule_json_ids" value="{}">
         </form>
       </div>
@@ -171,6 +206,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const container = document.getElementById('tableContainer');
   const errBox = document.getElementById('errors');
   const versionsList = document.getElementById('versionsList');
+  const saveTargetSelect = document.getElementById('saveTargetSelect');
+  const versionNameInput = document.getElementById('versionNameInput');
   const vbBanner = document.getElementById('violationsBanner');
   const vbHeader = document.getElementById('vbHeader');
   const vbCount = document.getElementById('vbCount');
@@ -186,6 +223,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let violations = [];
   let overrides = new Set();
   let scheduleLoaded = false;
+  let versionsCache = [];
 
   // ── Helpers ──
   function csrfToken() { return document.querySelector('meta[name="csrf-token"]').getAttribute('content'); }
@@ -203,6 +241,26 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function parseLevels(str) { return (str || '').split(',').map(s => s.trim()).filter(Boolean); }
+  function escapeHtml(s) {
+    return String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+  }
+  function getLevel2Group(surgeon) {
+    const levels = parseLevels(surgeon.call_levels);
+    const has2A = levels.includes('2A');
+    const has2B = levels.includes('2B');
+    const has3 = levels.includes('3');
+    if (has2A && !has2B) return 1;
+    if (has2A && has2B) return 2;
+    if (!has2A && has2B && !has3) return 3;
+    if (!has2A && has2B && has3) return 4;
+    return null;
+  }
+  function computeMedian(values) {
+    if (!values.length) return 0;
+    const arr = [...values].sort((a, b) => a - b);
+    const mid = Math.floor(arr.length / 2);
+    return arr.length % 2 === 1 ? arr[mid] : (arr[mid - 1] + arr[mid]) / 2;
+  }
   function formatDay(iso) {
     const d = new Date(iso + 'T00:00:00');
     return `${d.getDate()} ${DAY_NAMES[d.getDay()]}`;
@@ -223,11 +281,23 @@ document.addEventListener('DOMContentLoaded', () => {
   // ── Versions ──
   document.getElementById('year').addEventListener('change', resetView);
   document.getElementById('month').addEventListener('change', resetView);
-  function resetView() { renderVersions(); container.innerHTML = ''; errBox.textContent = ''; hideViolations(); scheduleLoaded = false; expandedDays.clear(); }
+  function resetView() {
+    renderVersions();
+    container.innerHTML = '';
+    const host = document.getElementById('cohortMiniSummary');
+    if (host) host.innerHTML = '<div style="font-size:12px;color:#6b7280;">Load a schedule version to see cohort call counts.</div>';
+    errBox.textContent = '';
+    hideViolations();
+    scheduleLoaded = false;
+    expandedDays.clear();
+  }
   renderVersions();
+  renderCohortMiniSummary({});
 
   async function renderVersions() {
+    const selectedBefore = saveTargetSelect.value;
     versionsList.innerHTML = '';
+    saveTargetSelect.innerHTML = '<option value="">Save as new version</option>';
     const { year: y, month: m } = currentYM();
     let versions = [];
     try {
@@ -235,20 +305,48 @@ document.addEventListener('DOMContentLoaded', () => {
       const data = await res.json();
       versions = (data.versions || []).sort((a, b) => b.version - a.version);
     } catch {}
+    versionsCache = versions;
     versions.forEach(v => {
-      const el = document.createElement('div');
-      el.className = 'ep-ver-item';
-      el.innerHTML = `
-        <div class="ver-label">v${v.version}${v.published ? '<span class="ver-pub">(published)</span>' : ''}</div>
-        <div class="ep-ver-actions">
-          <button data-v="${v.version}" class="btn btn-secondary btn-sm js-load">Load</button>
-          ${v.published
-            ? `<button data-v="${v.version}" class="btn btn-secondary btn-sm js-unpublish">Unpublish</button>`
-            : `<button data-v="${v.version}" class="btn btn-success btn-sm js-publish">Publish</button>`}
-          <button data-v="${v.version}" class="btn btn-danger btn-sm js-delete">Delete</button>
-        </div>`;
-      versionsList.appendChild(el);
+      const opt = document.createElement('option');
+      opt.value = String(v.version);
+      opt.textContent = `Overwrite v${v.version} (${v.name || ('v' + v.version)})`;
+      saveTargetSelect.appendChild(opt);
     });
+    if (selectedBefore && versions.some(v => String(v.version) === String(selectedBefore))) {
+      saveTargetSelect.value = selectedBefore;
+    }
+
+    if (!versions.length) {
+      versionsList.innerHTML = '<div class="ep-empty">No versions yet for this month.</div>';
+      return;
+    }
+
+    let html = '<table class="ep-versions-table"><thead><tr><th>Version</th><th>Name</th><th>Status</th><th>Actions</th><th>Rename</th></tr></thead><tbody>';
+    for (const v of versions) {
+      html += `<tr>
+        <td>v${v.version}</td>
+        <td>${escapeHtml(v.name || ('v' + v.version))}</td>
+        <td>${v.published ? '<span class="is-published">Published</span>' : '-'}</td>
+        <td>
+          <div class="ep-row-actions">
+            <button data-v="${v.version}" class="btn btn-secondary btn-sm js-load">Load</button>
+            ${v.published
+              ? `<button data-v="${v.version}" class="btn btn-secondary btn-sm js-unpublish">Unpublish</button>`
+              : `<button data-v="${v.version}" class="btn btn-success btn-sm js-publish">Publish</button>`}
+            <button data-v="${v.version}" class="btn btn-danger btn-sm js-delete">Delete</button>
+          </div>
+        </td>
+        <td>
+          <div class="ep-rename-row">
+            <input data-v="${v.version}" class="js-rename-input" type="text" value="${escapeHtml(v.name || ('v' + v.version))}">
+            <button data-v="${v.version}" class="btn btn-primary btn-sm js-rename">Rename</button>
+          </div>
+        </td>
+      </tr>`;
+    }
+    html += '</tbody></table>';
+    versionsList.innerHTML = html;
+
     versionsList.querySelectorAll('.js-load').forEach(b => b.addEventListener('click', e => loadSchedule(+e.target.dataset.v)));
     versionsList.querySelectorAll('.js-publish').forEach(b => b.addEventListener('click', async e => {
       const { year: y, month: m } = currentYM();
@@ -266,7 +364,34 @@ document.addEventListener('DOMContentLoaded', () => {
       await fetch('/delete_schedule_version', { method:'POST', headers:{'Content-Type':'application/json','X-CSRFToken':csrfToken()}, body:JSON.stringify({year:y,month:m,version:+e.target.dataset.v}) });
       await renderVersions();
     }));
+    versionsList.querySelectorAll('.js-rename').forEach(b => b.addEventListener('click', async e => {
+      const version = +e.target.dataset.v;
+      const input = versionsList.querySelector(`.js-rename-input[data-v="${version}"]`);
+      const name = (input && input.value ? input.value.trim() : '');
+      if (!name) { alert('Version name cannot be empty.'); return; }
+      const { year: y, month: m } = currentYM();
+      const res = await fetch('/rename_schedule_version', {
+        method:'POST',
+        headers:{'Content-Type':'application/json','X-CSRFToken':csrfToken()},
+        body:JSON.stringify({year:y,month:m,version,version_name:name})
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert(err.error || 'Failed to rename version.');
+        return;
+      }
+      await renderVersions();
+    }));
   }
+
+  saveTargetSelect.addEventListener('change', () => {
+    const selected = saveTargetSelect.value ? Number(saveTargetSelect.value) : null;
+    if (!selected) return;
+    const target = versionsCache.find(v => v.version === selected);
+    if (target && !versionNameInput.value.trim()) {
+      versionNameInput.value = target.name || `v${target.version}`;
+    }
+  });
 
   // ── Data Loading ──
   async function loadMonthData(y, m) {
@@ -381,6 +506,82 @@ document.addEventListener('DOMContentLoaded', () => {
     html += '</tbody></table>';
     container.innerHTML = html;
     container.addEventListener('click', onTableClick);
+    renderCohortMiniSummary(currentSchedule);
+  }
+
+  function renderCohortMiniSummary(sol) {
+    const host = document.getElementById('cohortMiniSummary');
+    if (!host) return;
+    if (!monthData || !Array.isArray(monthData.all_surgeons) || monthData.all_surgeons.length === 0) {
+      host.innerHTML = '<div style="font-size:12px;color:#6b7280;">Load a schedule version to see cohort call counts.</div>';
+      return;
+    }
+    if (!sol || typeof sol !== 'object' || Array.isArray(sol) || Object.keys(sol).length === 0) {
+      host.innerHTML = '<div style="font-size:12px;color:#6b7280;">No schedule loaded.</div>';
+      return;
+    }
+    const hasLevel = (surgeon, lvl) => parseLevels(surgeon.call_levels).includes(lvl);
+    const nonNlth = monthData.all_surgeons.filter(s => !s.nlth);
+    const group1Ids = new Set(nonNlth.filter(s => getLevel2Group(s) === 1).map(s => s.id));
+    const group2Ids = new Set(nonNlth.filter(s => getLevel2Group(s) === 2).map(s => s.id));
+    const group3Ids = new Set(nonNlth.filter(s => getLevel2Group(s) === 3).map(s => s.id));
+    const group4Ids = new Set(nonNlth.filter(s => getLevel2Group(s) === 4).map(s => s.id));
+    const cohorts = [
+      {
+        label: 'Group 1 (1A+1B)',
+        members: nonNlth.filter(s => hasLevel(s, '1A') || hasLevel(s, '1B')),
+        countFn: (row, sid) => ((row['1A'] === sid) ? 1 : 0) + ((row['1B'] === sid) ? 1 : 0),
+      },
+      {
+        label: 'Group 2 (2A+2B)',
+        members: nonNlth.filter(s => group1Ids.has(s.id) || group2Ids.has(s.id) || group3Ids.has(s.id)),
+        countFn: (row, sid) => ((row['2A'] === sid) ? 1 : 0) + ((row['2B'] === sid) ? 1 : 0),
+      },
+      {
+        label: 'Group 3 (3 +2B grp4)',
+        members: nonNlth.filter(s => hasLevel(s, '3') || group4Ids.has(s.id)),
+        countFn: (row, sid) => ((row['3'] === sid) ? 1 : 0) + ((group4Ids.has(sid) && row['2B'] === sid) ? 1 : 0),
+      },
+      {
+        label: 'Group 4 (4)',
+        members: nonNlth.filter(s => hasLevel(s, '4')),
+        countFn: (row, sid) => ((row['4'] === sid) ? 1 : 0),
+      }
+    ];
+    const cards = cohorts.map((cohort) => {
+      const counts = {};
+      cohort.members.forEach(m => { counts[m.id] = 0; });
+      for (const day of Object.keys(sol)) {
+        const rowRaw = (sol[day] && typeof sol[day] === 'object' && !Array.isArray(sol[day])) ? sol[day] : {};
+        const row = {};
+        for (const lvl of LEVELS) {
+          row[lvl] = (rowRaw[lvl] == null || rowRaw[lvl] === '') ? null : Number(rowRaw[lvl]);
+        }
+        cohort.members.forEach(m => { counts[m.id] += cohort.countFn(row, m.id); });
+      }
+      const vals = cohort.members.map(m => counts[m.id] || 0);
+      const median = computeMedian(vals);
+      const rows = cohort.members.slice().sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''))).map((m) => {
+        const v = counts[m.id] || 0;
+        const delta = v - median;
+        let cls = 'at';
+        if (delta > 1) cls = 'above-hard';
+        else if (delta === 1) cls = 'above-soft';
+        else if (delta < 0) cls = 'below';
+        return `<tr><td><span class="cohort-mini-name ${cls}">${escapeHtml(m.name || '(unnamed)')}</span></td><td style="text-align:right;font-weight:600;">${v}</td></tr>`;
+      }).join('');
+      return `
+        <div class="cohort-mini-card">
+          <h4>${escapeHtml(cohort.label)}</h4>
+          <table class="cohort-mini-table">
+            <tbody>
+              ${rows || '<tr><td colspan="2" style="text-align:center;color:#6b7280;">No surgeons</td></tr>'}
+              <tr class="cohort-mini-median"><td>Median</td><td style="text-align:right;">${Number.isInteger(median) ? median : median.toFixed(1)}</td></tr>
+            </tbody>
+          </table>
+        </div>`;
+    }).join('');
+    host.innerHTML = `<div class="cohort-mini-grid">${cards}</div>`;
   }
 
   // ── Update a single block's display ──
@@ -477,6 +678,7 @@ document.addEventListener('DOMContentLoaded', () => {
     refreshBlock(day, lvl);
     refreshExpansionColumn(day, lvl);
     validateSchedule();
+    renderCohortMiniSummary(currentSchedule);
   }
 
   function refreshExpansionColumn(day, lvl) {
@@ -733,17 +935,30 @@ document.addEventListener('DOMContentLoaded', () => {
         timeout = controller ? setTimeout(() => controller.abort(), 10000) : null;
       } catch (_) { controller = null; signal = undefined; timeout = null; }
 
+      const overwriteVersion = saveTargetSelect.value ? Number(saveTargetSelect.value) : null;
+      const enteredName = (versionNameInput.value || '').trim();
+      if (overwriteVersion && !confirm(`Overwrite version v${overwriteVersion}? This will replace its schedule.`)) return;
+
       const data = await fetchJSONSafe('/save_schedule_version', {
         method:'POST', headers:{'Content-Type':'application/json','X-CSRFToken':csrfToken()},
-        body: JSON.stringify({ year, month, schedule: sched, publish }), signal });
+        body: JSON.stringify({
+          year, month, schedule: sched, publish,
+          overwrite_version: overwriteVersion,
+          version_name: enteredName
+        }), signal });
       if (timeout) clearTimeout(timeout);
-      alert(`Saved version v${data.version}${data.published?' and published':''}.`);
+      const msg = data.overwrote ? `Updated version v${data.version}` : `Saved version v${data.version}`;
+      alert(`${msg}${data.version_name ? ` (${data.version_name})` : ''}${data.published?' and published':''}.`);
       window.location.reload();
     } catch (e) {
       try {
+        const overwriteVersion = saveTargetSelect.value || '';
+        const enteredName = (versionNameInput.value || '').trim();
         document.getElementById('fb_year').value = year;
         document.getElementById('fb_month').value = month;
         document.getElementById('fb_publish').value = publish ? '1' : '0';
+        document.getElementById('fb_overwrite_version').value = overwriteVersion;
+        document.getElementById('fb_version_name').value = enteredName;
         document.getElementById('fb_schedule_json_ids').value = JSON.stringify(sched);
         document.getElementById('fallbackSaveForm').submit();
       } catch (err) { errBox.textContent = 'Failed to save.'; }

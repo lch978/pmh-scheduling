@@ -179,6 +179,7 @@ def init_db():
                 year INTEGER NOT NULL,
                 month INTEGER NOT NULL,
                 version INTEGER NOT NULL,
+                version_name TEXT NOT NULL DEFAULT '',
                 schedule_data JSONB NOT NULL,
                 published BOOLEAN NOT NULL DEFAULT FALSE,
                 updated_at TIMESTAMP WITHOUT TIME ZONE DEFAULT now(),
@@ -245,6 +246,12 @@ def init_db():
                 ADD COLUMN IF NOT EXISTS manual_more_calls_credit INTEGER DEFAULT 0
                 """
             )
+            db.exec_driver_sql(
+                """
+                ALTER TABLE saved_schedule_versions
+                ADD COLUMN IF NOT EXISTS version_name TEXT DEFAULT ''
+                """
+            )
 
         # Backfill NULLs, then enforce NOT NULL
         false_val = "0" if is_sqlite else "FALSE"
@@ -252,6 +259,28 @@ def init_db():
         db.exec_driver_sql("UPDATE surgeons SET team = '' WHERE team IS NULL")
         db.exec_driver_sql("UPDATE surgeons SET manual_less_calls_credit = 0 WHERE manual_less_calls_credit IS NULL")
         db.exec_driver_sql("UPDATE surgeons SET manual_more_calls_credit = 0 WHERE manual_more_calls_credit IS NULL")
+        # Add version_name only when missing (avoid raising in-transaction errors).
+        has_version_name = False
+        if is_sqlite:
+            cols = db.exec_driver_sql("PRAGMA table_info(saved_schedule_versions)").fetchall()
+            has_version_name = any((c[1] == "version_name") for c in cols)
+        else:
+            row = db.execute(
+                text(
+                    """
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_name = 'saved_schedule_versions'
+                      AND column_name = 'version_name'
+                    LIMIT 1
+                    """
+                )
+            ).fetchone()
+            has_version_name = bool(row)
+        if not has_version_name:
+            db.exec_driver_sql("ALTER TABLE saved_schedule_versions ADD COLUMN version_name TEXT DEFAULT ''")
+        db.exec_driver_sql("UPDATE saved_schedule_versions SET version_name = '' WHERE version_name IS NULL")
+        db.exec_driver_sql("UPDATE saved_schedule_versions SET version_name = 'v' || version WHERE version_name = ''")
         
         if not is_sqlite:
             db.exec_driver_sql("ALTER TABLE surgeons ALTER COLUMN nlth SET NOT NULL")
@@ -273,7 +302,7 @@ def init_db():
             "gamma_weekend_balance": "50",
             "gamma_consec_weekend":  "20",
             "gamma_team_pref":       "10",
-            "enable_two_pass_credit_priority": "1",
+            "enable_two_pass_fairness_priority": "1",
         }
         
         insert_gc = text("""
@@ -598,6 +627,41 @@ def get_availability_requests():
             'request_type': mapping['request_type']
         })
     return requests
+
+
+def compute_unavailability_credit_by_surgeon(surgeons, availability, days, unavail_credit_days):
+    """
+    Returns {surgeon_id: credit_calls} where credit_calls is derived only from
+    unavailable/study_leave days in the current solve window.
+    """
+    try:
+        window = int(unavail_credit_days)
+    except Exception:
+        window = 7
+    if window < 1:
+        window = 7
+
+    day_set = set(days or [])
+    credits = {s['id']: 0 for s in (surgeons or []) if isinstance(s, dict) and s.get('id') is not None}
+    if not day_set:
+        return credits
+
+    for sid, req_list in (availability or {}).items():
+        if sid not in credits:
+            continue
+        count_unavail = 0
+        for req in req_list or []:
+            if req.get('request_type') not in ('unavailable', 'study_leave'):
+                continue
+            raw = req.get('date')
+            if isinstance(raw, str):
+                if raw in day_set:
+                    count_unavail += 1
+            elif isinstance(raw, datetime.date):
+                if raw.isoformat() in day_set:
+                    count_unavail += 1
+        credits[sid] = count_unavail // window
+    return credits
 
 #############################################
 # Half-year horizon helpers

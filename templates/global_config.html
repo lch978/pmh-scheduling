@@ -41,13 +41,15 @@
       <label style="display:block;margin:6px 0;"><input type="checkbox" name="enable_spacing_penalty" value="1" {% if config.enable_spacing_penalty != '0' %}checked{% endif %}> Spacing penalty</label>
       <label style="display:block;margin:6px 0;"><input type="checkbox" name="enable_availability_unavail_prev_penalty" value="1" {% if config.enable_availability_unavail_prev_penalty != '0' %}checked{% endif %}> Unavailable prev-day penalty</label>
       <label style="display:block;margin:6px 0;"><input type="checkbox" name="enable_availability_nocall_penalty" value="1" {% if config.enable_availability_nocall_penalty != '0' %}checked{% endif %}> No-call penalty (soft)</label>
-      <label style="display:block;margin:6px 0;"><input type="checkbox" name="fairness_cap_uses_credit" value="1" {% if config.get('fairness_cap_uses_credit','0') != '0' %}checked{% endif %}> Use unavailability credit in fairness hard cap</label>
+      <label style="display:block;margin:6px 0;"><input type="checkbox" name="fairness_cap_uses_credit" value="1" {% if config.get('fairness_cap_uses_credit','0') != '0' %}checked{% endif %}> Use unified fairness credit (unavailability + manual call credit)</label>
       <label style="display:block;margin:6px 0;"><input type="checkbox" name="enable_fairness_hard_cap" value="1" {% if config.get('enable_fairness_hard_cap','1') != '0' %}checked{% endif %}> Enforce fairness hard caps (max−min ≤ range)</label>
       <div style="margin:8px 0 12px 24px;">
         <label for="fairness_hard_cap_range" style="margin-right:10px;">Fairness hard cap range:</label>
         <input type="number" min="0" id="fairness_hard_cap_range" name="fairness_hard_cap_range" value="{{ config.get('fairness_hard_cap_range','1') }}" style="width:80px;">
         <div style="font-size:12px; font-style:italic; color:#666;">If enabled, each cohort’s spread (max−min) must be ≤ this value.</div>
       </div>
+      <label style="display:block;margin:6px 0;"><input type="checkbox" name="enable_two_pass_fairness_priority" value="1" {% if config.get('enable_two_pass_fairness_priority','1') != '0' %}checked{% endif %}> Fairness first-pass priority (lexicographic)</label>
+      <div style="margin:4px 0 12px 24px; font-size:12px; font-style:italic; color:#666;">When enabled, solver first minimizes cohort fairness spread, then optimizes all other soft objectives.</div>
       <hr>
       <label style="display:block;margin:6px 0;"><input type="checkbox" name="solver_debug" value="1" {% if config.get('solver_debug','0') != '0' %}checked{% endif %}> Enable solver debug logging (keeps OR‑Tools logs on)</label>
       <hr>

@@ -223,6 +223,33 @@ def create_app():
             "manual_more_calls_credit": 0,
         }
         return render_template('surgeon_form.html', surgeon=default_surgeon, action="Add")
+
+    @app.route('/surgeons/add_quick', methods=['POST'])
+    @basic_auth.required
+    def add_surgeon_quick():
+        team = (request.form.get('team') or '').strip()
+        if team == "__UNASSIGNED__":
+            team = ""
+        db = get_db()
+        with db.begin():
+            db.execute(
+                text(
+                    """
+                    INSERT INTO surgeons (name, call_levels, nlth, team, manual_less_calls_credit, manual_more_calls_credit)
+                    VALUES (:name, :levels, :nlth, :team, :less_credit, :more_credit)
+                    """
+                ),
+                {
+                    "name": "",
+                    "levels": "",
+                    "nlth": False,
+                    "team": team,
+                    "less_credit": 0,
+                    "more_credit": 0,
+                }
+            )
+        flash(f"Added a new blank surgeon to {(team or 'Unassigned')}.", "success")
+        return redirect(url_for('list_surgeons'))
     @app.route('/surgeons/edit/<int:surgeon_id>', methods=['GET', 'POST'])
     @basic_auth.required
     def edit_surgeon(surgeon_id):
@@ -461,6 +488,7 @@ def create_app():
                 "enable_horizon_fairness": cb("enable_horizon_fairness"),
                 "fairness_cap_uses_credit": cb("fairness_cap_uses_credit"),
                 "enable_fairness_hard_cap": cb("enable_fairness_hard_cap"),
+                "enable_two_pass_fairness_priority": cb("enable_two_pass_fairness_priority"),
                 "solver_debug": cb("solver_debug"),
                 "enable_unavail_deadline": cb("enable_unavail_deadline"),
             }
@@ -743,7 +771,8 @@ def create_app():
             prev_day_minus_2=prev_day_minus_2,
             prev_day_minus_1=prev_day_minus_1,
             saved_prior=saved_prior,
-            cohort_summary=cohort_summary
+            cohort_summary=cohort_summary,
+            surgeons_meta=surgeons
         )
 
     @app.route('/save_schedule', methods=['POST'])
@@ -799,7 +828,13 @@ def create_app():
         with db.begin():
             ver_row = db.execute(text("SELECT COALESCE(MAX(version),0) AS maxv FROM saved_schedule_versions WHERE year=:y AND month=:m"), {"y": year, "m": month}).mappings().fetchone()
             next_ver = (ver_row['maxv'] or 0) + 1
-            db.execute(text(f"INSERT INTO saved_schedule_versions (year, month, version, schedule_data, published) VALUES (:y, :m, :v, {json_cast('d')}, {sql_false()})"), {"y": year, "m": month, "v": next_ver, "d": data})
+            db.execute(
+                text(
+                    f"INSERT INTO saved_schedule_versions (year, month, version, version_name, schedule_data, published) "
+                    f"VALUES (:y, :m, :v, :vn, {json_cast('d')}, {sql_false()})"
+                ),
+                {"y": year, "m": month, "v": next_ver, "vn": f"v{next_ver}", "d": data}
+            )
         flash("Schedule saved.", "success")
         if request.form.get("after_save") == "edit_publish":
             return redirect(url_for('edit_publish', year=year, month=month))
@@ -1938,7 +1973,7 @@ def create_app():
             else:
                 year_sel, month_sel = get_year_month()
             db = get_db()
-            versions = db.execute(text("SELECT version, published FROM saved_schedule_versions WHERE year=:y AND month=:m ORDER BY version"), {"y": year_sel, "m": month_sel}).mappings().all()
+            versions = db.execute(text("SELECT version, version_name, published FROM saved_schedule_versions WHERE year=:y AND month=:m ORDER BY version"), {"y": year_sel, "m": month_sel}).mappings().all()
             if not versions:
                 # Seed v1 from existing saved_schedule if present; otherwise create empty skeleton
                 row = db.execute(text("SELECT schedule_data FROM saved_schedule WHERE year=:y AND month=:m"), {"y": year_sel, "m": month_sel}).mappings().fetchone()
@@ -1955,8 +1990,14 @@ def create_app():
                 # Use a new connection for the transaction to avoid state issues
                 with db.begin():
                     # Attempt to handle potential dialect issues with JSONB
-                    db.execute(text(f"INSERT INTO saved_schedule_versions (year, month, version, schedule_data, published) VALUES (:y, :m, 1, {json_cast('d')}, {sql_false()})"), {"y": year_sel, "m": month_sel, "d": json.dumps(data)})
-                versions = db.execute(text("SELECT version, published FROM saved_schedule_versions WHERE year=:y AND month=:m ORDER BY version"), {"y": year_sel, "m": month_sel}).mappings().all()
+                    db.execute(
+                        text(
+                            f"INSERT INTO saved_schedule_versions (year, month, version, version_name, schedule_data, published) "
+                            f"VALUES (:y, :m, 1, :vn, {json_cast('d')}, {sql_false()})"
+                        ),
+                        {"y": year_sel, "m": month_sel, "vn": "v1", "d": json.dumps(data)}
+                    )
+                versions = db.execute(text("SELECT version, version_name, published FROM saved_schedule_versions WHERE year=:y AND month=:m ORDER BY version"), {"y": year_sel, "m": month_sel}).mappings().all()
             # latest published
             pub_ver = next((v['version'] for v in versions if v['published']), None)
             return render_template('edit_publish.html', year=year_sel, month=month_sel, versions=versions, published_version=pub_ver)
@@ -1974,7 +2015,7 @@ def create_app():
         except Exception:
             return jsonify({"error": "Invalid parameters"}), 400
         db = get_db()
-        rows = db.execute(text("SELECT version, published FROM saved_schedule_versions WHERE year=:y AND month=:m ORDER BY version"), {"y": year, "m": month}).mappings().all()
+        rows = db.execute(text("SELECT version, version_name, published FROM saved_schedule_versions WHERE year=:y AND month=:m ORDER BY version"), {"y": year, "m": month}).mappings().all()
         if not rows:
             # Seed v1 like the page handler does
             row = db.execute(text("SELECT schedule_data FROM saved_schedule WHERE year=:y AND month=:m"), {"y": year, "m": month}).mappings().fetchone()
@@ -1987,9 +2028,51 @@ def create_app():
             
             db.commit()
             with db.begin():
-                db.execute(text(f"INSERT INTO saved_schedule_versions (year, month, version, schedule_data, published) VALUES (:y, :m, 1, {json_cast('d')}, {sql_false()})"), {"y": year, "m": month, "d": json.dumps(data)})
-            rows = db.execute(text("SELECT version, published FROM saved_schedule_versions WHERE year=:y AND month=:m ORDER BY version"), {"y": year, "m": month}).mappings().all()
-        return jsonify({"versions": [{"version": r['version'], "published": bool(r['published'])} for r in rows]})
+                db.execute(
+                    text(
+                        f"INSERT INTO saved_schedule_versions (year, month, version, version_name, schedule_data, published) "
+                        f"VALUES (:y, :m, 1, :vn, {json_cast('d')}, {sql_false()})"
+                    ),
+                    {"y": year, "m": month, "vn": "v1", "d": json.dumps(data)}
+                )
+            rows = db.execute(text("SELECT version, version_name, published FROM saved_schedule_versions WHERE year=:y AND month=:m ORDER BY version"), {"y": year, "m": month}).mappings().all()
+        return jsonify({
+            "versions": [
+                {
+                    "version": r['version'],
+                    "name": (r.get('version_name') or f"v{r['version']}"),
+                    "published": bool(r['published'])
+                }
+                for r in rows
+            ]
+        })
+
+    @app.route('/rename_schedule_version', methods=['POST'])
+    @basic_auth.required
+    def rename_schedule_version():
+        data = request.get_json() or {}
+        try:
+            year = int(data.get('year'))
+            month = int(data.get('month'))
+            version = int(data.get('version'))
+            version_name = str(data.get('version_name') or '').strip()
+        except Exception:
+            return jsonify({"error": "Invalid payload"}), 400
+        if not version_name:
+            return jsonify({"error": "Version name cannot be empty"}), 400
+        db = get_db()
+        with db.begin():
+            res = db.execute(
+                text(
+                    f"UPDATE saved_schedule_versions "
+                    f"SET version_name = :vn, updated_at = {sql_now()} "
+                    f"WHERE year=:y AND month=:m AND version=:v"
+                ),
+                {"vn": version_name, "y": year, "m": month, "v": version}
+            )
+        if res.rowcount == 0:
+            return jsonify({"error": "Version not found"}), 404
+        return jsonify({"ok": True, "version": version, "version_name": version_name})
 
     @app.route('/publish_schedule_version', methods=['POST'])
     @basic_auth.required
@@ -2092,29 +2175,52 @@ def create_app():
             month = int(data.get('month'))
             schedule = data.get('schedule') or {}
             publish = bool(data.get('publish', False))
+            overwrite_version_raw = data.get('overwrite_version')
+            overwrite_version = int(overwrite_version_raw) if overwrite_version_raw not in [None, ""] else None
+            version_name = str(data.get('version_name') or '').strip()
         except Exception:
             return jsonify({"error": "Invalid payload"}), 400
         db = get_db()
         next_ver = 0
+        final_name = ""
         with db.begin():
             rows = db.execute(text("SELECT id, name FROM surgeons")).mappings().all()
             id_to_name = {row["id"]: row["name"] for row in rows}
             sched_by_name = convert_schedule_ids_to_names(schedule, id_to_name)
-            row = db.execute(text("SELECT COALESCE(MAX(version),0) AS maxv FROM saved_schedule_versions WHERE year=:y AND month=:m"),
-                             {"y": year, "m": month}).mappings().fetchone()
-            next_ver = (row['maxv'] or 0) + 1
-            db.execute(
-                text(f"INSERT INTO saved_schedule_versions (year, month, version, schedule_data, published) "
-                     f"VALUES (:y, :m, :v, {json_cast('d')}, :p)"),
-                {"y": year, "m": month, "v": next_ver, "d": json.dumps(sched_by_name), "p": publish}
-            )
+            if overwrite_version is not None:
+                exists = db.execute(
+                    text("SELECT version, version_name FROM saved_schedule_versions WHERE year=:y AND month=:m AND version=:v"),
+                    {"y": year, "m": month, "v": overwrite_version}
+                ).mappings().fetchone()
+                if not exists:
+                    return jsonify({"error": "Overwrite target version not found"}), 404
+                final_name = version_name or exists.get("version_name") or f"v{overwrite_version}"
+                db.execute(
+                    text(
+                        f"UPDATE saved_schedule_versions "
+                        f"SET version_name=:vn, schedule_data={json_cast('d')}, published=:p, updated_at={sql_now()} "
+                        f"WHERE year=:y AND month=:m AND version=:v"
+                    ),
+                    {"vn": final_name, "d": json.dumps(sched_by_name), "p": publish, "y": year, "m": month, "v": overwrite_version}
+                )
+                next_ver = overwrite_version
+            else:
+                row = db.execute(text("SELECT COALESCE(MAX(version),0) AS maxv FROM saved_schedule_versions WHERE year=:y AND month=:m"),
+                                 {"y": year, "m": month}).mappings().fetchone()
+                next_ver = (row['maxv'] or 0) + 1
+                final_name = version_name or f"v{next_ver}"
+                db.execute(
+                    text(f"INSERT INTO saved_schedule_versions (year, month, version, version_name, schedule_data, published) "
+                         f"VALUES (:y, :m, :v, :vn, {json_cast('d')}, :p)"),
+                    {"y": year, "m": month, "v": next_ver, "vn": final_name, "d": json.dumps(sched_by_name), "p": publish}
+                )
             if publish:
                 db.execute(
                     text(f"UPDATE saved_schedule_versions SET published = {sql_false()} "
                          "WHERE year=:y AND month=:m AND version <> :v"),
                     {"y": year, "m": month, "v": next_ver}
                 )
-        return jsonify({"version": next_ver, "published": publish})
+        return jsonify({"version": next_ver, "version_name": final_name, "published": publish, "overwrote": overwrite_version is not None})
 
     @app.route('/save_schedule_version_form', methods=['POST'])
     @basic_auth.required
@@ -2125,24 +2231,48 @@ def create_app():
             publish = request.form.get('publish') in ['1', 'true', 'True', 'on']
             sched_json = request.form.get('schedule_json_ids') or '{}'
             schedule = json.loads(sched_json)
+            overwrite_version_raw = request.form.get('overwrite_version')
+            overwrite_version = int(overwrite_version_raw) if overwrite_version_raw not in [None, ""] else None
+            version_name = str(request.form.get('version_name') or '').strip()
         except Exception:
             flash('Invalid form submission for saving schedule version.', 'error')
             return redirect(url_for('edit_publish', year=request.form.get('year'), month=request.form.get('month')))
 
         db = get_db()
         next_ver = 0
+        final_name = ""
         with db.begin():
             rows = db.execute(text("SELECT id, name FROM surgeons")).mappings().all()
             id_to_name = {row["id"]: row["name"] for row in rows}
             sched_by_name = convert_schedule_ids_to_names(schedule, id_to_name)
-            row = db.execute(text("SELECT COALESCE(MAX(version),0) AS maxv FROM saved_schedule_versions WHERE year=:y AND month=:m"),
-                             {"y": year, "m": month}).mappings().fetchone()
-            next_ver = (row['maxv'] or 0) + 1
-            db.execute(
-                text(f"INSERT INTO saved_schedule_versions (year, month, version, schedule_data, published) "
-                     f"VALUES (:y, :m, :v, {json_cast('d')}, :p)"),
-                {"y": year, "m": month, "v": next_ver, "d": json.dumps(sched_by_name), "p": publish}
-            )
+            if overwrite_version is not None:
+                exists = db.execute(
+                    text("SELECT version, version_name FROM saved_schedule_versions WHERE year=:y AND month=:m AND version=:v"),
+                    {"y": year, "m": month, "v": overwrite_version}
+                ).mappings().fetchone()
+                if not exists:
+                    flash('Overwrite target version not found.', 'error')
+                    return redirect(url_for('edit_publish', year=year, month=month))
+                final_name = version_name or exists.get("version_name") or f"v{overwrite_version}"
+                db.execute(
+                    text(
+                        f"UPDATE saved_schedule_versions "
+                        f"SET version_name=:vn, schedule_data={json_cast('d')}, published=:p, updated_at={sql_now()} "
+                        f"WHERE year=:y AND month=:m AND version=:v"
+                    ),
+                    {"vn": final_name, "d": json.dumps(sched_by_name), "p": publish, "y": year, "m": month, "v": overwrite_version}
+                )
+                next_ver = overwrite_version
+            else:
+                row = db.execute(text("SELECT COALESCE(MAX(version),0) AS maxv FROM saved_schedule_versions WHERE year=:y AND month=:m"),
+                                 {"y": year, "m": month}).mappings().fetchone()
+                next_ver = (row['maxv'] or 0) + 1
+                final_name = version_name or f"v{next_ver}"
+                db.execute(
+                    text(f"INSERT INTO saved_schedule_versions (year, month, version, version_name, schedule_data, published) "
+                         f"VALUES (:y, :m, :v, :vn, {json_cast('d')}, :p)"),
+                    {"y": year, "m": month, "v": next_ver, "vn": final_name, "d": json.dumps(sched_by_name), "p": publish}
+                )
             if publish:
                 db.execute(
                     text(f"UPDATE saved_schedule_versions SET published = {sql_false()} "
@@ -2150,7 +2280,8 @@ def create_app():
                     {"y": year, "m": month, "v": next_ver}
                 )
 
-        flash(f"Saved version v{next_ver}{' and published' if publish else ''}.", 'success')
+        action = "Updated" if overwrite_version is not None else "Saved"
+        flash(f"{action} version v{next_ver} ({final_name}){' and published' if publish else ''}.", 'success')
         return redirect(url_for('edit_publish', year=year, month=month))
 
     #############################################

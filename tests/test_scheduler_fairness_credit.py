@@ -68,7 +68,7 @@ def _base_config():
         "enable_deviation_sum": "0",
         "enable_unavail_credit": "0",
         "solver_debug": "0",
-        "enable_two_pass_credit_priority": "1",
+        "enable_two_pass_fairness_priority": "1",
     }
 
 
@@ -144,40 +144,67 @@ class SchedulerFairnessCreditTests(unittest.TestCase):
             0,
         )
 
-    def test_two_pass_credit_priority_gives_positive_credit_more_calls_when_feasible(self):
+    def test_unified_fairness_credit_sums_unavailability_and_manual(self):
+        surgeon = {"manual_call_credit": -2}
+        # unavailability credit=1, manual solver-credit=+2 (from -2 UI) => total +3
+        self.assertEqual(scheduler._unified_fairness_credit_calls(1, surgeon), 3)
+
+    def test_unavailability_credit_component_is_computed_per_window(self):
+        surgeons = [{"id": 1}, {"id": 2}]
+        availability = {
+            1: [
+                {"date": "2026-03-01", "request_type": "unavailable"},
+                {"date": "2026-03-02", "request_type": "study_leave"},
+                {"date": "2026-03-03", "request_type": "unavailable"},
+            ],
+            2: [
+                {"date": "2026-03-01", "request_type": "no_call"},
+                {"date": "2026-03-02", "request_type": "unavailable"},
+            ],
+        }
+        days = ["2026-03-01", "2026-03-02", "2026-03-03"]
+        credits = helper.compute_unavailability_credit_by_surgeon(
+            surgeons=surgeons,
+            availability=availability,
+            days=days,
+            unavail_credit_days=2,
+        )
+        self.assertEqual(credits[1], 1)  # 3 unavailable/study days => 1 credit at window=2
+        self.assertEqual(credits[2], 0)  # only unavailable/study counted; no_call ignored
+
+    def test_manual_credit_changes_do_not_affect_solver_when_fairness_credit_disabled(self):
         days = ["2026-03-02", "2026-03-03", "2026-03-04", "2026-03-05"]
-        surgeons = [
-            {"id": 1, "name": "Credited", "call_levels": "1A,1B", "nlth": False, "team": "Team 1", "manual_call_credit": 1},
-            {"id": 2, "name": "PeerA", "call_levels": "1A,1B", "nlth": False, "team": "Team 1", "manual_call_credit": 0},
-            {"id": 3, "name": "PeerB", "call_levels": "1A,1B", "nlth": False, "team": "Team 1", "manual_call_credit": 0},
+        surgeons_a = [
+            {"id": 1, "name": "S1", "call_levels": "1A,1B", "nlth": False, "team": "Team 1", "manual_call_credit": 0},
+            {"id": 2, "name": "S2", "call_levels": "1A,1B", "nlth": False, "team": "Team 1", "manual_call_credit": 0},
+            {"id": 3, "name": "S3", "call_levels": "1A,1B", "nlth": False, "team": "Team 1", "manual_call_credit": 0},
+        ]
+        surgeons_b = [
+            {"id": 1, "name": "S1", "call_levels": "1A,1B", "nlth": False, "team": "Team 1", "manual_call_credit": 3},
+            {"id": 2, "name": "S2", "call_levels": "1A,1B", "nlth": False, "team": "Team 1", "manual_call_credit": -2},
+            {"id": 3, "name": "S3", "call_levels": "1A,1B", "nlth": False, "team": "Team 1", "manual_call_credit": 1},
         ]
         cfg = _base_config()
         cfg["enable_fairness_hard_cap"] = "0"
-        cfg["enable_two_pass_credit_priority"] = "1"
+        cfg["fairness_cap_uses_credit"] = "0"
 
-        sched, _ = _run_solver_with_overrides(
+        sched_a, _ = _run_solver_with_overrides(
             days=days,
-            surgeons=surgeons,
+            surgeons=surgeons_a,
             preassignments={},
             availability={},
             config=cfg,
         )
-        self.assertIsInstance(sched, dict)
-        self.assertNotIn("errors", sched)
-
-        counts = {s["name"]: 0 for s in surgeons}
-        for _, assigns in sched.items():
-            for lvl in ("1A", "1B"):
-                name = assigns.get(lvl)
-                if name in counts:
-                    counts[name] += 1
-
-        # Under hard 3-day gap constraints, exact totals vary by feasibility,
-        # but credited surgeon should still end above zero-credit peers.
-        self.assertGreaterEqual(
-            counts["Credited"],
-            max(counts["PeerA"], counts["PeerB"]) + 1
+        sched_b, _ = _run_solver_with_overrides(
+            days=days,
+            surgeons=surgeons_b,
+            preassignments={},
+            availability={},
+            config=cfg,
         )
+        self.assertNotIn("errors", sched_a)
+        self.assertNotIn("errors", sched_b)
+        self.assertEqual(sched_a, sched_b)
 
 
 class HalfYearCohortSummaryTests(unittest.TestCase):
