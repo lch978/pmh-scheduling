@@ -83,6 +83,7 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
     model = cp_model.CpModel()
     constraint_mapping = {}
     diagnostics = []
+    solver_mode_used = "relaxed_fairness_caps" if _relax_fairness_caps else "strict_fairness_caps"
     # Helper to wrap hard constraint additions.
     def add_named_constraint(name, add_function, *args, **kwargs):
         c = add_function(*args, **kwargs)
@@ -95,6 +96,19 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
     all_ids    = [s["id"] for s in surgeons]
     nlth_ids = [s["id"] for s in surgeons if s.get("nlth")]
     team_day_prefs = get_team_day_prefs()
+    TEAM_DAY_NO_CALL = 2
+    team_day_no_call_by_weekday = {wd: set() for wd in range(7)}
+    for team, by_wd in team_day_prefs.items():
+        if not isinstance(by_wd, dict):
+            continue
+        for wd_raw, pref_raw in by_wd.items():
+            try:
+                wd = int(wd_raw)
+                pref = int(pref_raw)
+            except Exception:
+                continue
+            if pref == TEAM_DAY_NO_CALL and 0 <= wd <= 6:
+                team_day_no_call_by_weekday[wd].add(team)
     # Conservative signed bounds for fairness totals/ranges, including horizon carry-over.
     fairness_abs_bound = max(1000, num_days * len(all_levels) * 100)
 
@@ -103,6 +117,9 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
     fairness_weight = int(global_config.get("fairness_weight", "1000"))
     cap_uses_credit = str(global_config.get("fairness_cap_uses_credit", "0")) == "1"
     enable_fairness_hard_cap = str(global_config.get("enable_fairness_hard_cap", "1")) == "1"
+    fairness_fallback_policy = str(global_config.get("fairness_fallback_policy", "auto_relax") or "auto_relax").strip().lower()
+    if fairness_fallback_policy not in ("auto_relax", "no_fallback"):
+        fairness_fallback_policy = "auto_relax"
     try:
         fairness_hard_cap_range = int(global_config.get("fairness_hard_cap_range", "1"))
     except Exception:
@@ -301,6 +318,21 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                                     domains_by_day[d][lvl].remove(s_id)
                                 else:
                                     print(f"Warning: Not removing surgeon {s_id} from Day {day_str}, level {lvl} because it would empty the domain.")
+        if no_call_hard:
+            blocked_teams = team_day_no_call_by_weekday.get(current_date.weekday(), set())
+            if blocked_teams:
+                for surgeon in surgeons:
+                    s_id = surgeon.get("id")
+                    if s_id is None:
+                        continue
+                    if surgeon.get("team") not in blocked_teams:
+                        continue
+                    for lvl in all_levels:
+                        if s_id in domains_by_day[d][lvl]:
+                            if preassigned_early.get((d, lvl)) == s_id:
+                                continue
+                            if len(domains_by_day[d][lvl]) > 1:
+                                domains_by_day[d][lvl].remove(s_id)
 
     if pre_unavail_mode == "hard":
         for s_id, req_list in availability.items():
@@ -713,15 +745,18 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                 except Exception:
                     prior_1a = prior_1b = 0
             prior_total = prior_1a + prior_1b
-            # current adjusted by credit if enabled
+            # Credit semantics for fairness caps:
+            # +1 credit means "one fewer expected raw call", so we add credit to
+            # the adjusted fairness total (not subtract). This pushes the solver
+            # to give fewer raw calls to credited surgeons.
             cur_var = lvl1_counts[s]
             if cap_uses_credit:
                 cur_adj = model.NewIntVar(-num_days * 2, num_days * 2, f"lvl1_cur_adj_{s}")
-                add_named_constraint(f"(1A+1B) current adj {s}", model.Add, cur_adj == cur_var - fairness_credit_calls_per_surgeon.get(s, 0))
+                add_named_constraint(f"(1A+1B) current adj {s}", model.Add, cur_adj == cur_var + fairness_credit_calls_per_surgeon.get(s, 0))
                 cur_var = cur_adj
             prior_credit = prior_credit_calls_per_surgeon.get(s, 0) if cap_uses_credit else 0
             total = model.NewIntVar(-fairness_abs_bound, fairness_abs_bound, f"lvl1_total_{s}")
-            add_named_constraint(f"(1A+1B) horizon total {s}", model.Add, total == cur_var + prior_total - prior_credit)
+            add_named_constraint(f"(1A+1B) horizon total {s}", model.Add, total == cur_var + prior_total + prior_credit)
             fairness_vars_lvl1.append(total)
         gmax = model.NewIntVar(-fairness_abs_bound, fairness_abs_bound, "lvl1_max")
         gmin = model.NewIntVar(-fairness_abs_bound, fairness_abs_bound, "lvl1_min")
@@ -755,11 +790,11 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
             cur_var = lvl2_counts_all[s]
             if cap_uses_credit:
                 cur_adj = model.NewIntVar(-num_days * 2, num_days * 2, f"lvl2_all_cur_adj_{s}")
-                add_named_constraint(f"(2A+2B) all-L2 current adj {s}", model.Add, cur_adj == cur_var - fairness_credit_calls_per_surgeon.get(s, 0))
+                add_named_constraint(f"(2A+2B) all-L2 current adj {s}", model.Add, cur_adj == cur_var + fairness_credit_calls_per_surgeon.get(s, 0))
                 cur_var = cur_adj
             prior_credit = prior_credit_calls_per_surgeon.get(s, 0) if cap_uses_credit else 0
             total = model.NewIntVar(-fairness_abs_bound, fairness_abs_bound, f"lvl2_all_total_{s}")
-            add_named_constraint(f"(2A+2B) all-L2 horizon total {s}", model.Add, total == cur_var + prior_total - prior_credit)
+            add_named_constraint(f"(2A+2B) all-L2 horizon total {s}", model.Add, total == cur_var + prior_total + prior_credit)
             fairness_vars_lvl2_all.append(total)
         gmax = model.NewIntVar(-fairness_abs_bound, fairness_abs_bound, "lvl2_all_max")
         gmin = model.NewIntVar(-fairness_abs_bound, fairness_abs_bound, "lvl2_all_min")
@@ -799,11 +834,11 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
             cur_var = g3_counts[s]
             if cap_uses_credit:
                 cur_adj = model.NewIntVar(-num_days * 2, num_days * 2, f"lvl3_union_cur_adj_{s}")
-                add_named_constraint(f"lvl3 union current adj {s}", model.Add, cur_adj == cur_var - fairness_credit_calls_per_surgeon.get(s, 0))
+                add_named_constraint(f"lvl3 union current adj {s}", model.Add, cur_adj == cur_var + fairness_credit_calls_per_surgeon.get(s, 0))
                 cur_var = cur_adj
             prior_credit = prior_credit_calls_per_surgeon.get(s, 0) if cap_uses_credit else 0
             total = model.NewIntVar(-fairness_abs_bound, fairness_abs_bound, f"lvl3_union_total_{s}")
-            add_named_constraint(f"lvl3 union horizon total {s}", model.Add, total == cur_var + prior_total - prior_credit)
+            add_named_constraint(f"lvl3 union horizon total {s}", model.Add, total == cur_var + prior_total + prior_credit)
             fairness_vars_g3.append(total)
         gmax = model.NewIntVar(-fairness_abs_bound, fairness_abs_bound, "lvl3_union_max")
         gmin = model.NewIntVar(-fairness_abs_bound, fairness_abs_bound, "lvl3_union_min")
@@ -834,11 +869,11 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
             cur_var = lvl4_counts[s]
             if cap_uses_credit:
                 cur_adj = model.NewIntVar(-num_days, num_days, f"lvl4_cur_adj_{s}")
-                add_named_constraint(f"(4) current adj {s}", model.Add, cur_adj == cur_var - fairness_credit_calls_per_surgeon.get(s, 0))
+                add_named_constraint(f"(4) current adj {s}", model.Add, cur_adj == cur_var + fairness_credit_calls_per_surgeon.get(s, 0))
                 cur_var = cur_adj
             prior_credit = prior_credit_calls_per_surgeon.get(s, 0) if cap_uses_credit else 0
             total = model.NewIntVar(-fairness_abs_bound, fairness_abs_bound, f"lvl4_total_{s}")
-            add_named_constraint(f"(4) horizon total {s}", model.Add, total == cur_var + prior_4 - prior_credit)
+            add_named_constraint(f"(4) horizon total {s}", model.Add, total == cur_var + prior_4 + prior_credit)
             fairness_vars_lvl4.append(total)
         gmax = model.NewIntVar(-fairness_abs_bound, fairness_abs_bound, "lvl4_max")
         gmin = model.NewIntVar(-fairness_abs_bound, fairness_abs_bound, "lvl4_min")
@@ -1016,8 +1051,11 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                 sid  = s['id']
                 team = s.get('team')
                 if team in team_day_prefs:
-                    adj = team_day_prefs[team].get(wd, 0)
-                    if adj != 0:
+                    try:
+                        adj = int(team_day_prefs[team].get(wd, 0))
+                    except Exception:
+                        adj = 0
+                    if adj in (-1, 1):
                         b = indicators[(d, lvl, sid)]
                         coef = gamma_team_pref * adj
                         td_terms.append((coef, b))
@@ -1064,6 +1102,29 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                                 model.Add, X[(i, lev)] != s_id
                             ).OnlyEnforceIf(b.Not())
                             soft_penalties_nocall.append(b)
+        # Team-day No Call mode in soft mode: penalize assigning surgeons from blocked teams
+        for i, day in enumerate(days):
+            target_date = datetime.datetime.strptime(day, "%Y-%m-%d").date()
+            blocked_teams = team_day_no_call_by_weekday.get(target_date.weekday(), set())
+            if not blocked_teams:
+                continue
+            for surgeon in surgeons:
+                s_id = surgeon.get("id")
+                if s_id is None:
+                    continue
+                if surgeon.get("team") not in blocked_teams:
+                    continue
+                for lev in all_levels:
+                    b = model.NewBoolVar(f"penalty_team_nocall_{i}_{lev}_{s_id}")
+                    add_named_constraint(
+                        f"Team no-call penalty: Day {i} {lev} equals surgeon {s_id}",
+                        model.Add, X[(i, lev)] == s_id
+                    ).OnlyEnforceIf(b)
+                    add_named_constraint(
+                        f"Team no-call penalty: Day {i} {lev} not equals surgeon {s_id}",
+                        model.Add, X[(i, lev)] != s_id
+                    ).OnlyEnforceIf(b.Not())
+                    soft_penalties_nocall.append(b)
     
     penalty_unavail_prev = model.NewIntVar(0, num_days * len(all_levels) * 10, 'penalty_unavail_prev')
     if soft_penalties_unavail_prev:
@@ -1245,8 +1306,37 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                 for level in all_levels
             } for d in range(num_days)
         }
+        solution["__solver_mode__"] = solver_mode_used
         return solution, solver.ObjectiveValue()
     else:
+        # Strict fairness-cap first with optional auto-relax fallback.
+        if (
+            enable_fairness_hard_cap
+            and fairness_fallback_policy == "auto_relax"
+            and not _diagnostic_run
+            and not _relax_fairness_caps
+        ):
+            try:
+                fallback_sched, fallback_cost = solve_schedule_or_tools(
+                    days=days,
+                    surgeons=surgeons,
+                    prev_schedule=prev_schedule,
+                    public_holidays=public_holidays,
+                    preassignments=preassignments,
+                    time_limit_seconds=time_limit_seconds,
+                    allow_empty=allow_empty,
+                    _diagnostic_run=True,
+                    _relax_fairness_caps=True,
+                    horizon_prior_counts=horizon_prior_counts,
+                )
+                if isinstance(fallback_sched, dict) and "errors" not in fallback_sched:
+                    fallback_sched["__solver_mode__"] = "auto_relax_fairness_caps"
+                    if solver_debug:
+                        print("[FAIRNESS] Strict cap infeasible; returning auto-relaxed fallback schedule.")
+                    return fallback_sched, fallback_cost
+            except Exception:
+                pass
+
         if solver_debug:
             print("\nModel is INFEASIBLE. Hard constraint summary:")
             for name in constraint_mapping:
@@ -1254,6 +1344,8 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
         # Return diagnostics to the caller so the UI can display them
         if enable_fairness_hard_cap:
             diagnostics.append(f"Fairness hard cap within call-level cohorts could not be satisfied (cap ≤ {fairness_hard_cap_effective}) under current eligibility/availability.")
+            if fairness_fallback_policy == "auto_relax":
+                diagnostics.append("Auto-relax fallback was attempted but no feasible fallback schedule was found.")
         else:
             diagnostics.append("No feasible assignment exists under current constraints. Try relaxing constraints or adding eligible surgeons.")
 
