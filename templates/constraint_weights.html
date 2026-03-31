@@ -68,12 +68,12 @@
       <h3 style="margin-top:0;">Weights</h3>
       <div style="display:grid;grid-template-columns: 1fr auto;gap:8px;align-items:center;">
         <div style="grid-column:1 / span 2; width:80%;">
-          <label for="fairness_weight" style="margin:0; display:block;">Overall fairness strength:</label>
+          <label for="fairness_weight" style="margin:0; display:block;">Within-cohort fairness strength:</label>
           <div style="display:grid; grid-template-columns: 1fr auto; align-items:center; gap:8px;">
             <input type="range" id="fairness_weight" name="fairness_weight" min="0" max="5000" value="{{ config.fairness_weight or '1000' }}" style="width:100%;" oninput="fw_display.textContent=this.value">
             <span id="fw_display">{{ config.fairness_weight or '1000' }}</span>
           </div>
-          <div style="font-size:12px; font-style:italic; color:#666;">Higher values push total calls to be more equal across all surgeons.</div>
+          <div style="font-size:12px; font-style:italic; color:#666;">Higher values push calls to be more equal inside each call-level cohort.</div>
         </div>
 
         <div style="grid-column:1 / span 2; width:80%;">

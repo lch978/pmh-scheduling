@@ -95,6 +95,10 @@ def create_app():
             return None
         out = {}
         for day, assigns in sched.items():
+            try:
+                datetime.date.fromisoformat(str(day))
+            except Exception:
+                continue
             if isinstance(assigns, dict):
                 out[day] = assigns
             elif assigns is None:
@@ -102,6 +106,14 @@ def create_app():
             else:
                 out[day] = {}
         return out
+
+    def extract_solver_mode(schedule_obj):
+        if not isinstance(schedule_obj, dict):
+            return None
+        mode = schedule_obj.get("__solver_mode__")
+        if mode in [None, ""]:
+            return None
+        return str(mode)
 
     @app.context_processor
     def utility_processor():
@@ -433,6 +445,7 @@ def create_app():
     def global_config_page():
         teams = ['Team 1','Team 2','Team 3','Team 4','Urology']
         if request.method == 'POST':
+            existing_config = get_global_config()
             days = list(range(7))
             new_prefs = {}
             for team in teams:
@@ -449,48 +462,55 @@ def create_app():
             fairness_weight = request.form.get("fairness_weight", "1000")
             gamma_no_call = request.form.get("gamma_no_call", "10")
             gamma_unavail_prev = request.form.get("gamma_unavail_prev", "5")
-            gamma_1B = request.form.get("gamma_1B", "1")
             gamma_spacing = request.form.get("gamma_spacing", "10")
             spacing_threshold = request.form.get("spacing_threshold", "7")
             gamma_team_pref = request.form.get("gamma_team_pref", "10")
             gamma_weekend_balance = request.form.get("gamma_weekend_balance", "50")
             gamma_consec_weekend = request.form.get("gamma_consec_weekend", "20")
             gamma_weekend_team_diversity = request.form.get("gamma_weekend_team_diversity", "50")
+            gamma_balance = request.form.get("gamma_balance", "100")
             max_weekend_calls = request.form.get("max_weekend_calls", "3")
             min_calls_nlth = request.form.get("min_calls_nlth", "3")
+            max_calls_level1 = request.form.get("max_calls_level1", "10")
             # unavailability credit controls
             gamma_unavail_credit = request.form.get('gamma_unavail_credit', '50')
             unavail_credit_days = request.form.get('unavail_credit_days', '7')
             # deadline controls
             unavail_deadline_day = request.form.get("unavail_deadline_day", "20")
             unavail_deadline_time = request.form.get("unavail_deadline_time", "23:59")
+            fairness_fallback_policy = request.form.get("fairness_fallback_policy", "auto_relax")
+            if fairness_fallback_policy not in ("auto_relax", "no_fallback"):
+                fairness_fallback_policy = "auto_relax"
             # checkboxes
-            def cb(name):
-                return '1' if request.form.get(name) == '1' else '0'
+            def cb(name, default='0'):
+                """
+                Preserve existing persisted value when a checkbox field is absent.
+                This prevents partial/legacy forms from silently disabling flags.
+                """
+                if name in request.form:
+                    return '1' if request.form.get(name) == '1' else '0'
+                return str(existing_config.get(name, default))
             flags = {
-                "enable_fairness_diff_all": cb("enable_fairness_diff_all"),
-                "enable_deviation_sum": cb("enable_deviation_sum"),
-                "enable_spacing_penalty": cb("enable_spacing_penalty"),
-                "enable_availability_unavail_prev_penalty": cb("enable_availability_unavail_prev_penalty"),
-                "enable_availability_nocall_penalty": cb("enable_availability_nocall_penalty"),
-                "enable_force_1B_weekend": cb("enable_force_1B_weekend"),
-                "enable_level2_supervision": cb("enable_level2_supervision"),
-                "enable_group4_2B3_ban": cb("enable_group4_2B3_ban"),
-                "enable_max_2B_group4": cb("enable_max_2B_group4"),
-                "enable_max_calls_level1": cb("enable_max_calls_level1"),
-                "enable_nlth_rules": cb("enable_nlth_rules"),
-                "enable_weekend_balance": cb("enable_weekend_balance"),
-                "enable_weekend_consecutive_penalty": cb("enable_weekend_consecutive_penalty"),
-                "enable_weekend_team_diversity_enable": cb("enable_weekend_team_diversity_enable"),
-                "enable_team_day_prefs": cb("enable_team_day_prefs"),
-                "enable_2b_usage_penalty": cb("enable_2b_usage_penalty"),
-                "enable_fairness_l2_groups": cb("enable_fairness_l2_groups"),
-                "enable_horizon_fairness": cb("enable_horizon_fairness"),
-                "fairness_cap_uses_credit": cb("fairness_cap_uses_credit"),
-                "enable_fairness_hard_cap": cb("enable_fairness_hard_cap"),
-                "enable_two_pass_fairness_priority": cb("enable_two_pass_fairness_priority"),
-                "solver_debug": cb("solver_debug"),
-                "enable_unavail_deadline": cb("enable_unavail_deadline"),
+                "enable_spacing_penalty": cb("enable_spacing_penalty", "1"),
+                "enable_availability_unavail_prev_penalty": cb("enable_availability_unavail_prev_penalty", "1"),
+                "enable_availability_nocall_penalty": cb("enable_availability_nocall_penalty", "1"),
+                "enable_unavail_credit": cb("enable_unavail_credit", "1"),
+                "enable_force_1B_weekend": cb("enable_force_1B_weekend", "1"),
+                "enable_level2_supervision": cb("enable_level2_supervision", "1"),
+                "enable_group4_2B3_ban": cb("enable_group4_2B3_ban", "1"),
+                "enable_max_2B_group4": cb("enable_max_2B_group4", "1"),
+                "enable_max_calls_level1": cb("enable_max_calls_level1", "1"),
+                "enable_nlth_rules": cb("enable_nlth_rules", "1"),
+                "enable_weekend_balance": cb("enable_weekend_balance", "1"),
+                "enable_weekend_consecutive_penalty": cb("enable_weekend_consecutive_penalty", "1"),
+                "enable_weekend_team_diversity_enable": cb("enable_weekend_team_diversity_enable", "1"),
+                "enable_team_day_prefs": cb("enable_team_day_prefs", "1"),
+                "enable_horizon_fairness": cb("enable_horizon_fairness", "0"),
+                "fairness_cap_uses_credit": cb("fairness_cap_uses_credit", "0"),
+                "enable_fairness_hard_cap": cb("enable_fairness_hard_cap", "1"),
+                "enable_two_pass_fairness_priority": cb("enable_two_pass_fairness_priority", "1"),
+                "solver_debug": cb("solver_debug", "0"),
+                "enable_unavail_deadline": cb("enable_unavail_deadline", "0"),
             }
             update_global_config({
                 "no_call_hard": no_call_hard_val,
@@ -498,20 +518,21 @@ def create_app():
                 "fairness_weight": fairness_weight,
                 "gamma_no_call": gamma_no_call,
                 "gamma_unavail_prev": gamma_unavail_prev,
-                "gamma_1B": gamma_1B,
                 "gamma_spacing": gamma_spacing,
                 "spacing_threshold": spacing_threshold,
                 "gamma_team_pref": gamma_team_pref,
                 "gamma_weekend_balance": gamma_weekend_balance,
                 "gamma_consec_weekend": gamma_consec_weekend,
                 "gamma_weekend_team_diversity": gamma_weekend_team_diversity,
+                "gamma_balance": gamma_balance,
                 "gamma_unavail_credit": gamma_unavail_credit,
                 "unavail_credit_days": unavail_credit_days,
                 "max_weekend_calls": max_weekend_calls,
                 "min_calls_nlth": min_calls_nlth,
+                "max_calls_level1": max_calls_level1,
                 "gamma_2b_usage": request.form.get("gamma_2b_usage", "0"),
-                "gamma_fairness_l2_groups": request.form.get("gamma_fairness_l2_groups", "500"),
                 "fairness_hard_cap_range": request.form.get("fairness_hard_cap_range", "1"),
+                "fairness_fallback_policy": fairness_fallback_policy,
                 "unavail_deadline_day": unavail_deadline_day,
                 "unavail_deadline_time": unavail_deadline_time,
                 **flags
@@ -602,7 +623,9 @@ def create_app():
             'status': 'running',
             'best':   None,
             'cancel': False,
-            'solution': None
+            'solution': None,
+            'solver_mode': None,
+            'public_holidays': sorted(list(public_holidays or [])),
         }
 
         # we need the app_context so that any DB or flask helpers will work
@@ -613,17 +636,21 @@ def create_app():
                 allow_empty=allow_empty,
                 horizon_prior_counts=horizon_prior
             )
+            solver_mode = extract_solver_mode(sched)
+            clean_sched = normalize_schedule_for_template(sched) if isinstance(sched, dict) else sched
 
-            if sched is not None and not (isinstance(sched, dict) and 'errors' in sched):
+            if clean_sched is not None and not (isinstance(clean_sched, dict) and 'errors' in clean_sched):
                 solve_jobs[job_id].update({
                     'status':   'done',
-                    'solution': sched,
-                    'best':     cost
+                    'solution': clean_sched,
+                    'best':     cost,
+                    'solver_mode': solver_mode,
                 })
             else:
                 solve_jobs[job_id].update({
                     'status': 'failed',
-                    'solution': sched
+                    'solution': sched,
+                    'solver_mode': solver_mode,
                 })
 
     @app.route('/new_schedule', methods=['GET'])
@@ -708,6 +735,7 @@ def create_app():
             return [s for s in surgeons if level in parse_call_levels(s.get("call_levels", ""))]
         candidates = {lvl: sorted(candidates_for(lvl), key=lambda s: s["name"]) for lvl in ["1A","1B","2A","2B","3","4"]}
         cohort_summary = build_half_year_cohort_summary(year_sel, month_sel, surgeons=surgeons)
+        solver_mode_used = None
 
         generate_flag = request.args.get('generate')
         if generate_flag:
@@ -731,6 +759,7 @@ def create_app():
             if sched is None:
                 flash("No feasible schedule found.", "error")
                 return render_template('no_schedule.html')
+            solver_mode_used = extract_solver_mode(sched)
             sched = normalize_schedule_for_template(sched)
         else:
             # ▶︎ No preview request → show the saved one (if any)
@@ -772,7 +801,8 @@ def create_app():
             prev_day_minus_1=prev_day_minus_1,
             saved_prior=saved_prior,
             cohort_summary=cohort_summary,
-            surgeons_meta=surgeons
+            surgeons_meta=surgeons,
+            solver_mode_used=solver_mode_used,
         )
 
     @app.route('/save_schedule', methods=['POST'])
@@ -2399,13 +2429,16 @@ def create_app():
             return jsonify({'status': 'unknown'}), 404
         resp = {
             'status': job['status'],
-            'best':   job['best']
+            'best':   job['best'],
+            'public_holidays': job.get('public_holidays', []),
         }
         if job['status'] == 'done':
             resp['solution'] = job['solution']
+            resp['solver_mode'] = job.get('solver_mode')
         elif job['status'] == 'failed':
             resp['errors'] = job.get('solution', {}).get('errors') if isinstance(job.get('solution'), dict) else None
             resp['analysis'] = job.get('solution', {}).get('analysis') if isinstance(job.get('solution'), dict) else None
+            resp['solver_mode'] = job.get('solver_mode')
         return jsonify(resp)
 
     # --- Route to cancel a running job ---

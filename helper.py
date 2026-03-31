@@ -293,6 +293,7 @@ def init_db():
         defaults = {
             "no_call_hard":          "1",
             "fairness_weight":       "1000",
+            "fairness_fallback_policy": "auto_relax",
             "gamma_no_call":         "10",
             "gamma_unavail_prev":    "5",
             "gamma_1B":              "1",
@@ -443,15 +444,25 @@ def get_team_day_prefs():
 
 def update_team_day_prefs(new_prefs):
     db = get_db()
+    stmt = text(
+        """
+        INSERT INTO team_day_preferences (team, weekday, preference)
+        VALUES (:team, :weekday, :preference)
+        ON CONFLICT (team, weekday) DO UPDATE
+        SET preference = EXCLUDED.preference
+        """
+    )
+    # Reuse an already-open request transaction (autobegin) when present.
+    if db.in_transaction():
+        for team, by_wd in new_prefs.items():
+            for wd, pref in by_wd.items():
+                db.execute(stmt, {
+                    "preference": pref,
+                    "team":       team,
+                    "weekday":    wd
+                })
+        return
     with db.begin():
-        stmt = text(
-            """
-            INSERT INTO team_day_preferences (team, weekday, preference)
-            VALUES (:team, :weekday, :preference)
-            ON CONFLICT (team, weekday) DO UPDATE
-            SET preference = EXCLUDED.preference
-            """
-        )
         for team, by_wd in new_prefs.items():
             for wd, pref in by_wd.items():
                 db.execute(stmt, {
@@ -473,14 +484,19 @@ def get_global_config():
 
 def update_global_config(new_config):
     db = get_db()
+    upsert_stmt = text(
+        """
+        INSERT INTO global_config (key, value)
+        VALUES (:key, :value)
+        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+        """
+    )
+    # Reuse an already-open request transaction (autobegin) when present.
+    if db.in_transaction():
+        for key, value in new_config.items():
+            db.execute(upsert_stmt, {"key": key, "value": str(value)})
+        return
     with db.begin():
-        upsert_stmt = text(
-            """
-            INSERT INTO global_config (key, value)
-            VALUES (:key, :value)
-            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
-            """
-        )
         for key, value in new_config.items():
             db.execute(upsert_stmt, {"key": key, "value": str(value)})
 

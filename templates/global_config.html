@@ -1,246 +1,305 @@
 {% extends "base.html" %}
 {% block title %}Global Configuration{% endblock %}
+{% block head %}
+<style>
+  .gc-wrap { max-width: 1180px; margin: 20px auto; }
+  .gc-form { display: grid; grid-template-columns: minmax(280px, 360px) 1fr; gap: 18px; align-items: start; }
+  .gc-card { background: #fff; border: 1px solid #d8d8d8; border-radius: 10px; padding: 14px; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04); }
+  .gc-card h3 { margin: 0 0 10px; font-size: 16px; }
+  .gc-desc { margin-top: 4px; font-size: 12px; color: #666; }
+  .gc-divider { margin: 12px 0; border: 0; border-top: 1px solid #e5e5e5; }
+  .gc-check { display: block; margin: 8px 0; }
+  .gc-inline { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .gc-inline input[type="number"] { width: 88px; }
+  .gc-select, .gc-number, .gc-time { padding: 6px 8px; border: 1px solid #c8c8c8; border-radius: 6px; background: #fff; }
+  .gc-weight-row { margin: 0 0 14px; max-width: 760px; }
+  .gc-weight-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 4px; font-size: 14px; }
+  .gc-weight-value { min-width: 40px; text-align: right; font-variant-numeric: tabular-nums; }
+  .gc-weight-row input[type="range"] { width: 100%; }
+  .gc-actions { grid-column: 1 / span 2; display: flex; justify-content: flex-end; margin-top: 4px; }
+  .gc-btn { padding: 10px 16px; border-radius: 6px; border: 1px solid #666; background: #fff; cursor: pointer; }
+  .gc-table-wrap { grid-column: 1 / span 2; margin-top: 8px; background: #fff; border: 1px solid #d8d8d8; border-radius: 10px; overflow: auto; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04); }
+  .gc-table { width: 100%; border-collapse: collapse; min-width: 820px; }
+  .gc-table th, .gc-table td { border: 1px solid #e6e6e6; padding: 8px 10px; text-align: center; white-space: nowrap; }
+  .gc-table thead th { position: sticky; top: 0; z-index: 2; background: #f3f6fa; font-weight: 600; }
+  .gc-table .gc-team-col { position: sticky; left: 0; z-index: 1; background: #fafafa; text-align: left; font-weight: 600; }
+  .gc-pref-select { width: 100%; min-width: 140px; padding: 6px 8px; border: 1px solid #c8c8c8; border-radius: 6px; background: #fff; }
+  .gc-note { grid-column: 1 / span 2; margin-top: 6px; font-size: 12px; color: #666; }
+  @media (max-width: 980px) {
+    .gc-form { grid-template-columns: 1fr; }
+    .gc-actions, .gc-table-wrap, .gc-note { grid-column: 1; }
+  }
+</style>
+{% endblock %}
+
 {% block content %}
+<div class="gc-wrap">
   <h1 style="text-align: center;">Global Configuration</h1>
-  <form method="post" action="{{ url_for('global_config_page') }}" style="max-width: 900px; margin: 20px auto; display: grid; grid-template-columns: 260px 1fr; gap: 20px; align-items: start;">
+  <form method="post" action="{{ url_for('global_config_page') }}" class="gc-form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <div style="border:1px solid #ddd;border-radius:8px;padding:12px;">
-      <h3 style="margin-top:0;">Constraint Toggles</h3>
-      <div style="margin: 8px 0;">
-        <label for="no_call_hard" style="margin-right: 10px;">No‑call requests:</label>
-        <select name="no_call_hard" id="no_call_hard" style="padding: 5px; font-size: 14px;">
+
+    <div class="gc-card">
+      <h3>Core rules</h3>
+
+      <div class="gc-inline">
+        <label for="no_call_hard">No-call mode:</label>
+        <select name="no_call_hard" id="no_call_hard" class="gc-select">
           <option value="1" {% if config.get('no_call_hard', '1') == '1' %}selected{% endif %}>Hard Constraint</option>
           <option value="0" {% if config.get('no_call_hard', '1') == '0' %}selected{% endif %}>Soft Constraint</option>
         </select>
-        <div style="font-size:12px; font-style:italic; color:#666;">Choose whether “no‑call” requests are strictly enforced (hard) or treated as soft preferences.</div>
       </div>
-      <div style="margin: 8px 0;">
-        <label for="pre_unavail_mode" style="margin-right: 10px;">Day-before unavailability rule:</label>
-        <select name="pre_unavail_mode" id="pre_unavail_mode" style="padding:5px;font-size:14px;">
+      <div class="gc-desc">Controls whether no-call requests and Team-Day No calls are strict blocks or soft penalties.</div>
+
+      <div class="gc-inline" style="margin-top: 10px;">
+        <label for="pre_unavail_mode">Day-before unavailability:</label>
+        <select name="pre_unavail_mode" id="pre_unavail_mode" class="gc-select">
           <option value="hard" {% if config.get('pre_unavail_mode','soft') == 'hard' %}selected{% endif %}>Hard (never assign)</option>
           <option value="soft" {% if config.get('pre_unavail_mode','soft') == 'soft' %}selected{% endif %}>Soft (penalize)</option>
           <option value="off" {% if config.get('pre_unavail_mode','soft') == 'off' %}selected{% endif %}>Off (ignore)</option>
         </select>
-        <div style="font-size:12px; font-style:italic; color:#666;">Controls whether the day before an “Unavailable/Study Leave” request is blocked entirely, penalized, or ignored during solving. This never alters stored requests.</div>
       </div>
-      <hr>
-      <label style="display:block;margin:6px 0;">
-        <input type="checkbox" name="enable_unavail_deadline" value="1" {% if config.get('enable_unavail_deadline','0') != '0' %}checked{% endif %}>
-        Enable next-month unavailability deadline
-      </label>
-      <div style="margin:8px 0 12px 24px;">
-        <label for="unavail_deadline_day" style="display:block;margin-bottom:4px;">Deadline day of month (applies to next month’s requests):</label>
-        <input type="number" id="unavail_deadline_day" name="unavail_deadline_day" min="1" max="31" value="{{ config.get('unavail_deadline_day','20') }}" style="width:80px;">
-        <label for="unavail_deadline_time" style="display:block;margin-top:10px;margin-bottom:4px;">Deadline time (24h HH:MM, default 23:59):</label>
-        <input type="time" id="unavail_deadline_time" name="unavail_deadline_time" value="{{ config.get('unavail_deadline_time','23:59') }}">
-        <div style="font-size:12px; font-style:italic; color:#666;">Example: day 20 @ 23:59 means December availability closes at 20 Nov 23:59.</div>
-      </div>
-      <hr>
-      <label style="display:block;margin:6px 0;"><input type="checkbox" name="enable_fairness_diff_all" value="1" {% if config.enable_fairness_diff_all != '0' %}checked{% endif %}> Fairness (overall diff)</label>
-      <label style="display:block;margin:6px 0;"><input type="checkbox" name="enable_deviation_sum" value="1" {% if config.enable_deviation_sum != '0' %}checked{% endif %}> Deviation from average</label>
-      <label style="display:block;margin:6px 0;"><input type="checkbox" name="enable_spacing_penalty" value="1" {% if config.enable_spacing_penalty != '0' %}checked{% endif %}> Spacing penalty</label>
-      <label style="display:block;margin:6px 0;"><input type="checkbox" name="enable_availability_unavail_prev_penalty" value="1" {% if config.enable_availability_unavail_prev_penalty != '0' %}checked{% endif %}> Unavailable prev-day penalty</label>
-      <label style="display:block;margin:6px 0;"><input type="checkbox" name="enable_availability_nocall_penalty" value="1" {% if config.enable_availability_nocall_penalty != '0' %}checked{% endif %}> No-call penalty (soft)</label>
-      <label style="display:block;margin:6px 0;"><input type="checkbox" name="fairness_cap_uses_credit" value="1" {% if config.get('fairness_cap_uses_credit','0') != '0' %}checked{% endif %}> Use unified fairness credit (unavailability + manual call credit)</label>
-      <label style="display:block;margin:6px 0;"><input type="checkbox" name="enable_fairness_hard_cap" value="1" {% if config.get('enable_fairness_hard_cap','1') != '0' %}checked{% endif %}> Enforce fairness hard caps (max−min ≤ range)</label>
-      <div style="margin:8px 0 12px 24px;">
-        <label for="fairness_hard_cap_range" style="margin-right:10px;">Fairness hard cap range:</label>
-        <input type="number" min="0" id="fairness_hard_cap_range" name="fairness_hard_cap_range" value="{{ config.get('fairness_hard_cap_range','1') }}" style="width:80px;">
-        <div style="font-size:12px; font-style:italic; color:#666;">If enabled, each cohort’s spread (max−min) must be ≤ this value.</div>
-      </div>
-      <label style="display:block;margin:6px 0;"><input type="checkbox" name="enable_two_pass_fairness_priority" value="1" {% if config.get('enable_two_pass_fairness_priority','1') != '0' %}checked{% endif %}> Fairness first-pass priority (lexicographic)</label>
-      <div style="margin:4px 0 12px 24px; font-size:12px; font-style:italic; color:#666;">When enabled, solver first minimizes cohort fairness spread, then optimizes all other soft objectives.</div>
-      <hr>
-      <label style="display:block;margin:6px 0;"><input type="checkbox" name="solver_debug" value="1" {% if config.get('solver_debug','0') != '0' %}checked{% endif %}> Enable solver debug logging (keeps OR‑Tools logs on)</label>
-      <hr>
-      <label style="display:block;margin:6px 0;"><input type="checkbox" name="enable_force_1B_weekend" value="1" {% if config.enable_force_1B_weekend != '0' %}checked{% endif %}> Force 1B on weekends/holidays</label>
-      <label style="display:block;margin:6px 0;"><input type="checkbox" name="enable_level2_supervision" value="1" {% if config.enable_level2_supervision != '0' %}checked{% endif %}> Level-2 supervision rules</label>
-      <label style="display:block;margin:6px 0;"><input type="checkbox" name="enable_group4_2B3_ban" value="1" {% if config.enable_group4_2B3_ban != '0' %}checked{% endif %}> Ban Group-4 on both 2B and 3 same day</label>
-      <label style="display:block;margin:6px 0;"><input type="checkbox" name="enable_max_2B_group4" value="1" {% if config.enable_max_2B_group4 != '0' %}checked{% endif %}> Limit Group-4 to ≤1 total 2B</label>
-      <label style="display:block;margin:6px 0;"><input type="checkbox" name="enable_max_calls_level1" value="1" {% if config.enable_max_calls_level1 != '0' %}checked{% endif %}> Max 1A+1B per surgeon</label>
-      <label style="display:block;margin:6px 0;"><input type="checkbox" name="enable_nlth_rules" value="1" {% if config.enable_nlth_rules != '0' %}checked{% endif %}> NLTH weekend-only rule</label>
-      <hr>
-      <label style="display:block;margin:6px 0;"><input type="checkbox" name="enable_weekend_balance" value="1" {% if config.enable_weekend_balance != '0' %}checked{% endif %}> Weekend fairness (groups)</label>
-      <label style="display:block;margin:6px 0;"><input type="checkbox" name="enable_weekend_consecutive_penalty" value="1" {% if config.enable_weekend_consecutive_penalty != '0' %}checked{% endif %}> Penalize consecutive weekend days</label>
-      <label style="display:block;margin:6px 0;"><input type="checkbox" name="enable_weekend_team_diversity_enable" value="1" {% if config.enable_weekend_team_diversity_enable != '0' %}checked{% endif %}> Weekend team diversity</label>
-      <label style="display:block;margin:6px 0;"><input type="checkbox" name="enable_team_day_prefs" value="1" {% if config.enable_team_day_prefs != '0' %}checked{% endif %}> Team day preferences</label>
-      <hr>
-      <label style="display:block;margin:6px 0;"><input type="checkbox" name="enable_2b_usage_penalty" value="1" {% if config.enable_2b_usage_penalty != '0' %}checked{% endif %}> Enable 2B usage penalty</label>
-      <label style="display:block;margin:6px 0;"><input type="checkbox" name="enable_fairness_l2_groups" value="1" {% if config.enable_fairness_l2_groups != '0' %}checked{% endif %}> Balance 2A+2B calls within L2 groups (1/2/3)</label>
-      <hr>
-      <label style="display:block;margin:6px 0;"><input type="checkbox" name="enable_horizon_fairness" value="1" {% if config.get('enable_horizon_fairness','0') != '0' %}checked{% endif %}> Enable half‑year fairness balancing (Jan–Jun, Jul–Dec)</label>
-    </div>
+      <div class="gc-desc">This only affects solver behavior and never alters stored requests.</div>
 
-    <div style="border:1px solid #ddd;border-radius:8px;padding:12px;">
-      <h3 style="margin-top:0;">Weights</h3>
-      <div style="width:80%;">
-        <label for="fairness_weight" style="margin:0; display:block;">Overall fairness strength:</label>
-        <div style="display:grid; grid-template-columns: 1fr auto; align-items:center; gap:8px;">
-          <input type="range" id="fairness_weight" name="fairness_weight" min="0" max="20000" value="{{ config.get('fairness_weight', '1000') }}" style="width:100%;" oninput="fairness_weightOutput.textContent = this.value">
-          <span id="fairness_weightOutput">{{ config.get('fairness_weight', '1000') }}</span>
+      <hr class="gc-divider">
+      <label class="gc-check"><input type="checkbox" name="enable_spacing_penalty" value="1" {% if config.get('enable_spacing_penalty', '1') != '0' %}checked{% endif %}> Spacing penalty</label>
+      <label class="gc-check"><input type="checkbox" name="enable_availability_unavail_prev_penalty" value="1" {% if config.get('enable_availability_unavail_prev_penalty','1') != '0' %}checked{% endif %}> Unavailable prev-day penalty</label>
+      <label class="gc-check"><input type="checkbox" name="enable_availability_nocall_penalty" value="1" {% if config.get('enable_availability_nocall_penalty','1') != '0' %}checked{% endif %}> No-call penalty (soft mode)</label>
+      <label class="gc-check"><input type="checkbox" name="enable_unavail_credit" value="1" {% if config.get('enable_unavail_credit','1') != '0' %}checked{% endif %}> Unavailability credit penalty term</label>
+
+      <hr class="gc-divider">
+      <label class="gc-check"><input type="checkbox" name="enable_force_1B_weekend" value="1" {% if config.get('enable_force_1B_weekend','1') != '0' %}checked{% endif %}> Force 1B on weekends/holidays</label>
+      <label class="gc-check"><input type="checkbox" name="enable_level2_supervision" value="1" {% if config.get('enable_level2_supervision','1') != '0' %}checked{% endif %}> Level-2 supervision rules</label>
+      <label class="gc-check"><input type="checkbox" name="enable_group4_2B3_ban" value="1" {% if config.get('enable_group4_2B3_ban','1') != '0' %}checked{% endif %}> Ban Group-4 on both 2B and 3 same day</label>
+      <label class="gc-check"><input type="checkbox" name="enable_max_2B_group4" value="1" {% if config.get('enable_max_2B_group4','1') != '0' %}checked{% endif %}> Limit Group-4 to at most one 2B</label>
+      <label class="gc-check"><input type="checkbox" name="enable_max_calls_level1" value="1" {% if config.get('enable_max_calls_level1','1') != '0' %}checked{% endif %}> Limit 1A+1B per surgeon</label>
+      <div class="gc-inline" style="margin-left: 22px;">
+        <label for="max_calls_level1">Max 1A+1B calls:</label>
+        <input type="number" min="0" id="max_calls_level1" name="max_calls_level1" class="gc-number" value="{{ config.get('max_calls_level1','10') }}">
+      </div>
+      <label class="gc-check"><input type="checkbox" name="enable_nlth_rules" value="1" {% if config.get('enable_nlth_rules','1') != '0' %}checked{% endif %}> NLTH weekend-only rule</label>
+
+      <hr class="gc-divider">
+      <label class="gc-check"><input type="checkbox" name="enable_weekend_balance" value="1" {% if config.get('enable_weekend_balance','1') != '0' %}checked{% endif %}> Weekend fairness (groups)</label>
+      <label class="gc-check"><input type="checkbox" name="enable_weekend_consecutive_penalty" value="1" {% if config.get('enable_weekend_consecutive_penalty','1') != '0' %}checked{% endif %}> Penalize consecutive weekend days</label>
+      <label class="gc-check"><input type="checkbox" name="enable_weekend_team_diversity_enable" value="1" {% if config.get('enable_weekend_team_diversity_enable','1') != '0' %}checked{% endif %}> Weekend team diversity</label>
+      <label class="gc-check"><input type="checkbox" name="enable_team_day_prefs" value="1" {% if config.get('enable_team_day_prefs','1') != '0' %}checked{% endif %}> Team-day Increase/Decrease weights</label>
+
+      <hr class="gc-divider">
+      <label class="gc-check"><input type="checkbox" name="fairness_cap_uses_credit" value="1" {% if config.get('fairness_cap_uses_credit','0') != '0' %}checked{% endif %}> Use unified fairness credit (unavailability + manual credit)</label>
+      <label class="gc-check"><input type="checkbox" name="enable_fairness_hard_cap" value="1" {% if config.get('enable_fairness_hard_cap','1') != '0' %}checked{% endif %}> Enforce strict within-cohort fairness hard cap</label>
+      <div class="gc-inline" style="margin-left: 22px;">
+        <label for="fairness_hard_cap_range">Fairness hard cap range:</label>
+        <input type="number" min="0" id="fairness_hard_cap_range" name="fairness_hard_cap_range" class="gc-number" value="{{ config.get('fairness_hard_cap_range','1') }}">
+      </div>
+      <label class="gc-check"><input type="checkbox" name="enable_two_pass_fairness_priority" value="1" {% if config.get('enable_two_pass_fairness_priority','1') != '0' %}checked{% endif %}> Fairness first-pass priority (lexicographic)</label>
+      <label class="gc-check"><input type="checkbox" name="enable_horizon_fairness" value="1" {% if config.get('enable_horizon_fairness','0') != '0' %}checked{% endif %}> Enable half-year fairness balancing (Jan-Jun, Jul-Dec)</label>
+      <details style="margin-left:22px; margin-top:6px;">
+        <summary>Advanced fairness fallback</summary>
+        <div class="gc-inline" style="margin-top:8px;">
+          <label for="fairness_fallback_policy">If strict fairness is infeasible:</label>
+          <select name="fairness_fallback_policy" id="fairness_fallback_policy" class="gc-select">
+            <option value="auto_relax" {% if config.get('fairness_fallback_policy','auto_relax') == 'auto_relax' %}selected{% endif %}>Auto-relax fairness caps and return best feasible schedule</option>
+            <option value="no_fallback" {% if config.get('fairness_fallback_policy','auto_relax') == 'no_fallback' %}selected{% endif %}>Do not relax fairness caps (return infeasible)</option>
+          </select>
         </div>
-      </div>
-      <div style="font-size:12px; font-style:italic; color:#666;">Higher values push total calls to be more equal across all surgeons.</div>
-      <div style="height:10px"></div>
+        <div class="gc-desc">Default is auto-relax. Hard constraints remain enforced in both modes.</div>
+      </details>
 
-      <div style="width:80%; display:flex; justify-content:space-between; align-items:center; gap:8px;">
-        <label for="gamma_2b_usage" style="margin:0;">Penalty for using 2B (supervisor load):</label>
-        <span id="gamma_2b_usageOut">{{ config.get('gamma_2b_usage', '0') }}</span>
-      </div>
-      <input type="range" id="gamma_2b_usage" name="gamma_2b_usage" min="0" max="500" value="{{ config.get('gamma_2b_usage', '0') }}" style="width:80%;" oninput="gamma_2b_usageOut.textContent = this.value">
-      <div style="font-size:12px; font-style:italic; color:#666;">Softly discourages assigning 2B to reduce supervisor overuse when not required.</div>
-
-      <div style="height:10px"></div>
-      <div style="width:80%; display:flex; justify-content:space-between; align-items:center; gap:8px;">
-        <label for="gamma_fairness_l2_groups" style="margin:0;">Fairness for 2A+2B within L2 groups:</label>
-        <span id="gamma_fairness_l2_groupsOut">{{ config.get('gamma_fairness_l2_groups', '500') }}</span>
-      </div>
-      <input type="range" id="gamma_fairness_l2_groups" name="gamma_fairness_l2_groups" min="0" max="20000" value="{{ config.get('gamma_fairness_l2_groups', '500') }}" style="width:80%;" oninput="gamma_fairness_l2_groupsOut.textContent = this.value">
-      <div style="font-size:12px; font-style:italic; color:#666;">Balances total 2A+2B calls across surgeons within each of groups 1, 2, and 3.</div>
-
-      <div style="width:80%; display:flex; justify-content:space-between; align-items:center; gap:8px;">
-        <label for="gamma_no_call" style="margin:0;">Penalty for ignoring “No‑call” requests:</label>
-        <span id="gamma_no_callOutput">{{ config.get('gamma_no_call', '10') }}</span>
-      </div>
-      <input type="range" id="gamma_no_call" name="gamma_no_call" min="0" max="500" value="{{ config.get('gamma_no_call', '10') }}" style="width: 80%;" oninput="gamma_no_callOutput.textContent = this.value">
-      <div style="font-size:12px; font-style:italic; color:#666;">Discourages assigning a call on days when a surgeon requested “no call”.</div>
-      <div style="height:10px"></div>
-
-      <div style="width:80%; display:flex; justify-content:space-between; align-items:center; gap:8px;">
-        <label for="gamma_unavail_prev" style="margin:0;">Penalty for assigning day before “Unavailable”:</label>
-        <span id="gamma_unavail_prevOutput">{{ config.get('gamma_unavail_prev', '5') }}</span>
-      </div>
-      <input type="range" id="gamma_unavail_prev" name="gamma_unavail_prev" min="0" max="500" value="{{ config.get('gamma_unavail_prev', '5') }}" style="width: 80%;" oninput="gamma_unavail_prevOutput.textContent = this.value">
-      <div style="font-size:12px; font-style:italic; color:#666;">Avoids scheduling a surgeon the day before a declared unavailability.</div>
-      <div style="height:10px"></div>
-
-      <div style="width:80%; display:flex; justify-content:space-between; align-items:center; gap:8px;">
-        <label for="gamma_1B" style="margin:0;">Preference to fill 1B level:</label>
-        <span id="gamma_1BOutput">{{ config.get('gamma_1B', '1') }}</span>
-      </div>
-      <input type="range" id="gamma_1B" name="gamma_1B" min="0" max="500" value="{{ config.get('gamma_1B', '1') }}" style="width: 80%;" oninput="gamma_1BOutput.textContent = this.value">
-      <div style="font-size:12px; font-style:italic; color:#666;">Encourages ensuring the 1B slot is assigned when feasible.</div>
-      <div style="height:10px"></div>
-
-      <div style="width:80%; display:flex; justify-content:space-between; align-items:center; gap:8px;">
-        <label for="gamma_spacing" style="margin:0;">Penalty for calls too close together:</label>
-        <span id="gamma_spacingOutput">{{ config.get('gamma_spacing','10') }}</span>
-      </div>
-      <input type="range" id="gamma_spacing" name="gamma_spacing" min="0" max="100" value="{{ config.get('gamma_spacing','10') }}" style="width:80%;" oninput="gamma_spacingOutput.textContent = this.value">
-      <div style="font-size:12px; font-style:italic; color:#666;">Higher values penalize giving a surgeon multiple calls within a short window.</div>
-      <div style="height:10px"></div>
-
-      <label for="spacing_threshold">Spacing threshold (days between calls):</label><br>
-      <input type="range" id="spacing_threshold" name="spacing_threshold" min="1" max="14" value="{{ config.get('spacing_threshold','7') }}" style="width:80%;" oninput="spacing_thresholdOutput.textContent = this.value">
-      <span id="spacing_thresholdOutput" class="w-12 text-right">{{ config.get('spacing_threshold','7') }}</span>
-      <div style="height:10px"></div>
-
-      <div style="width:80%; display:flex; justify-content:space-between; align-items:center; gap:8px;">
-        <label for="gamma_team_pref" class="block font-medium" style="margin:0;">Team day preference strength</label>
-        <span id="teamPrefOutput">{{ config.get('gamma_team_pref', '10') }}</span>
-      </div>
-      <input type="range" name="gamma_team_pref" id="gamma_team_pref" min="0" max="100" value="{{ config.get('gamma_team_pref', '10') }}" oninput="teamPrefOutput.textContent = this.value" style="width:80%;">
-      <div style="font-size:12px; font-style:italic; color:#666;">Applies the increase/decrease preferences per team for each weekday.</div>
-      <div style="height:10px"></div>
-
-      
-
-      <div style="display:grid;grid-template-columns: 1fr auto;align-items:center;gap:8px;">
-        <div style="grid-column:1 / span 2;">
-          <div style="width:80%;">
-            <label for="gamma_weekend_balance" style="margin:0; display:block;">Weekend fairness across groups:</label>
-            <div style="display:grid; grid-template-columns: 1fr auto; align-items:center; gap:8px;">
-              <input type="range" id="gamma_weekend_balance" name="gamma_weekend_balance" min="0" max="500" value="{{ config.get('gamma_weekend_balance', '50') }}" style="width:100%;" oninput="gwbOut.textContent = this.value">
-              <span id="gwbOut">{{ config.get('gamma_weekend_balance', '50') }}</span>
-            </div>
-            <div style="font-size:12px; font-style:italic; color:#666;">Balances weekend load across level groups (e.g., 1/2/3/4).</div>
-          </div>
+      <hr class="gc-divider">
+      <label class="gc-check"><input type="checkbox" name="enable_unavail_deadline" value="1" {% if config.get('enable_unavail_deadline','0') != '0' %}checked{% endif %}> Enable next-month unavailability deadline</label>
+      <div style="margin: 6px 0 10px 22px;">
+        <div class="gc-inline">
+          <label for="unavail_deadline_day">Day:</label>
+          <input type="number" id="unavail_deadline_day" name="unavail_deadline_day" min="1" max="31" class="gc-number" value="{{ config.get('unavail_deadline_day','20') }}">
+          <label for="unavail_deadline_time">Time:</label>
+          <input type="time" id="unavail_deadline_time" name="unavail_deadline_time" class="gc-time" value="{{ config.get('unavail_deadline_time','23:59') }}">
         </div>
+        <div class="gc-desc">Example: day 20 at 23:59 means next-month requests close on day 20 of the current month.</div>
       </div>
-      <div style="height:10px"></div>
-
-      <div style="width:80%; display:flex; justify-content:space-between; align-items:center; gap:8px;">
-        <label for="gamma_consec_weekend" style="margin:0;">Penalty for consecutive weekends:</label>
-        <span id="gcwOut">{{ config.get('gamma_consec_weekend', '20') }}</span>
-      </div>
-      <input type="range" id="gamma_consec_weekend" name="gamma_consec_weekend" min="0" max="200" value="{{ config.get('gamma_consec_weekend', '20') }}" style="width:80%;" oninput="gcwOut.textContent = this.value">
-      <div style="font-size:12px; font-style:italic; color:#666;">Discourages the same surgeon being scheduled on back‑to‑back weekend days.</div>
-      <div style="height:10px"></div>
-
-      <div style="width:80%; display:flex; justify-content:space-between; align-items:center; gap:8px;">
-        <label for="max_weekend_calls" style="margin:0;">Max weekend calls per surgeon:</label>
-        <span id="mwcOut">{{ config.get('max_weekend_calls', '3') }}</span>
-      </div>
-      <input type="range" id="max_weekend_calls" name="max_weekend_calls" min="0" max="10" value="{{ config.get('max_weekend_calls', '3') }}" style="width:80%;" oninput="mwcOut.textContent = this.value">
-      <div style="font-size:12px; font-style:italic; color:#666;">Hard cap on weekend assignments for non‑NLTH surgeons (default 3).</div>
-
-      <div style="width:80%; display:flex; justify-content:space-between; align-items:center; gap:8px;">
-        <label for="gamma_weekend_team_diversity" style="margin:0;">Weekend team diversity balance:</label>
-        <span id="gwtdOut">{{ config.get('gamma_weekend_team_diversity', '50') }}</span>
-      </div>
-      <input type="range" id="gamma_weekend_team_diversity" name="gamma_weekend_team_diversity" min="0" max="500" value="{{ config.get('gamma_weekend_team_diversity', '50') }}" style="width:80%;" oninput="gwtdOut.textContent = this.value">
-      <div style="font-size:12px; font-style:italic; color:#666;">Promotes having different teams represented across weekends.</div>
-
-      <div style="height:10px"></div>
-      <div style="width:80%; display:flex; justify-content:space-between; align-items:center; gap:8px;">
-        <label for="min_calls_nlth" style="margin:0;">Minimum total calls for NLTH surgeons:</label>
-        <span id="mcnOut">{{ config.get('min_calls_nlth', '3') }}</span>
-      </div>
-      <input type="range" id="min_calls_nlth" name="min_calls_nlth" min="0" max="10" value="{{ config.get('min_calls_nlth', '3') }}" style="width:80%;" oninput="mcnOut.textContent = this.value">
-      <div style="font-size:12px; font-style:italic; color:#666;">Hard lower bound on total calls for surgeons marked NLTH.</div>
-      <div style="width:80%; display:flex; justify-content:space-between; align-items:center; gap:8px;">
-        <label for="gamma_unavail_credit" style="margin:0;">Credit for unavailability (more → fewer calls):</label>
-        <span id="gucOut">{{ config.get('gamma_unavail_credit', '50') }}</span>
-      </div>
-      <input type="range" id="gamma_unavail_credit" name="gamma_unavail_credit" min="0" max="500" value="{{ config.get('gamma_unavail_credit', '50') }}" style="width:80%;" oninput="gucOut.textContent = this.value">
-      <div style="font-size:12px; font-style:italic; color:#666;">Grants call reduction credit per set number of unavailable days.</div>
-      <div style="height:10px"></div>
-      <div style="width:80%; display:flex; justify-content:space-between; align-items:center; gap:8px;">
-        <label for="unavail_credit_days" style="margin:0;">Days of unavailability per 1 call credit:</label>
-        <span id="ucdOut">{{ config.get('unavail_credit_days', '7') }}</span>
-      </div>
-      <input type="range" id="unavail_credit_days" name="unavail_credit_days" min="1" max="14" value="{{ config.get('unavail_credit_days', '7') }}" style="width:80%;" oninput="ucdOut.textContent = this.value">
-      <div style="font-size:12px; font-style:italic; color:#666;">Example: 7 means 7 days off ≈ 1 fewer expected call; 14 ≈ 2 fewer.</div>
+      <label class="gc-check"><input type="checkbox" name="solver_debug" value="1" {% if config.get('solver_debug','0') != '0' %}checked{% endif %}> Enable solver debug logging</label>
     </div>
 
-    <div style="grid-column: 1 / span 2;text-align:right;">
-      <button type="submit" style="padding: 10px 20px; font-size: 16px; cursor: pointer;">Save</button>
-    </div>
-  
-  <div style="grid-column: 1 / span 2;"></div>
-{% set day_names = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'] %}
+    <div class="gc-card">
+      <h3>Weights</h3>
 
-<h2 class="mt-6 text-xl font-semibold">Team-Day Call Preferences</h2>
-<table class="w-full table-auto border-collapse mb-6">
-  <thead>
-    <tr>
-      <th class="border px-2 py-1 bg-gray-100">Team \ Day</th>
-      {% for day in day_names %}
-        <th class="border px-2 py-1 bg-gray-100">{{ day }}</th>
-      {% endfor %}
-    </tr>
-  </thead>
-  <tbody>
-    {% for team in teams %}
-      <tr>
-        <td class="border px-2 py-1 font-medium">{{ team }}</td>
-        {% for day in day_names %}
-          {% set wd = loop.index0 %}
-          <td class="border px-2 py-1">
-            <select name="pref_{{ team }}_{{ wd }}" class="w-full p-1 border rounded">
-              <option value="-1" {% if prefs[team].get(wd) == -1 %}selected{% endif %}>Decrease</option>
-              <option value="0"  {% if prefs[team].get(wd) ==  0 %}selected{% endif %}>No change</option>
-              <option value="1"  {% if prefs[team].get(wd) ==  1 %}selected{% endif %}>Increase</option>
-            </select>
-          </td>
+      <div class="gc-weight-row">
+        <div class="gc-weight-head">
+          <label for="fairness_weight">Overall fairness strength</label>
+          <span class="gc-weight-value" id="fairness_weightOutput">{{ config.get('fairness_weight', '1000') }}</span>
+        </div>
+        <input type="range" id="fairness_weight" name="fairness_weight" min="0" max="20000" value="{{ config.get('fairness_weight', '1000') }}" data-output="fairness_weightOutput">
+      </div>
+
+      <div class="gc-weight-row">
+        <div class="gc-weight-head">
+          <label for="gamma_no_call">Penalty for ignoring no-call requests</label>
+          <span class="gc-weight-value" id="gamma_no_callOutput">{{ config.get('gamma_no_call', '10') }}</span>
+        </div>
+        <input type="range" id="gamma_no_call" name="gamma_no_call" min="0" max="500" value="{{ config.get('gamma_no_call', '10') }}" data-output="gamma_no_callOutput">
+      </div>
+
+      <div class="gc-weight-row">
+        <div class="gc-weight-head">
+          <label for="gamma_unavail_prev">Penalty for assigning day before unavailable</label>
+          <span class="gc-weight-value" id="gamma_unavail_prevOutput">{{ config.get('gamma_unavail_prev', '5') }}</span>
+        </div>
+        <input type="range" id="gamma_unavail_prev" name="gamma_unavail_prev" min="0" max="500" value="{{ config.get('gamma_unavail_prev', '5') }}" data-output="gamma_unavail_prevOutput">
+      </div>
+
+      <div class="gc-weight-row">
+        <div class="gc-weight-head">
+          <label for="gamma_unavail_credit">Unavailability credit strength</label>
+          <span class="gc-weight-value" id="gucOut">{{ config.get('gamma_unavail_credit', '50') }}</span>
+        </div>
+        <input type="range" id="gamma_unavail_credit" name="gamma_unavail_credit" min="0" max="500" value="{{ config.get('gamma_unavail_credit', '50') }}" data-output="gucOut">
+      </div>
+
+      <div class="gc-weight-row">
+        <div class="gc-weight-head">
+          <label for="unavail_credit_days">Unavailability days per call credit</label>
+          <span class="gc-weight-value" id="ucdOut">{{ config.get('unavail_credit_days', '7') }}</span>
+        </div>
+        <input type="range" id="unavail_credit_days" name="unavail_credit_days" min="1" max="14" value="{{ config.get('unavail_credit_days', '7') }}" data-output="ucdOut">
+      </div>
+
+      <div class="gc-weight-row">
+        <div class="gc-weight-head">
+          <label for="gamma_spacing">Penalty for calls too close together</label>
+          <span class="gc-weight-value" id="gamma_spacingOutput">{{ config.get('gamma_spacing','10') }}</span>
+        </div>
+        <input type="range" id="gamma_spacing" name="gamma_spacing" min="0" max="100" value="{{ config.get('gamma_spacing','10') }}" data-output="gamma_spacingOutput">
+      </div>
+
+      <div class="gc-weight-row">
+        <div class="gc-weight-head">
+          <label for="spacing_threshold">Spacing threshold (days between calls)</label>
+          <span class="gc-weight-value" id="spacing_thresholdOutput">{{ config.get('spacing_threshold','7') }}</span>
+        </div>
+        <input type="range" id="spacing_threshold" name="spacing_threshold" min="1" max="14" value="{{ config.get('spacing_threshold','7') }}" data-output="spacing_thresholdOutput">
+      </div>
+
+      <div class="gc-weight-row">
+        <div class="gc-weight-head">
+          <label for="gamma_team_pref">Team-day Increase/Decrease strength</label>
+          <span class="gc-weight-value" id="teamPrefOutput">{{ config.get('gamma_team_pref', '10') }}</span>
+        </div>
+        <input type="range" id="gamma_team_pref" name="gamma_team_pref" min="0" max="100" value="{{ config.get('gamma_team_pref', '10') }}" data-output="teamPrefOutput">
+      </div>
+
+      <div class="gc-weight-row">
+        <div class="gc-weight-head">
+          <label for="gamma_weekend_balance">Weekend fairness across groups</label>
+          <span class="gc-weight-value" id="gwbOut">{{ config.get('gamma_weekend_balance', '50') }}</span>
+        </div>
+        <input type="range" id="gamma_weekend_balance" name="gamma_weekend_balance" min="0" max="500" value="{{ config.get('gamma_weekend_balance', '50') }}" data-output="gwbOut">
+      </div>
+
+      <div class="gc-weight-row">
+        <div class="gc-weight-head">
+          <label for="gamma_consec_weekend">Penalty for consecutive weekends</label>
+          <span class="gc-weight-value" id="gcwOut">{{ config.get('gamma_consec_weekend', '20') }}</span>
+        </div>
+        <input type="range" id="gamma_consec_weekend" name="gamma_consec_weekend" min="0" max="200" value="{{ config.get('gamma_consec_weekend', '20') }}" data-output="gcwOut">
+      </div>
+
+      <div class="gc-weight-row">
+        <div class="gc-weight-head">
+          <label for="max_weekend_calls">Max weekend calls per surgeon</label>
+          <span class="gc-weight-value" id="mwcOut">{{ config.get('max_weekend_calls', '3') }}</span>
+        </div>
+        <input type="range" id="max_weekend_calls" name="max_weekend_calls" min="0" max="10" value="{{ config.get('max_weekend_calls', '3') }}" data-output="mwcOut">
+      </div>
+
+      <div class="gc-weight-row">
+        <div class="gc-weight-head">
+          <label for="gamma_weekend_team_diversity">Weekend team diversity balance</label>
+          <span class="gc-weight-value" id="gwtdOut">{{ config.get('gamma_weekend_team_diversity', '50') }}</span>
+        </div>
+        <input type="range" id="gamma_weekend_team_diversity" name="gamma_weekend_team_diversity" min="0" max="500" value="{{ config.get('gamma_weekend_team_diversity', '50') }}" data-output="gwtdOut">
+      </div>
+
+      <div class="gc-weight-row">
+        <div class="gc-weight-head">
+          <label for="min_calls_nlth">Minimum total calls for NLTH surgeons</label>
+          <span class="gc-weight-value" id="mcnOut">{{ config.get('min_calls_nlth', '3') }}</span>
+        </div>
+        <input type="range" id="min_calls_nlth" name="min_calls_nlth" min="0" max="10" value="{{ config.get('min_calls_nlth', '3') }}" data-output="mcnOut">
+      </div>
+
+      <div class="gc-weight-row">
+        <div class="gc-weight-head">
+          <label for="gamma_2b_usage">Penalty for using 2B (supervisor load)</label>
+          <span class="gc-weight-value" id="gamma_2b_usageOut">{{ config.get('gamma_2b_usage', '0') }}</span>
+        </div>
+        <input type="range" id="gamma_2b_usage" name="gamma_2b_usage" min="0" max="500" value="{{ config.get('gamma_2b_usage', '0') }}" data-output="gamma_2b_usageOut">
+      </div>
+
+      <div class="gc-weight-row">
+        <div class="gc-weight-head">
+          <label for="gamma_balance">Allow-empty balancing weight</label>
+          <span class="gc-weight-value" id="gamma_balanceOut">{{ config.get('gamma_balance', '100') }}</span>
+        </div>
+        <input type="range" id="gamma_balance" name="gamma_balance" min="0" max="1000" value="{{ config.get('gamma_balance', '100') }}" data-output="gamma_balanceOut">
+      </div>
+    </div>
+
+    <div class="gc-actions">
+      <button type="submit" class="gc-btn">Save Global Configuration</button>
+    </div>
+
+    {% set day_names = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'] %}
+    <div class="gc-table-wrap">
+      <table class="gc-table">
+        <thead>
+          <tr>
+            <th class="gc-team-col">Team \ Day</th>
+            {% for day in day_names %}
+              <th>{{ day }}</th>
+            {% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+        {% for team in teams %}
+          <tr>
+            <td class="gc-team-col">{{ team }}</td>
+            {% for day in day_names %}
+              {% set wd = loop.index0 %}
+              <td>
+                <select name="pref_{{ team }}_{{ wd }}" class="gc-pref-select">
+                  <option value="-1" {% if prefs[team].get(wd) == -1 %}selected{% endif %}>Decrease</option>
+                  <option value="0" {% if prefs[team].get(wd) == 0 %}selected{% endif %}>No change</option>
+                  <option value="1" {% if prefs[team].get(wd) == 1 %}selected{% endif %}>Increase</option>
+                  <option value="2" {% if prefs[team].get(wd) == 2 %}selected{% endif %}>No calls</option>
+                </select>
+              </td>
+            {% endfor %}
+          </tr>
         {% endfor %}
-      </tr>
-    {% endfor %}
-  </tbody>
-</table>
-<br>
-    <button type="submit" style="padding: 10px 20px; font-size: 16px; cursor: pointer;">Update Global Configuration</button>
-  </form>
+        </tbody>
+      </table>
+    </div>
 
-  
+    <div class="gc-note">
+      Team-Day <strong>No calls</strong> follows global no-call mode: hard mode blocks assignment for that team/day, soft mode applies no-call penalties for that team/day.
+    </div>
+
+    <div class="gc-actions">
+      <button type="submit" class="gc-btn">Update Global Configuration</button>
+    </div>
+  </form>
+</div>
+
+<script>
+  (function () {
+    var ranges = document.querySelectorAll('input[type="range"][data-output]');
+    ranges.forEach(function (input) {
+      var outputId = input.getAttribute('data-output');
+      var out = document.getElementById(outputId);
+      if (!out) return;
+      var sync = function () { out.textContent = input.value; };
+      input.addEventListener('input', sync);
+      sync();
+    });
+  })();
+</script>
 {% endblock %}

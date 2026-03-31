@@ -410,6 +410,7 @@
 <div id="progress" style="text-align:center; margin-top:10px;">
   <p>Status: <span id="status">idle</span></p>
   <p>Best Objective So Far: <span id="best">n/a</span></p>
+  <p>Solver Mode Used: <span id="solverModeUsed">{{ solver_mode_used or 'n/a' }}</span></p>
   <div id="errors" style="color:#b00020; margin-top:8px;"></div>
 </div>
 <!-- Loading Modal -->
@@ -474,9 +475,20 @@
     if (initialSchedule === null || typeof initialSchedule !== 'object' || Array.isArray(initialSchedule)) {
       initialSchedule = {};
     }
-    const weekendSet      = new Set({{ weekend_set|list|tojson }});
-    const publicHolidays  = new Set({{ public_holidays|list|tojson }});
+    let publicHolidays  = new Set({{ public_holidays|list|tojson }});
+    function isWeekendDay(dayStr) {
+      const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dayStr || ''));
+      if (!m) return false;
+      const year = Number(m[1]);
+      const month = Number(m[2]);
+      const day = Number(m[3]);
+      if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return false;
+      const wd = new Date(Date.UTC(year, month - 1, day)).getUTCDay(); // 0=Sun,6=Sat
+      return wd === 0 || wd === 6;
+    }
+
     const surgeonsMeta = {{ (surgeons_meta or [])|tojson }};
+    const solverModeEl = document.getElementById('solverModeUsed');
 
     // grab references
     const modal   = document.getElementById('loadingModal');
@@ -635,15 +647,16 @@
       if (!sol || typeof sol !== 'object' || Array.isArray(sol)) {
         sol = {};
       }
+      const dayKeys = Object.keys(sol).filter((k) => /^\d{4}-\d{2}-\d{2}$/.test(k));
       // rebuild HTML
       const container = document.getElementById('scheduleContainer');
       let html = '<table class="schedule-table"><thead><tr><th>Date</th>'
                + ['1A','1B','2A','2B','3','4']
                  .map(l=>`<th>${l}</th>`).join('')
                + '</tr></thead><tbody>';
-      for (const day of Object.keys(sol)) {
+      for (const day of dayKeys) {
         const classes = [];
-        if (weekendSet.has(day))   classes.push('weekend');
+        if (isWeekendDay(day)) classes.push('weekend');
         if (publicHolidays.has(day)) classes.push('holiday');
         const row = (sol[day] && typeof sol[day] === 'object' && !Array.isArray(sol[day])) ? sol[day] : {};
         html += `<tr class="${classes.join(' ')}"><td>${day}</td>`;
@@ -690,6 +703,10 @@
         const data = await res.json();
         document.getElementById('status').innerText = data.status;
         document.getElementById('best')  .innerText = data.best ?? 'n/a';
+        solverModeEl.innerText = data.solver_mode ?? solverModeEl.innerText ?? 'n/a';
+        if (Array.isArray(data.public_holidays)) {
+          publicHolidays = new Set(data.public_holidays);
+        }
 
         if (data.status === 'running') {
           setTimeout(pollStatus, 1000);

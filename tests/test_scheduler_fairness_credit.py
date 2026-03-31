@@ -31,6 +31,7 @@ def _base_config():
         "fairness_weight": "1000",
         "fairness_cap_uses_credit": "0",
         "enable_fairness_hard_cap": "1",
+        "fairness_fallback_policy": "auto_relax",
         "fairness_hard_cap_range": "5",  # should still enforce <=1 by policy
         "gamma_no_call": "10",
         "gamma_unavail_prev": "5",
@@ -73,7 +74,7 @@ def _base_config():
 
 
 class SchedulerFairnessCreditTests(unittest.TestCase):
-    def test_l2_group_cap_is_enforced_to_one_even_when_configured_higher(self):
+    def test_l2_group_cap_auto_relax_returns_schedule_when_strict_is_infeasible(self):
         days = ["2026-03-02", "2026-03-03", "2026-03-04", "2026-03-05"]
         surgeons = [
             {"id": 1, "name": "L2G1", "call_levels": "2A", "nlth": False, "team": "Team 1"},
@@ -88,6 +89,31 @@ class SchedulerFairnessCreditTests(unittest.TestCase):
         availability = {2: [{"date": d, "request_type": "unavailable"} for d in days]}
 
         cfg = _base_config()
+        sched_cap_on, _ = _run_solver_with_overrides(
+            days=days,
+            surgeons=surgeons,
+            preassignments=preassignments,
+            availability=availability,
+            config=cfg,
+        )
+        self.assertIsInstance(sched_cap_on, dict)
+        self.assertNotIn("errors", sched_cap_on)
+
+    def test_l2_group_cap_no_fallback_surfaces_infeasible_error(self):
+        days = ["2026-03-02", "2026-03-03", "2026-03-04", "2026-03-05"]
+        surgeons = [
+            {"id": 1, "name": "L2G1", "call_levels": "2A", "nlth": False, "team": "Team 1"},
+            {"id": 2, "name": "L2G2", "call_levels": "2A,2B", "nlth": False, "team": "Team 1"},
+            {"id": 3, "name": "L2G3", "call_levels": "2B", "nlth": False, "team": "Team 2"},
+        ]
+        preassignments = {
+            days[0]: {"2A": 1, "2B": 3},
+            days[3]: {"2A": 1, "2B": 3},
+        }
+        availability = {2: [{"date": d, "request_type": "unavailable"} for d in days]}
+
+        cfg = _base_config()
+        cfg["fairness_fallback_policy"] = "no_fallback"
         sched_cap_on, _ = _run_solver_with_overrides(
             days=days,
             surgeons=surgeons,
