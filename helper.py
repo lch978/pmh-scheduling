@@ -645,6 +645,142 @@ def get_availability_requests():
     return requests
 
 
+BLOCKING_REQUEST_TYPES = ("unavailable", "study_leave", "no_call")
+
+
+def get_g1_g4_cohorts(surgeons: list | None = None):
+    """
+    Return cohort memberships aligned with the New Schedule G1/G2/G3/G4 logic.
+    """
+    if surgeons is None:
+        surgeons = get_all_surgeons()
+
+    def has_level(surgeon_obj, level):
+        return level in parse_call_levels(surgeon_obj.get("call_levels", ""))
+
+    group1_members = sorted(
+        [s for s in surgeons if has_level(s, "1A") or has_level(s, "1B")],
+        key=lambda s: (s.get("name", "") or "").lower(),
+    )
+    group2_members = sorted(
+        [s for s in surgeons if get_level2_group(s) in (1, 2, 3)],
+        key=lambda s: (s.get("name", "") or "").lower(),
+    )
+    group4_l2_ids = {
+        int(s["id"])
+        for s in surgeons
+        if s.get("id") is not None and get_level2_group(s) == 4
+    }
+    group3_members = sorted(
+        [
+            s
+            for s in surgeons
+            if has_level(s, "3")
+            or (s.get("id") is not None and int(s["id"]) in group4_l2_ids)
+        ],
+        key=lambda s: (s.get("name", "") or "").lower(),
+    )
+    group4_members = sorted(
+        [s for s in surgeons if has_level(s, "4")],
+        key=lambda s: (s.get("name", "") or "").lower(),
+    )
+
+    def normalize_members(members):
+        normalized = []
+        for surgeon in members:
+            sid = surgeon.get("id")
+            if sid is None:
+                continue
+            normalized.append(
+                {
+                    "id": int(sid),
+                    "name": str(surgeon.get("name", "") or ""),
+                }
+            )
+        return normalized
+
+    return [
+        {"key": "g1", "label": "G1 (1A+1B)", "members": normalize_members(group1_members)},
+        {"key": "g2", "label": "G2 (2A+2B)", "members": normalize_members(group2_members)},
+        {"key": "g3", "label": "G3 (3 + 2B if subgroup 4)", "members": normalize_members(group3_members)},
+        {"key": "g4", "label": "G4 (4)", "members": normalize_members(group4_members)},
+    ]
+
+
+def build_cohort_availability_calendar(start_date: datetime.date, end_date: datetime.date, surgeons: list | None = None):
+    """
+    Build day-level availability by G1/G2/G3/G4 cohorts for [start_date, end_date).
+    """
+    if not isinstance(start_date, datetime.date) or not isinstance(end_date, datetime.date):
+        raise TypeError("start_date and end_date must be date objects")
+    if end_date <= start_date:
+        raise ValueError("end_date must be after start_date")
+
+    if surgeons is None:
+        surgeons = get_all_surgeons()
+    cohorts = get_g1_g4_cohorts(surgeons=surgeons)
+    availability = get_availability_requests()
+
+    blocked_by_sid = {}
+    for surgeon in surgeons:
+        sid = surgeon.get("id")
+        if sid is None:
+            continue
+        sid = int(sid)
+        blocked_dates = set()
+        for req in availability.get(sid, []):
+            if req.get("request_type") not in BLOCKING_REQUEST_TYPES:
+                continue
+            raw = req.get("date")
+            req_date = raw if isinstance(raw, datetime.date) else None
+            if req_date is None:
+                try:
+                    req_date = datetime.date.fromisoformat(str(raw))
+                except Exception:
+                    continue
+            if start_date <= req_date < end_date:
+                blocked_dates.add(req_date)
+        blocked_by_sid[sid] = blocked_dates
+
+    days_payload = {}
+    cursor = start_date
+    while cursor < end_date:
+        day_key = cursor.isoformat()
+        day_result = {}
+        for cohort in cohorts:
+            available_names = []
+            unavailable_names = []
+            for member in cohort["members"]:
+                sid = member["id"]
+                name = member["name"]
+                if cursor in blocked_by_sid.get(sid, set()):
+                    unavailable_names.append(name)
+                else:
+                    available_names.append(name)
+            day_result[cohort["key"]] = {
+                "total_count": len(cohort["members"]),
+                "available_count": len(available_names),
+                "unavailable_count": len(unavailable_names),
+                "available_names": available_names,
+                "unavailable_names": unavailable_names,
+            }
+        days_payload[day_key] = day_result
+        cursor += datetime.timedelta(days=1)
+
+    return {
+        "cohorts": [
+            {
+                "key": cohort["key"],
+                "label": cohort["label"],
+                "total_count": len(cohort["members"]),
+                "members": cohort["members"],
+            }
+            for cohort in cohorts
+        ],
+        "days": days_payload,
+    }
+
+
 def compute_unavailability_credit_by_surgeon(surgeons, availability, days, unavail_credit_days):
     """
     Returns {surgeon_id: credit_calls} where credit_calls is derived only from

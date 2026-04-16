@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Admin Login{% endblock %}
+{% block content %}
+<div style="max-width: 420px; margin: 60px auto; background:#fff; border:1px solid #ddd; border-radius:10px; padding:22px;">
+  <h2 style="margin-bottom: 14px; color:#1f2937;">Admin Login</h2>
+  <p style="margin-bottom: 16px; color:#4b5563;">Enter admin credentials to unlock the navigation tabs.</p>
+  <form method="post" action="{{ url_for('admin_login') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="next" value="{{ next_url }}">
+    <label for="username" style="display:block; margin-bottom:6px; font-weight:600;">Username</label>
+    <input id="username" name="username" type="text" autocomplete="username" required
+           style="width:100%; padding:10px 12px; border:1px solid #c7c7c7; border-radius:6px; margin-bottom:12px;">
+
+    <label for="password" style="display:block; margin-bottom:6px; font-weight:600;">Password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required
+           style="width:100%; padding:10px 12px; border:1px solid #c7c7c7; border-radius:6px; margin-bottom:16px;">
+
+    <button type="submit"
+            style="width:100%; border:1px solid #1f2937; background:#1f2937; color:#fff; font-weight:600; border-radius:6px; padding:10px 12px; cursor:pointer;">
+      Sign In
+    </button>
+  </form>
+</div>
+{% endblock %}

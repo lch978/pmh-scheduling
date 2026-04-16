@@ -55,6 +55,18 @@ def create_app():
     app.config['BASIC_AUTH_USERNAME'] = os.getenv('BASIC_AUTH_USERNAME')
     app.config['BASIC_AUTH_PASSWORD'] = os.getenv('BASIC_AUTH_PASSWORD')
 
+    def is_valid_admin_credentials(username, password):
+        expected_user = app.config.get('BASIC_AUTH_USERNAME')
+        expected_pass = app.config.get('BASIC_AUTH_PASSWORD')
+        return bool(
+            username
+            and password
+            and expected_user
+            and expected_pass
+            and username == expected_user
+            and password == expected_pass
+        )
+
     with app.app_context():
         init_db()
 
@@ -119,8 +131,18 @@ def create_app():
     def utility_processor():
         return {
             'parse_call_levels': parse_call_levels,
-            'csrf_token': lambda: generate_csrf()
+            'csrf_token': lambda: generate_csrf(),
+            'is_admin_logged_in': lambda: bool(session.get('is_admin_logged_in')),
         }
+
+    def is_admin_authenticated():
+        if session.get('is_admin_logged_in'):
+            return True
+        auth = request.authorization
+        if auth and is_valid_admin_credentials(auth.username, auth.password):
+            session['is_admin_logged_in'] = True
+            return True
+        return False
     
     @app.after_request
     def set_security_headers(resp):
@@ -144,6 +166,29 @@ def create_app():
     @app.teardown_appcontext
     def teardown_db(exception):
         close_db(exception)
+
+    @app.route('/admin_login', methods=['GET', 'POST'])
+    def admin_login():
+        if request.method == 'POST':
+            username = (request.form.get('username') or '').strip()
+            password = request.form.get('password') or ''
+            next_url = request.form.get('next') or request.args.get('next') or url_for('index')
+            if is_valid_admin_credentials(username, password):
+                session['is_admin_logged_in'] = True
+                flash("Admin login successful.", "success")
+                return redirect(next_url)
+            flash("Invalid admin username or password.", "error")
+            return redirect(url_for('admin_login', next=next_url))
+        if session.get('is_admin_logged_in'):
+            return redirect(url_for('index'))
+        next_url = request.args.get('next', url_for('index'))
+        return render_template('admin_login.html', next_url=next_url)
+
+    @app.route('/admin_logout', methods=['POST'])
+    def admin_logout():
+        session.pop('is_admin_logged_in', None)
+        flash("You have been logged out.", "success")
+        return redirect(url_for('admin_login'))
             
     #############################################
     # Surgeon Management Endpoints
@@ -1257,6 +1302,44 @@ def create_app():
         else:
             return redirect(url_for('saved_schedule', year=year_sel, month=month_sel))
 
+    @app.route('/cohort_availability', methods=['GET'])
+    def cohort_availability():
+        year_sel, month_sel = get_year_month()
+        try:
+            initial_date = datetime.date(year_sel, month_sel, 1)
+        except Exception:
+            today = datetime.date.today()
+            initial_date = datetime.date(today.year, today.month, 1)
+        cohorts = get_g1_g4_cohorts()
+        return render_template(
+            'cohort_availability.html',
+            cohorts=cohorts,
+            initial_date=initial_date.isoformat(),
+            year=initial_date.year,
+            month=initial_date.month,
+        )
+
+    @app.route('/cohort_availability_data', methods=['GET'])
+    def cohort_availability_data():
+        start_raw = request.args.get('start')
+        end_raw = request.args.get('end')
+        if not start_raw or not end_raw:
+            return jsonify({"error": "Missing start or end date"}), 400
+        try:
+            start_date = datetime.date.fromisoformat(str(start_raw)[:10])
+            end_date = datetime.date.fromisoformat(str(end_raw)[:10])
+        except Exception:
+            return jsonify({"error": "Invalid date range"}), 400
+        if end_date <= start_date:
+            return jsonify({"error": "Invalid range: end must be after start"}), 400
+        if (end_date - start_date).days > 400:
+            return jsonify({"error": "Date range too large"}), 400
+
+        payload = build_cohort_availability_calendar(start_date=start_date, end_date=end_date)
+        payload["start"] = start_date.isoformat()
+        payload["end"] = end_date.isoformat()
+        return jsonify(payload)
+
     #############################################
     # Availability / Unavailability Endpoint
     #############################################
@@ -1271,10 +1354,7 @@ def create_app():
         next_month_label = datetime.date(next_month_year, next_month_month, 1).strftime("%B %Y")
 
         def is_admin_request():
-            auth = request.authorization
-            expected_user = app.config.get('BASIC_AUTH_USERNAME')
-            expected_pass = app.config.get('BASIC_AUTH_PASSWORD')
-            return bool(auth and expected_user and expected_pass and auth.username == expected_user and auth.password == expected_pass)
+            return is_admin_authenticated()
 
         is_admin = is_admin_request()
         block_requests = bool(deadline_dt and deadline_passed and not is_admin)

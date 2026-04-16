@@ -22,25 +22,24 @@
       color: #333;
       margin-bottom: 10px;
     }
-    /* Allow calendar to size itself without clipping */
-    #calendar .fc-scroller, #existing-calendar .fc-scroller {
-      overflow: visible !important;
-    }
-    /* Improved calendar container styling */
-    .calendar-container {
+    .calendar-shell {
       width: 100%;
       max-width: 1200px;    
       margin: 20px auto;
-      overflow: visible;
+      max-height: 68vh;
+      overflow: auto;
       background: #fff;
       border-radius: 8px;
       box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+    }
+    .calendar-shell .fc-scroller {
+      overflow: visible !important;
     }
     /* Increase the font size of the calendar day numbers */
     .fc-daygrid-day-number {
       font-size: 2rem; /* Adjust the size as needed */
     }
-    #calendar, #existing-calendar {
+    #availability-calendar {
       border: none;
       padding: 10px;
     }
@@ -63,20 +62,42 @@
     }
     
     /* Styling for form elements */
-    select, button {
+    button:not(.fc-button) {
       padding: 8px 12px;
       border: 1px solid #ccc;
       border-radius: 4px;
       background: #fff;
       font-size: 16px;
     }
-    button {
+    button:not(.fc-button) {
       cursor: pointer;
       color: #333;
       background-color: #e0f7fa;
     }
-    button:hover {
+    button:not(.fc-button):hover {
       background-color: #e6f7ff;
+    }
+    .fc .fc-button {
+      background: #fff;
+      border: 1px solid #9ca3af;
+      color: #1f2937;
+      text-transform: none;
+      font-weight: 600;
+      box-shadow: none;
+    }
+    .fc .fc-button:hover {
+      background: #f3f4f6;
+      border-color: #6b7280;
+      color: #111827;
+    }
+    .fc .fc-button-primary:not(:disabled).fc-button-active,
+    .fc .fc-button-primary:not(:disabled):active {
+      background: #1f2937;
+      border-color: #1f2937;
+      color: #fff;
+    }
+    .fc .fc-icon {
+      font-size: 1.15em;
     }
 
     /* Surgeon selector table */
@@ -93,6 +114,121 @@
     .surgeon-cell.selected { background:#bbdefb; font-weight:600; }
     .surgeon-cell .cell-level { font-size:10px; color:#888; flex-shrink:0; }
     .surgeon-cell .cell-name { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .request-type-buttons {
+      display: flex;
+      justify-content: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin: 12px 0 8px 0;
+    }
+    .action-buttons {
+      display: flex;
+      justify-content: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin: 6px 0 10px 0;
+    }
+    .interval-buttons {
+      display: flex;
+      justify-content: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin: 6px 0 10px 0;
+    }
+    .request-type-btn {
+      border-radius: 999px;
+      border: 1px solid #9ca3af;
+      background: #f9fafb;
+      color: #1f2937;
+      font-weight: 600;
+    }
+    .action-btn {
+      border-radius: 999px;
+      border: 1px solid #9ca3af;
+      background: #f9fafb;
+      color: #1f2937;
+      font-weight: 600;
+      padding: 8px 14px;
+    }
+    .action-btn:hover {
+      background: #eef2f7;
+    }
+    .action-btn.submit-btn {
+      background: #dcfce7;
+      border-color: #16a34a;
+      color: #14532d;
+    }
+    .action-btn.submit-btn:hover {
+      background: #bbf7d0;
+    }
+    .action-btn.delete-btn {
+      background: #fee2e2;
+      border-color: #dc2626;
+      color: #7f1d1d;
+    }
+    .action-btn.delete-btn:hover {
+      background: #fecaca;
+    }
+    .request-type-btn.active {
+      background: #1f2937;
+      color: #fff;
+      border-color: #1f2937;
+    }
+    .interval-btn {
+      border-radius: 999px;
+      border: 1px solid #9ca3af;
+      background: #f9fafb;
+      color: #1f2937;
+      font-weight: 600;
+      padding: 8px 14px;
+    }
+    .interval-btn.active {
+      background: #1f2937;
+      color: #fff;
+      border-color: #1f2937;
+    }
+    .sticky-month-indicator {
+      max-width: 1200px;
+      margin: 0 auto 6px auto;
+      text-align: left;
+      font-size: 14px;
+      color: #374151;
+      font-weight: 600;
+    }
+    .fc .fc-multimonth-title {
+      position: sticky;
+      top: 0;
+      z-index: 3;
+      background: #fff;
+      padding: 6px 4px;
+    }
+    .calendar-legend {
+      max-width: 1200px;
+      margin: 0 auto 10px auto;
+      display: flex;
+      justify-content: center;
+      flex-wrap: wrap;
+      gap: 10px;
+      font-size: 13px;
+      color: #374151;
+    }
+    .legend-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: #fff;
+      border: 1px solid #e5e7eb;
+      border-radius: 999px;
+      padding: 6px 10px;
+    }
+    .legend-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      border: 1px solid #888;
+      display: inline-block;
+      flex-shrink: 0;
+    }
   </style>
 {% endblock %}
 {% block content %}
@@ -170,33 +306,37 @@
       <!-- Use the initially selected surgeon -->
       <input type="hidden" name="surgeon_id" value="{{ selected_surgeon_id }}">
       <p>Applying as: {{ surgeon_name }}</p>
-      <label for="request_type">Request Type:</label>
-      <select name="request_type" id="request_type" required>
-          <option value="unavailable">Unavailable</option>
-          <option value="no_call">No Call Request</option>
-          <option value="study_leave">Study Leave</option>
-      </select>
-      <br><br>
-      <!-- The calendar for day selection -->
-      <div class="calendar-container">
-        <div id="calendar"></div>
+      <div class="request-type-buttons" id="requestTypeButtons">
+        <button type="button" class="request-type-btn active" data-request-type="unavailable">Unavailable</button>
+        <button type="button" class="request-type-btn" data-request-type="no_call">No Call Request</button>
+        <button type="button" class="request-type-btn" data-request-type="study_leave">Study Leave</button>
+      </div>
+      <div class="action-buttons">
+        <button type="submit" class="action-btn submit-btn">Submit Request</button>
+        <button type="button" id="deleteButton" class="action-btn delete-btn">Delete Selected Requests</button>
+      </div>
+      <div class="interval-buttons" id="intervalButtons">
+        <button type="button" class="interval-btn active" data-half="h1">Jan - Jun</button>
+        <button type="button" class="interval-btn" data-half="h2">Jul - Dec</button>
+      </div>
+      <input type="hidden" name="request_type" id="request_type_input" value="unavailable">
+      <p style="margin: 6px 0 2px 0; color: #4b5563; font-size: 13px;">
+        Select dates to submit a new request. Click existing request blocks to select them for deletion.
+      </p>
+      <div class="calendar-legend">
+        <span class="legend-chip"><span class="legend-dot" style="background:#ffcccc;"></span>Unavailable request</span>
+        <span class="legend-chip"><span class="legend-dot" style="background:#cce5ff;"></span>No Call request</span>
+        <span class="legend-chip"><span class="legend-dot" style="background:#d5f5e3;"></span>Study Leave request</span>
+        <span class="legend-chip"><span class="legend-dot" style="background:#396344;"></span>New selection to submit</span>
+        <span class="legend-chip"><span class="legend-dot" style="background:#ffffff; border:2px solid red;"></span>Marked for deletion</span>
+      </div>
+      <div class="calendar-shell">
+        <div class="sticky-month-indicator" id="stickyMonthIndicator">Viewing month:</div>
+        <div id="availability-calendar"></div>
       </div>
       <!-- Hidden field to capture selected dates (as a JSON array) -->
       <input type="hidden" id="start_date" name="selected_dates">
-      <br>
-      <button type="submit">Submit Request</button>
     </form>
-    
-    <!-- Existing Requests: Full month calendar view -->
-    <h2 style="text-align: center;">Existing Requests for {{ surgeon_name }}</h2>
-    <div class="calendar-container">
-      <div id="existing-calendar"></div>
-    </div>
-    
-    <!-- Delete Selected Requests Section -->
-    <div style="text-align: center; margin-top: 20px;">
-      <button id="deleteButton">Delete Selected Requests</button>
-    </div>
     
     <!-- Hidden form to submit deletion requests -->
     <form id="deleteForm" method="post" action="{{ url_for('delete_availability') }}" style="display:none;">
@@ -211,54 +351,35 @@
   
   <script>
     document.addEventListener('DOMContentLoaded', function() {
-      // Calendar for new request selection
-      var calendarEl = document.getElementById('calendar');
-      var selectedDates = [];
-      if (calendarEl) {
-        var calendar = new FullCalendar.Calendar(calendarEl, {
-          initialView: 'dayGridMonth',
-          // Display next month by default:
-          initialDate: moment().add(1, 'month').format('YYYY-MM-DD'),
-          headerToolbar: {
-            left: 'prev',
-            center: 'title',
-            right: 'next'
-          },
-          height: 'auto',
-          contentHeight: 'auto',
-          expandRows: true,
-          dateClick: function(info) {
-            var clickedDate = info.dateStr;
-            var index = selectedDates.indexOf(clickedDate);
-            if(index === -1){
-              // Add the clicked date and mark it as selected.
-              selectedDates.push(clickedDate);
-              calendar.addEvent({
-                id: clickedDate,
-                start: clickedDate,
-                allDay: true,
-                display: 'background',
-                backgroundColor: '#396344'
-              });
-            } else {
-              // Remove the clicked date and its highlight.
-              selectedDates.splice(index, 1);
-              var event = calendar.getEventById(clickedDate);
-              if(event){
-                event.remove();
-              }
-            }
-            // Update the hidden field with the JSON array of selected dates.
-            var selectedField = document.getElementById('start_date');
-            if (selectedField) {
-              selectedField.value = JSON.stringify(selectedDates);
-            }
-          }
-        });
-        calendar.render();
-      }
-      
       {% if selected_surgeon_id %}
+        var requestTypeButtons = document.getElementById('requestTypeButtons');
+        var requestTypeInput = document.getElementById('request_type_input');
+        if (requestTypeButtons && requestTypeInput) {
+          requestTypeButtons.addEventListener('click', function(evt) {
+            var btn = evt.target.closest('.request-type-btn');
+            if (!btn) {
+              return;
+            }
+            document.querySelectorAll('.request-type-btn').forEach(function(item) {
+              item.classList.toggle('active', item === btn);
+            });
+            requestTypeInput.value = btn.getAttribute('data-request-type') || '';
+          });
+        }
+
+        function updateSelectedDatesField(selectedDates) {
+          var selectedField = document.getElementById('start_date');
+          if (selectedField) {
+            selectedField.value = JSON.stringify(selectedDates);
+          }
+        }
+
+        var typeStyles = {
+          unavailable: { title: 'Unavailable', color: '#ffcccc' },
+          no_call: { title: 'No Call', color: '#cce5ff' },
+          study_leave: { title: 'Study Leave', color: '#d5f5e3' }
+        };
+
         // Build an array of events from your "events" structure.
         var existingEvents = [
           {% if events %}
@@ -270,7 +391,8 @@
                   start: "{{ range.start }}",
                   // FullCalendar expects an exclusive end date so we add one day.
                   end: moment("{{ range.end }}", "YYYY-MM-DD").add(1, 'days').format("YYYY-MM-DD"),
-                  reqType: "{{ req_type }}"
+                  reqType: "{{ req_type }}",
+                  isExistingRequest: true
                 },
               {% endfor %}
             {% endfor %}
@@ -279,41 +401,170 @@
         
         // Assign colors and readable titles based on request type.
         existingEvents = existingEvents.map(function(evt) {
-          if(evt.reqType === "unavailable") {
-            evt.backgroundColor = "#ffcccc"; // pastel red
-            evt.borderColor = "#ffcccc";
-            evt.textColor = "#000";
-            evt.title = "Unavailable";
-          } else if(evt.reqType === "no_call") {
-            evt.backgroundColor = "#cce5ff"; // pastel blue
-            evt.borderColor = "#cce5ff";
-            evt.textColor = "#000";
-            evt.title = "No Call";
-          } else if(evt.reqType === "study_leave") {
-            evt.backgroundColor = "#d5f5e3"; // pastel green
-            evt.borderColor = "#d5f5e3";
-            evt.textColor = "#000";
-            evt.title = "Study Leave";
-          }
+          var style = typeStyles[evt.reqType] || { title: evt.reqType, color: '#e5e7eb' };
+          evt.backgroundColor = style.color;
+          evt.borderColor = style.color;
+          evt.textColor = "#000";
+          evt.title = style.title;
           return evt;
         });
         
+        var selectedDates = [];
         var selectedForDeletion = [];
-        
-        var existingCalendarEl = document.getElementById('existing-calendar');
-        var existingCalendar = new FullCalendar.Calendar(existingCalendarEl, {
-          initialView: 'dayGridMonth',
+        var upcomingMonthStart = moment().add(1, 'month').startOf('month').format('YYYY-MM-DD');
+        var upcomingMoment = moment(upcomingMonthStart);
+        var initialHalf = upcomingMoment.month() < 6 ? 'h1' : 'h2';
+        var initialHalfStart = initialHalf === 'h1'
+          ? upcomingMoment.clone().startOf('year')
+          : upcomingMoment.clone().startOf('year').add(6, 'months');
+        var stickyMonthIndicator = document.getElementById('stickyMonthIndicator');
+        var intervalButtonsEl = document.getElementById('intervalButtons');
+        var calendarShellEl = document.querySelector('.calendar-shell');
+
+        function toggleNewDateSelection(calendar, clickedDate) {
+          var selectionEventId = "selected-" + clickedDate;
+          var index = selectedDates.indexOf(clickedDate);
+          if(index === -1){
+            selectedDates.push(clickedDate);
+            calendar.addEvent({
+              id: selectionEventId,
+              start: clickedDate,
+              allDay: true,
+              display: 'background',
+              backgroundColor: '#396344',
+              overlap: true,
+              selectionKind: 'new_request'
+            });
+          } else {
+            selectedDates.splice(index, 1);
+            var selectionEvent = calendar.getEventById(selectionEventId);
+            if(selectionEvent){
+              selectionEvent.remove();
+            }
+          }
+          updateSelectedDatesField(selectedDates);
+        }
+
+        function setDeleteEventStyle(event, selected) {
+          var reqType = event.extendedProps.reqType;
+          var baseColor = (typeStyles[reqType] || { color: '#e5e7eb' }).color;
+          event.setProp('backgroundColor', baseColor);
+          if (selected) {
+            event.setProp('borderColor', 'red');
+            event.setProp('textColor', 'red');
+          } else {
+            event.setProp('borderColor', baseColor);
+            event.setProp('textColor', '#000');
+          }
+        }
+
+        function scrollCalendarToUpcomingMonth() {
+          if (!calendarShellEl) {
+            return;
+          }
+          var monthPrefix = moment(upcomingMonthStart).format('YYYY-MM') + '-';
+          var targetDay = availabilityCalendarEl.querySelector('.fc-daygrid-day[data-date^="' + monthPrefix + '"]');
+          if (targetDay) {
+            targetDay.scrollIntoView({ block: 'start', behavior: 'auto' });
+          }
+        }
+
+        function setActiveInterval(half) {
+          if (!intervalButtonsEl) {
+            return;
+          }
+          intervalButtonsEl.querySelectorAll('.interval-btn').forEach(function(btn) {
+            btn.classList.toggle('active', btn.getAttribute('data-half') === half);
+          });
+        }
+
+        function setRangeToHalf(half) {
+          var baseYear = availabilityCalendar.getDate().getFullYear();
+          var rangeStart = half === 'h1'
+            ? moment({ year: baseYear, month: 0, date: 1 })
+            : moment({ year: baseYear, month: 6, date: 1 });
+          availabilityCalendar.changeView('multiMonthSix', rangeStart.format('YYYY-MM-DD'));
+          window.requestAnimationFrame(function() {
+            scrollCalendarToMonth(rangeStart.format('YYYY-MM-DD'));
+          });
+        }
+
+        function scrollCalendarToMonth(monthStartIso) {
+          var monthPrefix = moment(monthStartIso).format('YYYY-MM') + '-';
+          var targetDay = availabilityCalendarEl.querySelector('.fc-daygrid-day[data-date^="' + monthPrefix + '"]');
+          if (targetDay) {
+            targetDay.scrollIntoView({ block: 'start', behavior: 'auto' });
+          }
+        }
+
+        function updateStickyMonthIndicator() {
+          if (!calendarShellEl || !stickyMonthIndicator) {
+            return;
+          }
+          var shellTop = calendarShellEl.getBoundingClientRect().top + 42;
+          var monthBlocks = availabilityCalendarEl.querySelectorAll('.fc-multimonth-month');
+          var chosenMonth = null;
+
+          monthBlocks.forEach(function(block) {
+            var rect = block.getBoundingClientRect();
+            if (rect.top <= shellTop) {
+              chosenMonth = block;
+            }
+          });
+          if (!chosenMonth && monthBlocks.length) {
+            chosenMonth = monthBlocks[0];
+          }
+          if (!chosenMonth) {
+            stickyMonthIndicator.textContent = "Viewing month: " + moment(availabilityCalendar.getDate()).format('MMMM YYYY');
+            return;
+          }
+
+          var dayCell = chosenMonth.querySelector('.fc-daygrid-day[data-date]');
+          if (!dayCell) {
+            return;
+          }
+          var monthLabel = moment(dayCell.getAttribute('data-date')).format('MMMM YYYY');
+          stickyMonthIndicator.textContent = "Viewing month: " + monthLabel;
+        }
+
+        var availabilityCalendarEl = document.getElementById('availability-calendar');
+        var availabilityCalendar = new FullCalendar.Calendar(availabilityCalendarEl, {
+          initialView: 'multiMonthSix',
+          initialDate: initialHalfStart.format('YYYY-MM-DD'),
+          views: {
+            multiMonthSix: {
+              type: 'multiMonth',
+              duration: { months: 6 },
+              multiMonthMaxColumns: 3
+            }
+          },
+          buttonText: {
+            today: 'Today',
+            dayGridMonth: 'Month',
+            multiMonthSix: '6 Months'
+          },
           headerToolbar: {
-            left: 'prev',
+            left: 'prev,next today',
             center: 'title',
-            right: 'next'
+            right: 'multiMonthSix,dayGridMonth'
           },
           height: 'auto',
           contentHeight: 'auto',
           expandRows: true,
           events: existingEvents,
+          datesSet: function() {
+            window.requestAnimationFrame(function() {
+              updateStickyMonthIndicator();
+            });
+          },
+          dateClick: function(info) {
+            toggleNewDateSelection(availabilityCalendar, info.dateStr);
+          },
           eventClick: function(info) {
             var event = info.event;
+            if (!event.extendedProps.isExistingRequest) {
+              return;
+            }
             // Check if the event is already selected.
             var index = selectedForDeletion.findIndex(function(e) { return e.id === event.id; });
             if(index === -1) {
@@ -325,25 +576,52 @@
                 // Adjust end date on submission (subtract one day)
                 end: moment(event.end).subtract(1, 'days').format("YYYY-MM-DD")
               });
-              event.setProp('borderColor', 'red');
-              event.setProp('textColor', 'red');
+              setDeleteEventStyle(event, true);
             } else {
               // Deselect this event.
               selectedForDeletion.splice(index, 1);
-              if(event.extendedProps.reqType === "unavailable") {
-                event.setProp('borderColor', "#ffcccc");
-                event.setProp('textColor', "#000");
-              } else if(event.extendedProps.reqType === "no_call") {
-                event.setProp('borderColor', "#cce5ff");
-                event.setProp('textColor', "#000");
-              } else if(event.extendedProps.reqType === "study_leave") {
-                event.setProp('borderColor', "#d5f5e3");
-                event.setProp('textColor', "#000");
-              }
+              setDeleteEventStyle(event, false);
             }
           }
         });
-        existingCalendar.render();
+        availabilityCalendar.render();
+        setActiveInterval(initialHalf);
+        scrollCalendarToUpcomingMonth();
+        updateStickyMonthIndicator();
+        updateSelectedDatesField(selectedDates);
+
+        if (calendarShellEl) {
+          calendarShellEl.addEventListener('scroll', function() {
+            window.requestAnimationFrame(updateStickyMonthIndicator);
+          });
+        }
+
+        if (intervalButtonsEl) {
+          intervalButtonsEl.addEventListener('click', function(evt) {
+            var btn = evt.target.closest('.interval-btn');
+            if (!btn) {
+              return;
+            }
+            var nextHalf = btn.getAttribute('data-half');
+            setActiveInterval(nextHalf);
+            setRangeToHalf(nextHalf);
+          });
+        }
+
+        var availabilityForm = document.getElementById('availabilityForm');
+        if (availabilityForm) {
+          availabilityForm.addEventListener('submit', function(event) {
+            if (!requestTypeInput || !requestTypeInput.value) {
+              event.preventDefault();
+              alert('Please choose a request type button before submitting.');
+              return;
+            }
+            if (!selectedDates.length) {
+              event.preventDefault();
+              alert('Please select at least one date on the calendar.');
+            }
+          });
+        }
         
         // Handler for the Delete button click.
         document.getElementById('deleteButton').addEventListener('click', function() {

@@ -65,6 +65,13 @@
     .button-group button:hover {
       background-color: #286090;
     }
+    .schedule-cell-name {
+      cursor: pointer;
+    }
+    .schedule-cell-name.highlight-match {
+      background-color: #d9f7d9;
+      font-weight: 600;
+    }
   </style>
 {% endblock %}
 {% block content %}
@@ -110,7 +117,8 @@
         <tr class="{{ classes|join(' ') }}">
           <td>{{ day }}</td>
           {% for level in ['1A','1B','2A','2B','3','4'] %}
-            <td>{{ assignments[level] if assignments[level] else '' }}</td>
+            {% set surgeon_name = assignments[level] if assignments[level] else '' %}
+            <td class="schedule-cell-name" data-surgeon-name="{{ surgeon_name|trim }}">{{ surgeon_name }}</td>
           {% endfor %}
         </tr>
         {% endfor %}
@@ -119,4 +127,34 @@
     
     
   </div>
+  <script>
+    (function () {
+      var table = document.querySelector('.schedule-table');
+      if (!table) return;
+
+      var activeName = '';
+      var nameCells = Array.prototype.slice.call(
+        table.querySelectorAll('tbody td.schedule-cell-name')
+      );
+
+      function applyHighlight(name) {
+        nameCells.forEach(function (cell) {
+          var cellName = (cell.getAttribute('data-surgeon-name') || '').trim();
+          var shouldHighlight = !!name && !!cellName && cellName === name;
+          cell.classList.toggle('highlight-match', shouldHighlight);
+        });
+      }
+
+      table.addEventListener('click', function (event) {
+        var targetCell = event.target.closest('td.schedule-cell-name');
+        if (!targetCell || !table.contains(targetCell)) return;
+
+        var clickedName = (targetCell.getAttribute('data-surgeon-name') || '').trim();
+        if (!clickedName) return;
+
+        activeName = activeName === clickedName ? '' : clickedName;
+        applyHighlight(activeName);
+      });
+    })();
+  </script>
 {% endblock %}
