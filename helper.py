@@ -3,7 +3,7 @@ import datetime
 import json
 import flask
 from dateutil.parser import parse
-from flask import g, request
+from flask import g, request, has_app_context
 import os
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Connection
@@ -304,6 +304,9 @@ def init_db():
             "gamma_consec_weekend":  "20",
             "gamma_team_pref":       "10",
             "enable_two_pass_fairness_priority": "1",
+            "enable_l2g1_primary_calls": "0",
+            "enable_l2g1_primary_2a_same_day_penalty": "1",
+            "gamma_l2g1_primary_2a_same_day": "30",
         }
         
         insert_gc = text("""
@@ -315,7 +318,7 @@ def init_db():
             db.execute(insert_gc, {"key": key, "value": val})
 
         # ── 3) Seed max_calls_config defaults ──
-        max_defaults = {"1": 10, "2": 10, "3": 10, "4": 10}
+        max_defaults = {"1": 10, "2": 10, "3": 10, "4": 10, "l2g1_1ab": 4}
         insert_mc = text("""
             INSERT INTO max_calls_config (level_group, max_calls)
             VALUES (:group, :max_calls)
@@ -662,6 +665,15 @@ def get_g1_g4_cohorts(surgeons: list | None = None):
         [s for s in surgeons if has_level(s, "1A") or has_level(s, "1B")],
         key=lambda s: (s.get("name", "") or "").lower(),
     )
+    if has_app_context() and str(get_global_config().get("enable_l2g1_primary_calls", "0")) == "1":
+        seen_g1 = {s.get("id") for s in group1_members}
+        for s in surgeons:
+            if s.get("id") is None or s.get("id") in seen_g1:
+                continue
+            if get_level2_group(s) == 1:
+                group1_members.append(s)
+                seen_g1.add(s.get("id"))
+        group1_members.sort(key=lambda x: (x.get("name", "") or "").lower())
     group2_members = sorted(
         [s for s in surgeons if get_level2_group(s) in (1, 2, 3)],
         key=lambda s: (s.get("name", "") or "").lower(),
@@ -998,6 +1010,15 @@ def build_half_year_cohort_summary(year: int, month: int, surgeons: list | None 
         return level in parse_call_levels(surgeon_obj.get("call_levels", ""))
 
     group1_members = sorted([s for s in surgeons if has_level(s, "1A") or has_level(s, "1B")], key=lambda s: s.get("name", ""))
+    if has_app_context() and str(get_global_config().get("enable_l2g1_primary_calls", "0")) == "1":
+        seen_g1 = {s.get("id") for s in group1_members}
+        for s in surgeons:
+            if s.get("id") is None or s.get("id") in seen_g1:
+                continue
+            if get_level2_group(s) == 1:
+                group1_members.append(s)
+                seen_g1.add(s.get("id"))
+        group1_members.sort(key=lambda x: (x.get("name", "") or ""))
     group2_members = sorted([s for s in surgeons if get_level2_group(s) in (1, 2, 3)], key=lambda s: s.get("name", ""))
     group4_l2_ids = {int(s["id"]) for s in surgeons if s.get("id") is not None and get_level2_group(s) == 4}
     group3_members = sorted(

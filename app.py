@@ -473,12 +473,14 @@ def create_app():
                 "1": int(request.form.get("group_1", 10)),
                 "2": int(request.form.get("group_2", 10)),
                 "3": int(request.form.get("group_3", 10)),
-                "4": int(request.form.get("group_4", 10))
+                "4": int(request.form.get("group_4", 10)),
+                "l2g1_1ab": int(request.form.get("group_l2g1_1ab", 4)),
             }
             update_max_calls_config(new_config)
             flash("Maximum calls configuration updated successfully!")
             return redirect(url_for('config_max_calls'))
         config = get_max_calls_config()
+        config.setdefault("l2g1_1ab", 4)
         return render_template('config_max_calls.html', config=config)
 
     #############################################
@@ -556,7 +558,10 @@ def create_app():
                 "enable_two_pass_fairness_priority": cb("enable_two_pass_fairness_priority", "1"),
                 "solver_debug": cb("solver_debug", "0"),
                 "enable_unavail_deadline": cb("enable_unavail_deadline", "0"),
+                "enable_l2g1_primary_calls": cb("enable_l2g1_primary_calls", "0"),
+                "enable_l2g1_primary_2a_same_day_penalty": cb("enable_l2g1_primary_2a_same_day_penalty", "1"),
             }
+            gamma_l2g1_primary_2a_same_day = request.form.get("gamma_l2g1_primary_2a_same_day", "30")
             update_global_config({
                 "no_call_hard": no_call_hard_val,
                 "pre_unavail_mode": pre_unavail_mode,
@@ -580,6 +585,7 @@ def create_app():
                 "fairness_fallback_policy": fairness_fallback_policy,
                 "unavail_deadline_day": unavail_deadline_day,
                 "unavail_deadline_time": unavail_deadline_time,
+                "gamma_l2g1_primary_2a_same_day": gamma_l2g1_primary_2a_same_day,
                 **flags
             })
             flash("Global configuration saved.", "success")
@@ -776,8 +782,19 @@ def create_app():
 
         # Build candidates per level for UI selects
         surgeons = get_all_surgeons()
+        _gc_ns = get_global_config()
+        _l2g1_primary = str(_gc_ns.get("enable_l2g1_primary_calls", "0")) == "1"
+
         def candidates_for(level: str):
-            return [s for s in surgeons if level in parse_call_levels(s.get("call_levels", ""))]
+            base = [s for s in surgeons if level in parse_call_levels(s.get("call_levels", ""))]
+            if _l2g1_primary and level in ("1A", "1B"):
+                in_base = {s.get("id") for s in base}
+                for s in surgeons:
+                    if get_level2_group(s) == 1 and s.get("id") is not None and s["id"] not in in_base:
+                        base.append(s)
+                        in_base.add(s["id"])
+            return base
+
         candidates = {lvl: sorted(candidates_for(lvl), key=lambda s: s["name"]) for lvl in ["1A","1B","2A","2B","3","4"]}
         cohort_summary = build_half_year_cohort_summary(year_sel, month_sel, surgeons=surgeons)
         solver_mode_used = None
@@ -1301,6 +1318,10 @@ def create_app():
             return redirect(url_for('saved_schedule', year=year_sel, month=month_sel))
         else:
             return redirect(url_for('saved_schedule', year=year_sel, month=month_sel))
+
+    @app.route('/help', methods=['GET'])
+    def user_help():
+        return render_template('user_help.html')
 
     @app.route('/cohort_availability', methods=['GET'])
     def cohort_availability():
@@ -2596,9 +2617,17 @@ def create_app():
             ]
             # Build candidate lists for each level similar to scheduler.py logic
             surgeons = get_all_surgeons()
+            _gc_pre = get_global_config()
+            _l2g1_pre = str(_gc_pre.get("enable_l2g1_primary_calls", "0")) == "1"
             candidates = {}
             for level in ["1A", "1B", "2A", "2B", "3", "4"]:
                 candidate_options = [s for s in surgeons if level in parse_call_levels(s.get("call_levels", ""))]
+                if _l2g1_pre and level in ("1A", "1B"):
+                    have = {s.get("id") for s in candidate_options}
+                    for s in surgeons:
+                        if get_level2_group(s) == 1 and s.get("id") is not None and s["id"] not in have:
+                            candidate_options.append(s)
+                            have.add(s["id"])
                 candidate_options.sort(key=lambda s: s["name"])
                 candidates[level] = candidate_options
             # Load any existing preassignments from the database

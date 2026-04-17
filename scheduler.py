@@ -192,8 +192,14 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
     enable_fairness_diff_all         = is_enabled("enable_fairness_diff_all")
     enable_deviation_sum             = is_enabled("enable_deviation_sum")
     enable_unavail_credit            = is_enabled("enable_unavail_credit")
+    enable_l2g1_primary_calls        = is_enabled("enable_l2g1_primary_calls", "0")
+    enable_l2g1_primary_2a_same_day_penalty = is_enabled("enable_l2g1_primary_2a_same_day_penalty", "1")
+    try:
+        gamma_l2g1_primary_2a_same_day = int(global_config.get("gamma_l2g1_primary_2a_same_day", "30"))
+    except Exception:
+        gamma_l2g1_primary_2a_same_day = 30
 
-    max_config = get_max_calls_config()  # e.g., {"1":10, "2":10, "3":10, "4":10}
+    max_config = get_max_calls_config()  # e.g., {"1":10, "2":10, "3":10, "4":10, "l2g1_1ab":4}
     
     # Use actual surgeon IDs from the database.
     id_to_surgeon = {s["id"]: s for s in surgeons}
@@ -226,6 +232,17 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
     group2_ids = [s["id"] for s in surgeons if get_level2_group(s)==2]  # no supervision needed
     group3_ids = [s["id"] for s in surgeons if get_level2_group(s)==3]  # supervisors only
     group4_ids = [s["id"] for s in surgeons if get_level2_group(s)==4]  # supervisors who are also 3rd call
+
+    if enable_l2g1_primary_calls and group1_ids:
+        raw_1a = [x for x in domain_1A if x != -1]
+        raw_1b = [x for x in domain_1B if x != -1]
+        for sid in group1_ids:
+            if sid not in raw_1a:
+                raw_1a.append(sid)
+            if sid not in raw_1b:
+                raw_1b.append(sid)
+        domain_1A = raw_1a if raw_1a else [-1]
+        domain_1B = raw_1b if raw_1b else [-1]
 
     base_domains = {
         "1A": domain_1A,     
@@ -707,6 +724,26 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
             add_named_constraint(f"Max 1A+1B calls for surgeon {s_id}",
                 model.Add, c1 <= max_calls_level1)
 
+    if enable_l2g1_primary_calls and group1_ids:
+        try:
+            max_l2g1_1ab = int(max_config.get("l2g1_1ab", 4))
+        except Exception:
+            max_l2g1_1ab = 4
+        if max_l2g1_1ab < 0:
+            max_l2g1_1ab = 0
+        for s_id in group1_ids:
+            c_l2g1 = model.NewIntVar(0, num_days * 2, f"count_l2g1_1ab_{s_id}")
+            add_named_constraint(
+                f"L2G1 1A+1B count for surgeon {s_id}",
+                model.Add,
+                c_l2g1 == sum(indicators[(d, "1A", s_id)] + indicators[(d, "1B", s_id)] for d in range(num_days)),
+            )
+            add_named_constraint(
+                f"Max L2G1 1A+1B calls for surgeon {s_id}",
+                model.Add,
+                c_l2g1 <= max_l2g1_1ab,
+            )
+
     # --- Hard minimum total calls for NLTH surgeons ---
     if min_calls_nlth_cfg > 0 and nlth_ids:
         for s in nlth_ids:
@@ -725,8 +762,10 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
     # --- Per-group fairness terms (replace overall fairness) ---
     group_fairness_diffs = []
 
-    # Group 1: (1A + 1B)
+    # Group 1: (1A + 1B); optionally merge Level-2 Group 1 (supervised 2A-only) for fairness when enabled
     group_level1_ids = [s["id"] for s in surgeons if set(parse_call_levels(s.get("call_levels",""))).intersection({"1A","1B"}) and s["id"] not in nlth_ids]
+    if enable_l2g1_primary_calls and group1_ids:
+        group_level1_ids = sorted(set(group_level1_ids) | {sid for sid in group1_ids if sid not in nlth_ids})
     if len(group_level1_ids) > 1:
         lvl1_counts = {s: model.NewIntVar(0, num_days * 2, f"lvl1_count_{s}") for s in group_level1_ids}
         for s in group_level1_ids:
@@ -962,9 +1001,13 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
         consec_penalty = model.NewIntVar(0, 0, "penalty_consec_weekend")
         add_named_constraint("Consecutive weekend penalty zero", model.Add, consec_penalty == 0)
     
+    weekend_grp1_ids = [s["id"] for s in surgeons if set(parse_call_levels(s.get("call_levels",""))).intersection({"1A", "1B"})]
+    if enable_l2g1_primary_calls and group1_ids:
+        weekend_grp1_ids = sorted(set(weekend_grp1_ids) | set(group1_ids))
+
     weekend_diff_terms = []
     for i, (_, grp) in enumerate([
-        ("grp1", [s["id"] for s in surgeons if set(parse_call_levels(s.get("call_levels",""))).intersection({"1A","1B"})]),
+        ("grp1", weekend_grp1_ids),
         ("grp2", [s["id"] for s in surgeons if ( "2A" in parse_call_levels(s.get("call_levels","")) or "2B" in parse_call_levels(s.get("call_levels",""))) and "3" not in parse_call_levels(s.get("call_levels",""))]),
         ("grp3", [s["id"] for s in surgeons if "3" in parse_call_levels(s.get("call_levels",""))]),
         ("grp4", [s["id"] for s in surgeons if "4" in parse_call_levels(s.get("call_levels",""))])
@@ -1205,7 +1248,37 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                     model.Add, X[(d, lvl)] != -1
                 ).OnlyEnforceIf(b.Not())
                 empty_indicators.append(b)
-    
+
+    l2g1_same_day_overlap_flags = []
+    if (
+        enable_l2g1_primary_calls
+        and enable_l2g1_primary_2a_same_day_penalty
+        and gamma_l2g1_primary_2a_same_day > 0
+        and group1_ids
+    ):
+        for d in range(num_days):
+            ors_1ab = []
+            for sid in group1_ids:
+                ors_1ab.append(indicators[(d, "1A", sid)])
+                ors_1ab.append(indicators[(d, "1B", sid)])
+            ors_2a = [indicators[(d, "2A", sid)] for sid in group1_ids]
+            any_1ab = model.NewBoolVar(f"l2g1_any_1ab_d{d}")
+            any_2a = model.NewBoolVar(f"l2g1_any_2a_d{d}")
+            overlap_d = model.NewBoolVar(f"l2g1_grp_overlap_d{d}")
+            add_named_constraint(f"L2G1 any 1A/1B on {days[d]}", model.AddMaxEquality, any_1ab, ors_1ab)
+            add_named_constraint(f"L2G1 any 2A on {days[d]}", model.AddMaxEquality, any_2a, ors_2a)
+            add_named_constraint(
+                f"L2G1 group overlap on {days[d]}",
+                model.AddBoolAnd,
+                [any_1ab, any_2a],
+            ).OnlyEnforceIf(overlap_d)
+            add_named_constraint(
+                f"L2G1 group overlap off {days[d]}",
+                model.AddBoolOr,
+                [any_1ab.Not(), any_2a.Not()],
+            ).OnlyEnforceIf(overlap_d.Not())
+            l2g1_same_day_overlap_flags.append(overlap_d)
+
     objective_terms = []
     # Remove overall fairness term; use per-group fairness instead
     if enable_nocall_penalty:
@@ -1224,6 +1297,8 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
     if enable_weekend_team_diversity and unique_presence_vars:
         # maximize unique teams per weekend day by minimizing negative sum
         objective_terms.append(- gamma_weekend_team_diversity * sum(unique_presence_vars))
+    if l2g1_same_day_overlap_flags:
+        objective_terms.append(gamma_l2g1_primary_2a_same_day * sum(l2g1_same_day_overlap_flags))
     # team day preferences
     if enable_team_day_prefs and td_terms:
         objective_terms += [- coef * b for coef, b in td_terms]
@@ -1569,8 +1644,10 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                             parts.append(f"{id_to_name.get(sid, f'ID {sid}')}={cnts[sid]}")
                         return ", ".join(parts)
 
-                    # Group 1 (1A+1B)
+                    # Group 1 (1A+1B); include L2G1 when primary-call feature is enabled (matches solver fairness cohort)
                     group_level1_ids = [s["id"] for s in surgeons if set(parse_call_levels(s.get("call_levels",""))).intersection({"1A","1B"}) and s["id"] not in nlth_ids]
+                    if enable_l2g1_primary_calls and group1_ids:
+                        group_level1_ids = sorted(set(group_level1_ids) | {sid for sid in group1_ids if sid not in nlth_ids})
                     g1_raw = {sid: 0 for sid in group_level1_ids}
                     for assigns in diag_sched.values():
                         for lvl in ["1A","1B"]:

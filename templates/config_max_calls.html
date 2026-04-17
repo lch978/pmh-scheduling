@@ -24,6 +24,12 @@
       <input type="number" name="group_4" id="group_4" value="{{ config['4'] }}" required>
     </div>
     <br>
+    <div>
+      <label for="group_l2g1_1ab">Level 2 Group 1 — max combined 1A+1B assignments per surgeon per month:</label>
+      <input type="number" name="group_l2g1_1ab" id="group_l2g1_1ab" value="{{ config.get('l2g1_1ab', 4) }}" min="0" required>
+    </div>
+    <p style="max-width:520px;margin:12px auto 0;font-size:13px;color:#444;text-align:left;">Only applies when &quot;Allow Level-2 Group 1 on 1A / 1B&quot; is enabled in Global Configuration.</p>
+    <br>
     <button type="submit">Save Configuration</button>
   </form>
 {% endblock %}

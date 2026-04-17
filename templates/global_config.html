@@ -69,6 +69,13 @@
       <hr class="gc-divider">
       <label class="gc-check"><input type="checkbox" name="enable_force_1B_weekend" value="1" {% if config.get('enable_force_1B_weekend','1') != '0' %}checked{% endif %}> Force 1B on weekends/holidays</label>
       <label class="gc-check"><input type="checkbox" name="enable_level2_supervision" value="1" {% if config.get('enable_level2_supervision','1') != '0' %}checked{% endif %}> Level-2 supervision rules</label>
+      <label class="gc-check"><input type="checkbox" name="enable_l2g1_primary_calls" value="1" {% if config.get('enable_l2g1_primary_calls','0') != '0' %}checked{% endif %}> Allow Level-2 Group 1 (supervised 2A-only) on 1A / 1B</label>
+      <div class="gc-desc" style="margin-left:22px;">When on, these surgeons appear in 1A/1B domains, share G1 (1A+1B) fairness, and are capped by Configure Maximum Calls (L2G1 1A+1B per month).</div>
+      <label class="gc-check" style="margin-left:22px;"><input type="checkbox" name="enable_l2g1_primary_2a_same_day_penalty" value="1" {% if config.get('enable_l2g1_primary_2a_same_day_penalty','1') != '0' %}checked{% endif %}> Penalize same-day overlap: any L2G1 on 1A/1B while any L2G1 on 2A</label>
+      <div class="gc-inline" style="margin-left:22px;">
+        <label for="gamma_l2g1_primary_2a_same_day">Weight (gamma):</label>
+        <input type="number" min="0" id="gamma_l2g1_primary_2a_same_day" name="gamma_l2g1_primary_2a_same_day" class="gc-number" value="{{ config.get('gamma_l2g1_primary_2a_same_day','30') }}">
+      </div>
       <label class="gc-check"><input type="checkbox" name="enable_group4_2B3_ban" value="1" {% if config.get('enable_group4_2B3_ban','1') != '0' %}checked{% endif %}> Ban Group-4 on both 2B and 3 same day</label>
       <label class="gc-check"><input type="checkbox" name="enable_max_2B_group4" value="1" {% if config.get('enable_max_2B_group4','1') != '0' %}checked{% endif %}> Limit Group-4 to at most one 2B</label>
       <label class="gc-check"><input type="checkbox" name="enable_max_calls_level1" value="1" {% if config.get('enable_max_calls_level1','1') != '0' %}checked{% endif %}> Limit 1A+1B per surgeon</label>

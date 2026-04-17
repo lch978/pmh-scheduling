@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Call List Scheduler{% endblock %}</title>
   <meta name="csrf-token" content="{{ csrf_token() }}">
   <style>
@@ -136,9 +137,10 @@
         <select id="mobileNav" class="nav-select">
           {% if admin_logged_in %}
             <option value="{{ url_for('index') }}" {% if request.endpoint == 'index' %}selected{% endif %}>Home</option>
-            <option value="{{ url_for('saved_schedule') }}" {% if request.endpoint == 'saved_schedule' %}selected{% endif %}>Saved Schedule (Public)</option>
-            <option value="{{ url_for('availability') }}" {% if request.endpoint == 'availability' %}selected{% endif %}>Availability (Public)</option>
-            <option value="{{ url_for('cohort_availability') }}" {% if request.endpoint == 'cohort_availability' %}selected{% endif %}>Cohort Availability (Public)</option>
+            <option value="{{ url_for('saved_schedule') }}" {% if request.endpoint == 'saved_schedule' %}selected{% endif %}>Call List (Public)</option>
+            <option value="{{ url_for('availability') }}" {% if request.endpoint == 'availability' %}selected{% endif %}>Requests (Public)</option>
+            <option value="{{ url_for('cohort_availability') }}" {% if request.endpoint == 'cohort_availability' %}selected{% endif %}>Availability Calendar (Public)</option>
+            <option value="{{ url_for('user_help') }}" {% if request.endpoint == 'user_help' %}selected{% endif %}>Help</option>
             <option value="{{ url_for('new_schedule') }}" {% if request.endpoint == 'new_schedule' %}selected{% endif %}>New Schedule</option>
             <option value="{{ url_for('edit_publish') }}" {% if request.endpoint == 'edit_publish' %}selected{% endif %}>Edit and Publish</option>
             <option value="{{ url_for('list_surgeons') }}" {% if request.endpoint == 'list_surgeons' %}selected{% endif %}>Surgeon Management</option>
@@ -149,9 +151,10 @@
             <option value="__admin_logout__">Admin Logout</option>
           {% else %}
             <option value="{{ url_for('index') }}" {% if request.endpoint == 'index' %}selected{% endif %}>Home</option>
-            <option value="{{ url_for('saved_schedule') }}" {% if request.endpoint == 'saved_schedule' %}selected{% endif %}>Saved Schedule (Public)</option>
-            <option value="{{ url_for('availability') }}" {% if request.endpoint == 'availability' %}selected{% endif %}>Availability (Public)</option>
-            <option value="{{ url_for('cohort_availability') }}" {% if request.endpoint == 'cohort_availability' %}selected{% endif %}>Cohort Availability (Public)</option>
+            <option value="{{ url_for('saved_schedule') }}" {% if request.endpoint == 'saved_schedule' %}selected{% endif %}>Call List (Public)</option>
+            <option value="{{ url_for('availability') }}" {% if request.endpoint == 'availability' %}selected{% endif %}>Requests (Public)</option>
+            <option value="{{ url_for('cohort_availability') }}" {% if request.endpoint == 'cohort_availability' %}selected{% endif %}>Availability Calendar (Public)</option>
+            <option value="{{ url_for('user_help') }}" {% if request.endpoint == 'user_help' %}selected{% endif %}>Help</option>
             <option value="{{ url_for('admin_login', next=request.full_path if request.query_string else request.path) }}" {% if request.endpoint == 'admin_login' %}selected{% endif %}>Admin Login</option>
           {% endif %}
         </select>
@@ -167,9 +170,10 @@
     />
     {% if admin_logged_in %}
       <a href="{{ url_for('index') }}" class="{% if request.endpoint == 'index' %}active{% endif %}">Home</a>
-      <a href="{{ url_for('saved_schedule') }}" class="public {% if request.endpoint == 'saved_schedule' %}active{% endif %}">Saved Schedule</a>
-      <a href="{{ url_for('availability') }}" class="public {% if request.endpoint == 'availability' %}active{% endif %}">Availability</a>
-      <a href="{{ url_for('cohort_availability') }}" class="public {% if request.endpoint == 'cohort_availability' %}active{% endif %}">Cohort Availability</a>
+      <a href="{{ url_for('saved_schedule') }}" class="public {% if request.endpoint == 'saved_schedule' %}active{% endif %}">Call List</a>
+      <a href="{{ url_for('availability') }}" class="public {% if request.endpoint == 'availability' %}active{% endif %}">Requests</a>
+      <a href="{{ url_for('cohort_availability') }}" class="public {% if request.endpoint == 'cohort_availability' %}active{% endif %}">Availability Calendar</a>
+      <a href="{{ url_for('user_help') }}" class="public {% if request.endpoint == 'user_help' %}active{% endif %}">Help</a>
       <a href="{{ url_for('new_schedule') }}" class="{% if request.endpoint == 'new_schedule' %}active{% endif %}">New Schedule</a>
       <a href="{{ url_for('edit_publish') }}" class="{% if request.endpoint == 'edit_publish' %}active{% endif %}">Edit and Publish</a>
       <a href="{{ url_for('list_surgeons') }}" class="{% if request.endpoint == 'list_surgeons' %}active{% endif %}">Surgeon Management</a>
@@ -183,9 +187,10 @@
       </form>
     {% else %}
       <a href="{{ url_for('index') }}" class="{% if request.endpoint == 'index' %}active{% endif %}">Home</a>
-      <a href="{{ url_for('saved_schedule') }}" class="public {% if request.endpoint == 'saved_schedule' %}active{% endif %}">Saved Schedule</a>
-      <a href="{{ url_for('availability') }}" class="public {% if request.endpoint == 'availability' %}active{% endif %}">Availability</a>
-      <a href="{{ url_for('cohort_availability') }}" class="public {% if request.endpoint == 'cohort_availability' %}active{% endif %}">Cohort Availability</a>
+      <a href="{{ url_for('saved_schedule') }}" class="public {% if request.endpoint == 'saved_schedule' %}active{% endif %}">Call List</a>
+      <a href="{{ url_for('availability') }}" class="public {% if request.endpoint == 'availability' %}active{% endif %}">Requests</a>
+      <a href="{{ url_for('cohort_availability') }}" class="public {% if request.endpoint == 'cohort_availability' %}active{% endif %}">Availability Calendar</a>
+      <a href="{{ url_for('user_help') }}" class="public {% if request.endpoint == 'user_help' %}active{% endif %}">Help</a>
       <a href="{{ url_for('admin_login', next=request.full_path if request.query_string else request.path) }}" class="{% if request.endpoint == 'admin_login' %}active{% endif %}">Admin Login</a>
     {% endif %}
   </aside>
