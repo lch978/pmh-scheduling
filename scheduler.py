@@ -1322,22 +1322,8 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
             add_named_constraint(f"2B not used on day {days[d]}", model.Add, X[(d, "2B")] == -1).OnlyEnforceIf(b.Not())
             two_b_usage_terms.append(b)
         objective_terms.append(gamma_2b_usage * sum(two_b_usage_terms))
-    # Penalize empty slots heavily so they are used only if necessary
-    if allow_empty and empty_indicators:
-        empty_weight_candidates = [
-            fairness_weight,
-            gamma_no_call,
-            gamma_unavail_prev,
-            gamma_balance,
-            gamma_unavail_credit,
-            gamma_spacing,
-            gamma_weekend_balance,
-            gamma_consec_weekend,
-            gamma_weekend_team_diversity,
-        ]
-        empty_penalty_weight = max([w for w in empty_weight_candidates if isinstance(w, int)], default=1) * 10000
-        objective_terms.append(empty_penalty_weight * sum(empty_indicators))
     normal_objective_expr = sum(objective_terms) if objective_terms else 0
+    empty_count_expr = sum(empty_indicators) if empty_indicators else 0
 
     def _build_solver():
         _solver = cp_model.CpSolver()
@@ -1350,30 +1336,47 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
         return _solver
 
     # --- Solve the Model ---
-    # Fairness-first multi-pass solve:
-    # pass-1 minimize fairness across cohorts, pass-2 optimize remaining soft goals.
+    # In allow-empty mode, use lexicographic objective priority:
+    # 1) minimize count of empty non-2B slots, 2) optimize normal objective.
+    # Outside allow-empty, preserve existing fairness-first two-pass behavior.
     use_two_pass_fairness = enable_two_pass_fairness_priority and (fairness_total is not None)
-    if use_two_pass_fairness:
-        add_named_constraint("Objective pass1 fairness total", model.Minimize, fairness_total)
-        solver_pass1 = _build_solver()
-        status_pass1 = solver_pass1.Solve(model)
-        if status_pass1 in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-            best_fairness = int(solver_pass1.Value(fairness_total))
-            add_named_constraint("Lock pass1 fairness total", model.Add, fairness_total <= best_fairness)
-            add_named_constraint("Objective pass2 normal", model.Minimize, normal_objective_expr)
-            solver = _build_solver()
-            status = solver.Solve(model)
-            # If pass-2 cannot find a feasible solution in time, return the pass-1 feasible solution.
-            if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-                solver = solver_pass1
-                status = status_pass1
-        else:
-            solver = solver_pass1
-            status = status_pass1
-    else:
+
+    def _solve_secondary_objective():
+        if use_two_pass_fairness:
+            add_named_constraint("Objective pass1 fairness total", model.Minimize, fairness_total)
+            solver_pass1 = _build_solver()
+            status_pass1 = solver_pass1.Solve(model)
+            if status_pass1 in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+                best_fairness = int(solver_pass1.Value(fairness_total))
+                add_named_constraint("Lock pass1 fairness total", model.Add, fairness_total <= best_fairness)
+                add_named_constraint("Objective pass2 normal", model.Minimize, normal_objective_expr)
+                solver_pass2 = _build_solver()
+                status_pass2 = solver_pass2.Solve(model)
+                if status_pass2 in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+                    return solver_pass2, status_pass2
+            return solver_pass1, status_pass1
+
         add_named_constraint("Objective", model.Minimize, normal_objective_expr)
-        solver = _build_solver()
-        status = solver.Solve(model)
+        solver_single = _build_solver()
+        status_single = solver_single.Solve(model)
+        return solver_single, status_single
+
+    if allow_empty and empty_indicators:
+        add_named_constraint("Objective pass0 empty count", model.Minimize, empty_count_expr)
+        solver_empty = _build_solver()
+        status_empty = solver_empty.Solve(model)
+        if status_empty in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+            best_empty_count = int(solver_empty.Value(empty_count_expr))
+            add_named_constraint("Lock pass0 empty count", model.Add, empty_count_expr <= best_empty_count)
+            solver, status = _solve_secondary_objective()
+            # If secondary optimization cannot find a feasible solution in time,
+            # return the feasible minimum-empty solution from pass0.
+            if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+                solver, status = solver_empty, status_empty
+        else:
+            solver, status = solver_empty, status_empty
+    else:
+        solver, status = _solve_secondary_objective()
     if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         solution = {
             days[d]: {

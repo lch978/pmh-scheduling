@@ -39,6 +39,14 @@
     .fc-daygrid-day-number {
       font-size: 2rem; /* Adjust the size as needed */
     }
+    .fc .fc-daygrid-day-frame {
+      min-height: 86px;
+    }
+    .fc .fc-daygrid-event {
+      font-size: 12px;
+      line-height: 1.2;
+      white-space: normal;
+    }
     #availability-calendar {
       border: none;
       padding: 10px;
@@ -228,6 +236,37 @@
       border: 1px solid #888;
       display: inline-block;
       flex-shrink: 0;
+    }
+    @media (max-width: 768px) {
+      .calendar-shell {
+        margin: 10px auto;
+        max-height: 72vh;
+      }
+      #availability-calendar {
+        padding: 6px;
+      }
+      .sticky-month-indicator {
+        font-size: 12px;
+      }
+      .fc-daygrid-day-number {
+        font-size: 1.1rem;
+      }
+      .fc .fc-daygrid-day-frame {
+        min-height: 74px;
+      }
+      .fc .fc-daygrid-event {
+        font-size: 10px;
+      }
+      .fc .fc-toolbar.fc-header-toolbar {
+        gap: 6px;
+      }
+      .fc .fc-toolbar-title {
+        font-size: 1rem;
+      }
+      .fc .fc-button {
+        font-size: 0.75rem;
+        padding: 0.25em 0.5em;
+      }
     }
   </style>
 {% endblock %}
@@ -528,6 +567,7 @@
           stickyMonthIndicator.textContent = "Viewing month: " + monthLabel;
         }
 
+        var isPhoneLayout = window.matchMedia('(max-width: 768px)').matches;
         var availabilityCalendarEl = document.getElementById('availability-calendar');
         var availabilityCalendar = new FullCalendar.Calendar(availabilityCalendarEl, {
           initialView: 'multiMonthSix',
@@ -536,7 +576,7 @@
             multiMonthSix: {
               type: 'multiMonth',
               duration: { months: 6 },
-              multiMonthMaxColumns: 3
+              multiMonthMaxColumns: isPhoneLayout ? 1 : 3
             }
           },
           buttonText: {
@@ -552,6 +592,8 @@
           height: 'auto',
           contentHeight: 'auto',
           expandRows: true,
+          dayMaxEventRows: false,
+          dayMaxEvents: false,
           events: existingEvents,
           datesSet: function() {
             window.requestAnimationFrame(function() {

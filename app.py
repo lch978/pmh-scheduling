@@ -17,6 +17,7 @@ from helper import save_prior_last_two as save_prior_last_two_db
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, g, session, send_file, abort
 from flask_wtf import CSRFProtect
 from flask_wtf.csrf import generate_csrf
+from jinja2 import TemplateNotFound
 
 
 def coerce_json_column(value):
@@ -676,32 +677,70 @@ def create_app():
             'cancel': False,
             'solution': None,
             'solver_mode': None,
+            'fallback_used': False,
+            'attempt_mode': None,
             'public_holidays': sorted(list(public_holidays or [])),
         }
 
         # we need the app_context so that any DB or flask helpers will work
         with app.app_context():
-            sched, cost = solve_schedule_or_tools(
-                days, surgeons, prev_schedule, public_holidays, preassignments,
-                time_limit_seconds=time_limit_seconds,
-                allow_empty=allow_empty,
-                horizon_prior_counts=horizon_prior
-            )
-            solver_mode = extract_solver_mode(sched)
-            clean_sched = normalize_schedule_for_template(sched) if isinstance(sched, dict) else sched
+            requested_allow_empty = bool(allow_empty)
+            attempts = [True] if requested_allow_empty else [False, True]
+            final_sched = None
+            final_cost = None
+            final_solver_mode = None
+            final_clean_sched = None
+            final_success = False
+            fallback_used = False
+            attempt_mode = 'allow_empty_direct' if requested_allow_empty else 'normal'
 
-            if clean_sched is not None and not (isinstance(clean_sched, dict) and 'errors' in clean_sched):
+            for idx, attempt_allow_empty in enumerate(attempts):
+                sched, cost = solve_schedule_or_tools(
+                    days, surgeons, prev_schedule, public_holidays, preassignments,
+                    time_limit_seconds=time_limit_seconds,
+                    allow_empty=attempt_allow_empty,
+                    horizon_prior_counts=horizon_prior
+                )
+                solver_mode = extract_solver_mode(sched)
+                clean_sched = normalize_schedule_for_template(sched) if isinstance(sched, dict) else sched
+                success = clean_sched is not None and not (isinstance(clean_sched, dict) and 'errors' in clean_sched)
+
+                final_sched = sched
+                final_cost = cost
+                final_solver_mode = solver_mode
+                final_clean_sched = clean_sched
+
+                if success:
+                    final_success = True
+                    fallback_used = (not requested_allow_empty and attempt_allow_empty and idx > 0)
+                    if fallback_used:
+                        attempt_mode = 'allow_empty_fallback'
+                    else:
+                        attempt_mode = 'allow_empty_direct' if attempt_allow_empty else 'normal'
+                    break
+
+            if final_success:
                 solve_jobs[job_id].update({
                     'status':   'done',
-                    'solution': clean_sched,
-                    'best':     cost,
-                    'solver_mode': solver_mode,
+                    'solution': final_clean_sched,
+                    'best':     final_cost,
+                    'solver_mode': final_solver_mode,
+                    'fallback_used': fallback_used,
+                    'attempt_mode': attempt_mode,
                 })
             else:
+                if not requested_allow_empty and len(attempts) > 1:
+                    attempt_mode = 'allow_empty_fallback_failed'
+                elif requested_allow_empty:
+                    attempt_mode = 'allow_empty_direct_failed'
+                else:
+                    attempt_mode = 'normal_failed'
                 solve_jobs[job_id].update({
                     'status': 'failed',
-                    'solution': sched,
-                    'solver_mode': solver_mode,
+                    'solution': final_sched,
+                    'solver_mode': final_solver_mode,
+                    'fallback_used': False,
+                    'attempt_mode': attempt_mode,
                 })
 
     @app.route('/new_schedule', methods=['GET'])
@@ -1321,7 +1360,15 @@ def create_app():
 
     @app.route('/help', methods=['GET'])
     def user_help():
-        return render_template('user_help.html')
+        try:
+            return render_template('user_help.html')
+        except TemplateNotFound:
+            # Fallback prevents a hard 500 if template deployment lags code.
+            return (
+                "<h1>Help page unavailable</h1>"
+                "<p>The help content is temporarily unavailable. "
+                "Please refresh in a moment or contact the administrator.</p>"
+            ), 503
 
     @app.route('/cohort_availability', methods=['GET'])
     def cohort_availability():
@@ -2536,10 +2583,14 @@ def create_app():
         if job['status'] == 'done':
             resp['solution'] = job['solution']
             resp['solver_mode'] = job.get('solver_mode')
+            resp['fallback_used'] = bool(job.get('fallback_used', False))
+            resp['attempt_mode'] = job.get('attempt_mode')
         elif job['status'] == 'failed':
             resp['errors'] = job.get('solution', {}).get('errors') if isinstance(job.get('solution'), dict) else None
             resp['analysis'] = job.get('solution', {}).get('analysis') if isinstance(job.get('solution'), dict) else None
             resp['solver_mode'] = job.get('solver_mode')
+            resp['fallback_used'] = bool(job.get('fallback_used', False))
+            resp['attempt_mode'] = job.get('attempt_mode')
         return jsonify(resp)
 
     # --- Route to cancel a running job ---

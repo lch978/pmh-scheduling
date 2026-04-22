@@ -321,7 +321,7 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    let html = '<table class="ep-versions-table"><thead><tr><th>Version</th><th>Name</th><th>Status</th><th>Actions</th><th>Rename</th></tr></thead><tbody>';
+    let html = '<div class="table-scroll table-mobile-compact"><table class="ep-versions-table"><thead><tr><th>Version</th><th>Name</th><th>Status</th><th>Actions</th><th>Rename</th></tr></thead><tbody>';
     for (const v of versions) {
       html += `<tr>
         <td>v${v.version}</td>
@@ -344,7 +344,7 @@ document.addEventListener('DOMContentLoaded', () => {
         </td>
       </tr>`;
     }
-    html += '</tbody></table>';
+    html += '</tbody></table></div>';
     versionsList.innerHTML = html;
 
     versionsList.querySelectorAll('.js-load').forEach(b => b.addEventListener('click', e => loadSchedule(+e.target.dataset.v)));
@@ -475,7 +475,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function renderTable() {
     const days = Object.keys(currentSchedule).sort();
     const ph = new Set((monthData && monthData.public_holidays) || []);
-    let html = '<table class="sched-table"><thead><tr><th>Date</th>';
+    let html = '<div class="table-scroll table-mobile-compact sticky-first-col"><table class="sched-table"><thead><tr><th>Date</th>';
     for (const lvl of LEVELS) html += `<th>${lvl}</th>`;
     html += '</tr></thead><tbody>';
     for (const day of days) {
@@ -503,7 +503,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       html += '</tr>';
     }
-    html += '</tbody></table>';
+    html += '</tbody></table></div>';
     container.innerHTML = html;
     container.addEventListener('click', onTableClick);
     renderCohortMiniSummary(currentSchedule);

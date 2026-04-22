@@ -40,6 +40,21 @@
   }
   .weekend { background-color: #f9f2f4; }
   .holiday { background-color: #eef9ff; }
+  .empty-assignment {
+    background-color: #f8d7da;
+    color: #8a1c26;
+    font-weight: 600;
+  }
+  #fallbackNotice {
+    display: none;
+    margin-top: 8px;
+    padding: 8px 12px;
+    border: 1px solid #dc3545;
+    border-radius: 6px;
+    background: #f8d7da;
+    color: #721c24;
+    font-size: 13px;
+  }
   #progress {
     text-align: center;
     margin-top: 10px;
@@ -312,6 +327,7 @@
       {% for group in cohort_summary.groups %}
         <div class="cohort-block">
           <h3>{{ group.label }}</h3>
+          <div class="table-scroll table-mobile-compact">
           <table class="cohort-table">
             <thead>
               <tr>
@@ -357,6 +373,7 @@
               </tr>
             </tbody>
           </table>
+          </div>
         </div>
       {% endfor %}
     </div>
@@ -380,7 +397,6 @@
   <div style="margin-bottom: 10px;"></div>
     <!-- All buttons are now inline and use the same styling -->
     <button type="button" id="btnGenerate" style="padding:10px 15px; font-size:14px; margin: 5px;">Generate Schedule</button>
-    <button type="button" id="btnGenerateAllowEmpty" style="padding:10px 15px; font-size:14px; margin: 5px; background-color:#8a6d3b;">Generate Allow-Empty</button>
     <button type="button" id="btnStop" disabled style="padding:10px 15px; font-size:14px; margin: 5px;">Stop</button>
     
     <form method="post" action="{{ url_for('save_schedule') }}" style="display:inline;">
@@ -411,6 +427,7 @@
   <p>Status: <span id="status">idle</span></p>
   <p>Best Objective So Far: <span id="best">n/a</span></p>
   <p>Solver Mode Used: <span id="solverModeUsed">{{ solver_mode_used or 'n/a' }}</span></p>
+  <div id="fallbackNotice"></div>
   <div id="errors" style="color:#b00020; margin-top:8px;"></div>
 </div>
 <!-- Loading Modal -->
@@ -438,6 +455,7 @@
 
   <div id="scheduleContainer">
     {% if schedule is mapping and schedule %}
+      <div class="table-scroll table-mobile-compact sticky-first-col">
       <table class="schedule-table">
         <thead>
           <tr>
@@ -450,18 +468,23 @@
         <tbody>
           {% for day, assigns in schedule.items() %}
             {% set row = assigns if assigns is mapping else {} %}
+            {% set row_2a = row['2A']|default('', true) %}
             {% set classes = [] %}
             {% if day in weekend_set %}{% set _=classes.append('weekend') %}{% endif %}
             {% if day in public_holidays %}{% set _=classes.append('holiday') %}{% endif %}
             <tr class="{{ classes|join(' ') }}">
               <td>{{ day }}</td>
               {% for lev in ['1A','1B','2A','2B','3','4'] %}
-                <td>{{ row[lev]|default('', true) }}</td>
+                {% set cell_val = row[lev]|default('', true) %}
+                {% set is_empty_cell = (cell_val == '') %}
+                {% set should_highlight_empty = is_empty_cell and (lev != '2B' or row_2a == '') %}
+                <td class="{% if should_highlight_empty %}empty-assignment{% endif %}">{{ cell_val }}</td>
               {% endfor %}
             </tr>
           {% endfor %}
         </tbody>
       </table>
+      </div>
     {% else %}
       <p style="text-align:center; margin-top:20px;">No saved schedule yet.</p>
     {% endif %}
@@ -489,12 +512,12 @@
 
     const surgeonsMeta = {{ (surgeons_meta or [])|tojson }};
     const solverModeEl = document.getElementById('solverModeUsed');
+    const fallbackNoticeEl = document.getElementById('fallbackNotice');
 
     // grab references
     const modal   = document.getElementById('loadingModal');
     const bar     = document.getElementById('modalLoadingBar');
     const btnGenerate = document.getElementById('btnGenerate');
-    const btnGenerateAllowEmpty = document.getElementById('btnGenerateAllowEmpty');
     const btnStop = document.getElementById('btnStop');
     const btnSavePrior = document.getElementById('btnSavePrior');
     const btnToggleCohortTable = document.getElementById('btnToggleCohortTable');
@@ -650,7 +673,7 @@
       const dayKeys = Object.keys(sol).filter((k) => /^\d{4}-\d{2}-\d{2}$/.test(k));
       // rebuild HTML
       const container = document.getElementById('scheduleContainer');
-      let html = '<table class="schedule-table"><thead><tr><th>Date</th>'
+      let html = '<div class="table-scroll table-mobile-compact sticky-first-col"><table class="schedule-table"><thead><tr><th>Date</th>'
                + ['1A','1B','2A','2B','3','4']
                  .map(l=>`<th>${l}</th>`).join('')
                + '</tr></thead><tbody>';
@@ -659,13 +682,18 @@
         if (isWeekendDay(day)) classes.push('weekend');
         if (publicHolidays.has(day)) classes.push('holiday');
         const row = (sol[day] && typeof sol[day] === 'object' && !Array.isArray(sol[day])) ? sol[day] : {};
+        const val2A = row['2A'] != null && row['2A'] !== '' ? row['2A'] : '';
         html += `<tr class="${classes.join(' ')}"><td>${day}</td>`;
         for (const lvl of ['1A','1B','2A','2B','3','4']) {
-          html += `<td>${row[lvl] != null && row[lvl] !== '' ? row[lvl] : ''}</td>`;
+          const val = row[lvl] != null && row[lvl] !== '' ? row[lvl] : '';
+          const isEmptyCell = val === '';
+          const shouldHighlightEmpty = isEmptyCell && (lvl !== '2B' || val2A === '');
+          const cellCls = shouldHighlightEmpty ? 'empty-assignment' : '';
+          html += `<td class="${cellCls}">${val}</td>`;
         }
         html += '</tr>';
       }
-      html += '</tbody></table>';
+      html += '</tbody></table></div>';
       container.innerHTML = html;
 
       // stringified JSON
@@ -717,9 +745,18 @@
           if (data.status === 'done') {
             renderSchedule(data.solution);
             document.getElementById('errors').innerHTML = '';
+            if (data.fallback_used) {
+              fallbackNoticeEl.style.display = 'inline-block';
+              fallbackNoticeEl.textContent = 'Allow-empty fallback was used because normal mode was infeasible.';
+            } else {
+              fallbackNoticeEl.style.display = 'none';
+              fallbackNoticeEl.textContent = '';
+            }
           } else if (data.status === 'failed') {
             const errBox = document.getElementById('errors');
             const analysis = data.analysis;
+            fallbackNoticeEl.style.display = 'none';
+            fallbackNoticeEl.textContent = '';
 
             if (analysis && analysis.culprits && analysis.culprits.length) {
               let html = '<div style="text-align:left; display:inline-block; max-width:960px; font-size:14px;">';
@@ -791,7 +828,7 @@
       }
     }
 
-    async function startSolve(timeLimitMs, allowEmpty = false) {
+    async function startSolve(timeLimitMs) {
       showPopupProgress(timeLimitMs + 15000);
       const y = +document.getElementById('year').value;
       const m = +document.getElementById('month').value;
@@ -809,17 +846,18 @@
           'Content-Type':'application/json',
           'X-CSRFToken': document.querySelector('meta[name="csrf-token"]').getAttribute('content')
         },
-        body: JSON.stringify({ year: y, month: m, time_limit_seconds: Math.floor(timeLimitMs/1000), allow_empty: allowEmpty, prior_last_two: prior })
+        body: JSON.stringify({ year: y, month: m, time_limit_seconds: Math.floor(timeLimitMs/1000), prior_last_two: prior })
       });
       const { job_id } = await res.json();
       currentJob = job_id;
       document.getElementById('status').innerText = 'running';
+      fallbackNoticeEl.style.display = 'none';
+      fallbackNoticeEl.textContent = '';
       btnStop.disabled = false;
       pollStatus();
     }
 
     btnGenerate.addEventListener('click', () => startSolve(120000));
-    btnGenerateAllowEmpty.addEventListener('click', () => startSolve(120000, true));
 
     btnStop.addEventListener('click', () => {
       if (!currentJob) return;

@@ -110,7 +110,7 @@ class SchedulerFairnessCreditTests(unittest.TestCase):
         self.assertIn("errors", sched)
 
     def test_l2g1_primary_single_1ab_preassignment_feasible(self):
-        days = ["2026-06-01", "2026-06-02"]
+        days = ["2026-06-01"]
         surgeons = [
             {"id": 1, "name": "PrimaryAB", "call_levels": "1A,1B", "nlth": False, "team": "Team 1"},
             {"id": 2, "name": "L2G1Only", "call_levels": "2A", "nlth": False, "team": "Team 2"},
@@ -294,6 +294,91 @@ class SchedulerFairnessCreditTests(unittest.TestCase):
         self.assertNotIn("errors", sched_a)
         self.assertNotIn("errors", sched_b)
         self.assertEqual(sched_a, sched_b)
+
+    def test_allow_empty_prefers_zero_non_2b_empties_when_feasible(self):
+        days = ["2026-06-01"]
+        surgeons = [
+            {"id": 1, "name": "L1A", "call_levels": "1A,1B", "nlth": False, "team": "Team 1"},
+            {"id": 2, "name": "L1B", "call_levels": "1A,1B", "nlth": False, "team": "Team 2"},
+            {"id": 3, "name": "L2AGroup2", "call_levels": "2A,2B", "nlth": False, "team": "Team 3"},
+            {"id": 4, "name": "L2BSuper", "call_levels": "2B", "nlth": False, "team": "Team 4"},
+            {"id": 5, "name": "L3", "call_levels": "3", "nlth": False, "team": "Team 1"},
+            {"id": 6, "name": "L4", "call_levels": "4", "nlth": False, "team": "Team 2"},
+        ]
+        cfg = _base_config()
+        cfg["enable_fairness_hard_cap"] = "0"
+
+        sched, _ = _run_solver_with_overrides(
+            days=days,
+            surgeons=surgeons,
+            preassignments={},
+            availability={},
+            config=cfg,
+        )
+        self.assertIsInstance(sched, dict)
+        self.assertNotIn("errors", sched)
+
+        assignments = sched[days[0]]
+        for lvl in ["1A", "1B", "2A", "3", "4"]:
+            self.assertIsNotNone(assignments.get(lvl))
+        # Group-2 surgeon on 2A forces 2B empty, and this should not count against non-2B empties.
+        self.assertIsNone(assignments.get("2B"))
+
+    def test_allow_empty_uses_empty_slot_only_when_required_for_feasibility(self):
+        days = ["2026-06-01"]
+        surgeons = [
+            {"id": 1, "name": "L1A", "call_levels": "1A,1B", "nlth": False, "team": "Team 1"},
+            {"id": 2, "name": "L1B", "call_levels": "1A,1B", "nlth": False, "team": "Team 2"},
+            {"id": 3, "name": "L2AGroup2", "call_levels": "2A,2B", "nlth": False, "team": "Team 3"},
+            {"id": 4, "name": "L2BSuper", "call_levels": "2B", "nlth": False, "team": "Team 4"},
+            {"id": 5, "name": "L3", "call_levels": "3", "nlth": False, "team": "Team 1"},
+        ]
+        cfg = _base_config()
+        cfg["enable_fairness_hard_cap"] = "0"
+
+        sched, _ = _run_solver_with_overrides(
+            days=days,
+            surgeons=surgeons,
+            preassignments={},
+            availability={},
+            config=cfg,
+        )
+        self.assertIsInstance(sched, dict)
+        self.assertNotIn("errors", sched)
+
+        assignments = sched[days[0]]
+        self.assertIsNone(assignments.get("4"))
+        for lvl in ["1A", "1B", "2A", "3"]:
+            self.assertIsNotNone(assignments.get(lvl))
+
+    def test_allow_empty_keeps_2b_exempt_from_empty_minimum(self):
+        days = ["2026-06-01", "2026-06-02"]
+        surgeons = [
+            {"id": 1, "name": "L1A", "call_levels": "1A,1B", "nlth": False, "team": "Team 1"},
+            {"id": 2, "name": "L1B", "call_levels": "1A,1B", "nlth": False, "team": "Team 2"},
+            {"id": 3, "name": "L2AGroup2", "call_levels": "2A,2B", "nlth": False, "team": "Team 3"},
+            {"id": 4, "name": "L2BSuper", "call_levels": "2B", "nlth": False, "team": "Team 4"},
+            {"id": 5, "name": "L3", "call_levels": "3", "nlth": False, "team": "Team 1"},
+            {"id": 6, "name": "L4", "call_levels": "4", "nlth": False, "team": "Team 2"},
+        ]
+        cfg = _base_config()
+        cfg["enable_fairness_hard_cap"] = "0"
+        preassignments = {days[0]: {"1A": 1, "1B": 2, "2A": 3, "3": 5, "4": 6}}
+
+        sched, _ = _run_solver_with_overrides(
+            days=days,
+            surgeons=surgeons,
+            preassignments=preassignments,
+            availability={},
+            config=cfg,
+        )
+        self.assertIsInstance(sched, dict)
+        self.assertNotIn("errors", sched)
+
+        assignments = sched[days[0]]
+        for lvl in ["1A", "1B", "2A", "3", "4"]:
+            self.assertIsNotNone(assignments.get(lvl))
+        self.assertIsNone(assignments.get("2B"))
 
 
 class HalfYearCohortSummaryTests(unittest.TestCase):

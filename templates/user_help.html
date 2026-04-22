@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}How to use this site{% endblock %}
+{% block head %}
+  <style>
+    .help-page {
+      max-width: 720px;
+      margin: 0 auto;
+      background: #fff;
+      border: 1px solid #e5e7eb;
+      border-radius: 10px;
+      padding: 24px 28px;
+      line-height: 1.55;
+      color: #1f2937;
+    }
+    .help-page h1 {
+      font-size: 1.5rem;
+      margin: 0 0 16px;
+      color: #111827;
+    }
+    .help-page h2 {
+      font-size: 1.1rem;
+      margin: 28px 0 10px;
+      color: #111827;
+      border-bottom: 1px solid #e5e7eb;
+      padding-bottom: 6px;
+    }
+    .help-page h2:first-of-type {
+      margin-top: 0;
+    }
+    .help-page p {
+      margin: 0 0 12px;
+    }
+    .help-page ul, .help-page ol {
+      margin: 0 0 12px;
+      padding-left: 1.35em;
+    }
+    .help-page li {
+      margin: 6px 0;
+    }
+    .help-page a {
+      color: #1d4ed8;
+    }
+  </style>
+{% endblock %}
+{% block content %}
+  <div class="help-page">
+    <h1>How to use this site</h1>
+    <p>
+      This scheduler publishes monthly call lists and collects surgeon requests.
+      Use the menu on the left (or the menu at the top on small screens) to move between sections.
+    </p>
+
+    <h2>What is available (everyone)</h2>
+    <ul>
+      <li>
+        <strong>Home</strong> opens the <strong>Call List</strong> for the current month: the published call schedule.
+        You can change month from that page when options are shown.
+      </li>
+      <li>
+        <strong>Requests</strong> is where surgeons (or their delegates) submit or remove
+        unavailability, no-call, and study-leave requests for a selected surgeon.
+      </li>
+      <li>
+        <strong>Availability Calendar</strong> is a read-only overview: cohort tabs, a heat map by day
+        (lighter means more surgeons available in that cohort), and a day panel listing who is available or not after you click a date.
+      </li>
+      <li>
+        <strong>Admin Login</strong> is for staff who build schedules, manage surgeons, and publish versions.
+      </li>
+    </ul>
+
+    <h2>Submit a request (Requests page)</h2>
+    <ol>
+      <li>Open <a href="{{ url_for('availability') }}">Requests</a> and click your name in the surgeon grid. The page reloads with the calendar for that surgeon.</li>
+      <li>Choose the request type: <strong>Unavailable</strong>, <strong>No Call Request</strong>, or <strong>Study Leave</strong>.</li>
+      <li>Click individual dates on the calendar to add them to your submission (they appear with a dark green background). Click again to remove a date.</li>
+      <li>Use <strong>Jan–Jun</strong> / <strong>Jul–Dec</strong> and the calendar’s <strong>prev / next / today</strong> controls if you need a different part of the year. You can switch between the six-month and month views from the calendar toolbar when needed.</li>
+      <li>Click <strong>Submit Request</strong>. You must have at least one date selected and a request type chosen, or the page will prompt you.</li>
+    </ol>
+
+    <h2>Delete a request (Requests page)</h2>
+    <ol>
+      <li>With the same surgeon selected, find the existing colored blocks on the calendar (unavailable, no-call, or study-leave).</li>
+      <li>Click a block to mark it for deletion: it gets a <strong>red border</strong>. Click again to unmark.</li>
+      <li>Click <strong>Delete Selected Requests</strong> and confirm in the dialog. Only the marked ranges are removed.</li>
+    </ol>
+
+    <h2>Deadlines</h2>
+    <p>
+      When a cutoff is configured, new requests that fall in the <strong>next calendar month</strong> may be closed for standard users after the deadline.
+      You can still submit for later months. Administrators can override those restrictions. Any active deadline and banner text also appear on the Requests page.
+    </p>
+
+    <h2>Availability Calendar in short</h2>
+    <p>
+      Open <a href="{{ url_for('cohort_availability') }}">Availability Calendar</a>, pick a cohort tab, scan the heat colors (white toward more availability, red toward less),
+      then click a day to see <strong>Available</strong> and <strong>Not Available</strong> lists for that cohort. This view does not edit requests.
+    </p>
+  </div>
+{% endblock %}
