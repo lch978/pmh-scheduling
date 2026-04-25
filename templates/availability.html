@@ -122,6 +122,7 @@
     .surgeon-cell.selected { background:#bbdefb; font-weight:600; }
     .surgeon-cell .cell-level { font-size:10px; color:#888; flex-shrink:0; }
     .surgeon-cell .cell-name { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .surgeon-cell .cell-level { display: none; }
     .request-type-buttons {
       display: flex;
       justify-content: center;
@@ -142,6 +143,13 @@
       gap: 10px;
       flex-wrap: wrap;
       margin: 6px 0 10px 0;
+    }
+    .request-controls {
+      position: sticky;
+      top: 8px;
+      z-index: 15;
+      background: #f4f4f4;
+      padding: 8px 0 6px;
     }
     .request-type-btn {
       border-radius: 999px;
@@ -203,6 +211,15 @@
       color: #374151;
       font-weight: 600;
     }
+    .calendar-shell .fc-header-toolbar {
+      position: sticky;
+      top: 0;
+      z-index: 6;
+      background: #fff;
+      padding: 8px 6px;
+      border-bottom: 1px solid #e5e7eb;
+      margin-bottom: 10px;
+    }
     .fc .fc-multimonth-title {
       position: sticky;
       top: 0;
@@ -238,6 +255,15 @@
       flex-shrink: 0;
     }
     @media (max-width: 768px) {
+      .surgeon-cell {
+        align-items: flex-start;
+      }
+      .surgeon-cell .cell-name {
+        white-space: normal;
+        overflow: visible;
+        text-overflow: clip;
+        overflow-wrap: anywhere;
+      }
       .calendar-shell {
         margin: 10px auto;
         max-height: 72vh;
@@ -303,7 +329,6 @@
         {% for rank, s in ns.team_surgeons | sort(attribute='0') %}
         <div class="surgeon-cell{% if selected_surgeon_id and s.id == selected_surgeon_id %} selected{% endif %}"
              data-sid="{{ s.id }}" onclick="selectSurgeon({{ s.id }})">
-          <span class="cell-level">{{ s.call_levels or '' }}</span>
           <span class="cell-name">{{ s.name }}</span>
         </div>
         {% endfor %}
@@ -346,18 +371,20 @@
       <!-- Use the initially selected surgeon -->
       <input type="hidden" name="surgeon_id" value="{{ selected_surgeon_id }}">
       <p>Applying as: {{ surgeon_name }}</p>
-      <div class="request-type-buttons" id="requestTypeButtons">
-        <button type="button" class="request-type-btn active" data-request-type="unavailable">Unavailable</button>
-        <button type="button" class="request-type-btn" data-request-type="no_call">No Call Request</button>
-        <button type="button" class="request-type-btn" data-request-type="study_leave">Study Leave</button>
-      </div>
-      <div class="action-buttons">
-        <button type="submit" class="action-btn submit-btn">Submit Request</button>
-        <button type="button" id="deleteButton" class="action-btn delete-btn">Delete Selected Requests</button>
-      </div>
-      <div class="interval-buttons" id="intervalButtons">
-        <button type="button" class="interval-btn active" data-half="h1">Jan - Jun</button>
-        <button type="button" class="interval-btn" data-half="h2">Jul - Dec</button>
+      <div class="request-controls">
+        <div class="request-type-buttons" id="requestTypeButtons">
+          <button type="button" class="request-type-btn active" data-request-type="unavailable">Unavailable</button>
+          <button type="button" class="request-type-btn" data-request-type="no_call">No Call Request</button>
+          <button type="button" class="request-type-btn" data-request-type="study_leave">Study Leave</button>
+        </div>
+        <div class="action-buttons">
+          <button type="submit" class="action-btn submit-btn">Submit Request</button>
+          <button type="button" id="deleteButton" class="action-btn delete-btn">Delete Selected Requests</button>
+        </div>
+        <div class="interval-buttons" id="intervalButtons">
+          <button type="button" class="interval-btn active" data-half="h1">Jan - Jun</button>
+          <button type="button" class="interval-btn" data-half="h2">Jul - Dec</button>
+        </div>
       </div>
       <input type="hidden" name="request_type" id="request_type_input" value="unavailable">
       <p style="margin: 6px 0 2px 0; color: #4b5563; font-size: 13px;">
@@ -581,6 +608,8 @@
           },
           buttonText: {
             today: 'Today',
+            prev: '‹ Prev',
+            next: 'Next ›',
             dayGridMonth: 'Month',
             multiMonthSix: '6 Months'
           },
