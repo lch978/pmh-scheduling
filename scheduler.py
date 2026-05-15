@@ -4,6 +4,26 @@ from ortools.sat.python import cp_model
 import itertools
 import sys
 
+# #region agent log
+def _debug_log(location, message, data=None, hypothesis="H1"):
+    try:
+        import json as _json, time as _time, os as _os
+        entry = {
+            "sessionId": "e91910",
+            "id": f"log_{int(_time.time()*1000)}_{location.replace(':', '_')}",
+            "timestamp": int(_time.time() * 1000),
+            "location": location,
+            "message": message,
+            "data": data or {},
+            "hypothesisId": hypothesis,
+            "runId": _os.environ.get("DEBUG_RUN_ID", "solver"),
+        }
+        with open("debug-e91910.log", "a", encoding="utf-8") as f:
+            f.write(_json.dumps(entry, default=str) + "\n")
+    except Exception:
+        pass
+# #endregion
+
 
 ############################# ################
 # OR‑Tools Scheduling Function (with Availability Constraints)
@@ -92,7 +112,7 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
 
     num_days = len(days)
     day_to_idx = {day: idx for idx, day in enumerate(days)}
-    all_levels = ["1A","1B","2A","2B","3","4"]
+    all_levels = ["1A","1B","Urology","2A","2B","3","4"]
     all_ids    = [s["id"] for s in surgeons]
     nlth_ids = [s["id"] for s in surgeons if s.get("nlth")]
     team_day_prefs = get_team_day_prefs()
@@ -199,7 +219,7 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
     except Exception:
         gamma_l2g1_primary_2a_same_day = 30
 
-    max_config = get_max_calls_config()  # e.g., {"1":10, "2":10, "3":10, "4":10, "l2g1_1ab":4}
+    max_config = get_max_calls_config()  # e.g., {"1":10, "2":10, "3":10, "4":10, "l2g1_1a":4}
     
     # Use actual surgeon IDs from the database.
     id_to_surgeon = {s["id"]: s for s in surgeons}
@@ -209,9 +229,18 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
     domain_1A = [s["id"] for s in surgeons if "1A" in parse_call_levels(s.get("call_levels", ""))]
     if not domain_1A:
         domain_1A = [-1]
-    domain_1B = [s["id"] for s in surgeons if "1B" in parse_call_levels(s.get("call_levels", ""))] 
+    domain_1B = [s["id"] for s in surgeons if "1B" in parse_call_levels(s.get("call_levels", ""))]
+    # Always allow -1 in 1B so 1B can be left empty on days when a urology-only
+    # surgeon takes the Urology slot (1B is then clinically covered by 1A).
     if not domain_1B:
         domain_1B = [-1]
+    else:
+        domain_1B = domain_1B + [-1]
+    domain_Urology = [s["id"] for s in surgeons if "Urology" in parse_call_levels(s.get("call_levels", ""))]
+    if domain_Urology:
+        domain_Urology = domain_Urology + [-1]
+    else:
+        domain_Urology = [-1]
     domain_2A = [s["id"] for s in surgeons if "2A" in parse_call_levels(s.get("call_levels", ""))]
     if not domain_2A:
         domain_2A = [-1]
@@ -235,18 +264,15 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
 
     if enable_l2g1_primary_calls and group1_ids:
         raw_1a = [x for x in domain_1A if x != -1]
-        raw_1b = [x for x in domain_1B if x != -1]
         for sid in group1_ids:
             if sid not in raw_1a:
                 raw_1a.append(sid)
-            if sid not in raw_1b:
-                raw_1b.append(sid)
         domain_1A = raw_1a if raw_1a else [-1]
-        domain_1B = raw_1b if raw_1b else [-1]
 
     base_domains = {
         "1A": domain_1A,     
         "1B": domain_1B,
+        "Urology": domain_Urology,
         "2A": list(set(group1_ids + group2_ids)),  # exclude subgroup 3 from 2A
         "2B": group3_ids + group4_ids + [-1],
         "3":  domain_3,
@@ -256,6 +282,29 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
         d: { lvl: list(base_domains[lvl]) for lvl in base_domains }
         for d in range(num_days)
     }
+
+    # #region agent log
+    _debug_log(
+        "scheduler.py:domains-initial",
+        "Initial base domains + urology config",
+        {
+            "num_days": num_days,
+            "num_surgeons": len(surgeons),
+            "allow_empty": allow_empty,
+            "relax_fairness_caps": _relax_fairness_caps,
+            "diagnostic_run": _diagnostic_run,
+            "domain_1A_ids": [x for x in domain_1A if x != -1],
+            "domain_1B_ids": [x for x in domain_1B if x != -1],
+            "domain_Urology_ids": [x for x in domain_Urology if x != -1],
+            "urology_min_raw_cfg": max_config.get("urology_min"),
+            "urology_max_raw_cfg": max_config.get("urology_max"),
+            "enable_force_1B_weekend": enable_force_1B_weekend,
+            "enable_l2g1_primary_calls": enable_l2g1_primary_calls,
+            "group1_ids": group1_ids,
+        },
+        hypothesis="H1,H2,H3,H5",
+    )
+    # #endregion
 
     # If allow_empty is requested, ensure every slot can be left empty by including -1 in its domain
     if allow_empty:
@@ -374,16 +423,53 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                     dom.remove(s_id)
 
     # --- Pre-solve domain diagnostics: flag empty domains (excluding -1) ---
+    # Skip 2B (always optional) and Urology (optional on weekdays; weekend/PH
+    # check is handled separately below).
     try:
         for d_idx, day_str in enumerate(days):
             for lvl in all_levels:
-                if lvl == "2B":
+                if lvl in ("2B", "Urology"):
                     continue
                 effective = [sid for sid in domains_by_day[d_idx][lvl] if sid != -1]
                 if len(effective) == 0:
                     diagnostics.append(f"No eligible surgeons for {lvl} on {day_str} after eligibility/pruning.")
     except Exception:
         pass
+
+    # #region agent log
+    try:
+        _tmp_u_and_1b = [
+            s["id"] for s in surgeons
+            if "Urology" in parse_call_levels(s.get("call_levels", ""))
+            and "1B" in parse_call_levels(s.get("call_levels", ""))
+        ]
+        _asym = []
+        for _d in range(num_days):
+            for _sid in _tmp_u_and_1b:
+                _in_1b = _sid in domains_by_day[_d]["1B"]
+                _in_uro = _sid in domains_by_day[_d]["Urology"]
+                if _in_1b != _in_uro:
+                    _asym.append({"day": days[_d], "sid": _sid, "in_1B": _in_1b, "in_Urology": _in_uro})
+        _min_1a = min(len([s for s in domains_by_day[d]["1A"] if s != -1]) for d in range(num_days))
+        _min_1b = min(len([s for s in domains_by_day[d]["1B"] if s != -1]) for d in range(num_days))
+        _min_uro = min(len([s for s in domains_by_day[d]["Urology"] if s != -1]) for d in range(num_days))
+        _debug_log(
+            "scheduler.py:domains-post-pruning",
+            "Domains after availability/no_call/prev_schedule pruning",
+            {
+                "min_1A_candidates_across_days": _min_1a,
+                "min_1B_candidates_across_days": _min_1b,
+                "min_Urology_candidates_across_days": _min_uro,
+                "urology_and_1b_count": len(_tmp_u_and_1b),
+                "urology_and_1b_ids": _tmp_u_and_1b,
+                "asymmetric_pruning_issues": _asym[:20],
+                "asymmetric_pruning_total": len(_asym),
+            },
+            hypothesis="H2",
+        )
+    except Exception as _e:
+        _debug_log("scheduler.py:domains-post-pruning", "log-error", {"err": str(_e)}, hypothesis="H2")
+    # #endregion
 
     solver_debug = str(global_config.get("solver_debug", "0")) == "1"
     if solver_debug:
@@ -474,8 +560,9 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
     # 1) Empty domain checks (post-pruning)
     for d, day_str in enumerate(days):
         for lvl in all_levels:
-            # Skip diagnostics for 2B; 2B is optional in this model
-            if lvl == "2B":
+            # Skip diagnostics for 2B and Urology; both are optional on weekdays.
+            # Weekend/holiday Urology check is handled below in section (2).
+            if lvl in ("2B", "Urology"):
                 continue
             candidates = [sid for sid in domains_by_day[d][lvl] if sid != -1]
             if not candidates:
@@ -493,6 +580,9 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                 cand_1b = [sid for sid in domains_by_day[d]["1B"] if sid != -1]
                 if not cand_1b:
                     diagnostics.append(f"1B must be filled on {day_str} (weekend/holiday) but no eligible 1B candidate.")
+                cand_uro = [sid for sid in domains_by_day[d]["Urology"] if sid != -1]
+                if not cand_uro and not allow_empty:
+                    diagnostics.append(f"Urology should be filled on {day_str} (weekend/holiday) but no eligible Urology candidate.")
 
     # 3) Supervision logic: if 2A can only be Group1 (needs supervisor) but 2B has no supervisors
     # Determine supervision groups again for clarity
@@ -562,10 +652,15 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                         model.Add, X[(d, level)] == assigned_id)
 
     # --- Prevent same surgeon from being assigned twice on same day ---
+    # Exception: (1B, Urology) pair is exempt because a 1B+Urology surgeon
+    # is intentionally mirrored into both slots on the same day (see mirror
+    # constraint below).
     for d, day_str in enumerate(days):
         if solver_debug:
             print(f"\nChecking level‐pairs on {day_str}:")
         for lvl1, lvl2 in itertools.combinations(all_levels, 2):
+            if {lvl1, lvl2} == {"1B", "Urology"}:
+                continue
             # compute the real candidates for each slot
             c1 = set(domains_by_day[d][lvl1]) - {-1}
             c2 = set(domains_by_day[d][lvl2]) - {-1}
@@ -631,19 +726,23 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
         ).OnlyEnforceIf(b1B.Not())
         indicator_1B[d] = b1B
 
-    # --- Force 1B to be filled on weekends and public holidays (toggle) ---
+    # NOTE: The previous "force 1B != -1 on weekend/PH" rule is now superseded by
+    # the more general "1B may be empty only if a urology-only surgeon is on
+    # Urology" rule added later (after indicators are built). That rule applies
+    # to every day, so explicit weekend force is no longer necessary.
+
+    # --- Force Urology to be filled on weekends and public holidays (mirrors 1B rule) ---
     if enable_force_1B_weekend:
         for d, day_str in enumerate(days):
             dt = datetime.datetime.strptime(day_str, "%Y-%m-%d").date()
             is_weekend_day = dt.weekday() >= 5
             is_holiday_day = public_holidays and (day_str in public_holidays)
             if is_weekend_day or is_holiday_day:
-                if allow_empty:
-                    real_1b = [sid for sid in domains_by_day[d]["1B"] if sid != -1]
-                    if not real_1b:
-                        continue
-                add_named_constraint(f"Force 1B on {day_str}: 1B != -1",
-                    model.Add, X[(d, "1B")] != -1)
+                real_uro = [sid for sid in domains_by_day[d]["Urology"] if sid != -1]
+                if not real_uro:
+                    continue
+                add_named_constraint(f"Force Urology on {day_str}: Urology != -1",
+                    model.Add, X[(d, "Urology")] != -1)
     
     # --- Level‑2 Grouping & Supervision Constraints (toggle) ---
     if enable_level2_supervision:
@@ -703,7 +802,142 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                     model.Add, X[(d, lev)] != s_id
                 ).OnlyEnforceIf(b.Not())
                 indicators[(d, lev, s_id)] = b
-    
+
+    # --- Urology level membership (used for min/max + mirror logic) ---
+    urology_ids = [
+        s["id"] for s in surgeons
+        if "Urology" in parse_call_levels(s.get("call_levels", ""))
+    ]
+    urology_only_ids = [
+        s["id"] for s in surgeons
+        if parse_call_levels(s.get("call_levels", "")) == ["Urology"]
+    ]
+    urology_and_1b_ids = [
+        s["id"] for s in surgeons
+        if "Urology" in parse_call_levels(s.get("call_levels", ""))
+        and "1B" in parse_call_levels(s.get("call_levels", ""))
+    ]
+
+    # --- 1B -> Urology mirror: when a 1B+Urology surgeon is on 1B, they must also be Urology that day. ---
+    for s_id in urology_and_1b_ids:
+        for d in range(num_days):
+            add_named_constraint(
+                f"1B-Urology mirror: Day {days[d]} surgeon {s_id}",
+                model.Add, X[(d, "Urology")] == s_id,
+            ).OnlyEnforceIf(indicators[(d, "1B", s_id)])
+
+    # --- Min/Max calls per month for Urology-only surgeons (from max_calls_config) ---
+    try:
+        urology_min_cfg = int(max_config.get("urology_min", 0))
+    except Exception:
+        urology_min_cfg = 0
+    try:
+        urology_max_cfg = int(max_config.get("urology_max", num_days))
+    except Exception:
+        urology_max_cfg = num_days
+    if urology_min_cfg < 0:
+        urology_min_cfg = 0
+    if urology_max_cfg < urology_min_cfg:
+        urology_max_cfg = urology_min_cfg
+
+    # --- Per-day flag: a urology-only surgeon is on Urology this day. ---
+    # When this flag is true, we allow X[d, "1B"] to be -1 (1B is then clinically
+    # covered by 1A on that same day). When false, 1B must be filled. This applies
+    # to all days, including weekends/PH.
+    uro_only_on_d_var = {}
+    for d in range(num_days):
+        u_only = model.NewBoolVar(f"uro_only_on_d_{d}")
+        if urology_only_ids:
+            # u_only == sum(indicators[d, Urology, sid] for sid in urology_only_ids)
+            # Indicators are mutually exclusive for X[d, "Urology"] so the sum is 0/1.
+            add_named_constraint(
+                f"Urology-only on Urology indicator: Day {days[d]}",
+                model.Add,
+                u_only == sum(indicators[(d, "Urology", sid)] for sid in urology_only_ids),
+            )
+        else:
+            add_named_constraint(
+                f"Urology-only on Urology indicator (none) Day {days[d]}",
+                model.Add, u_only == 0,
+            )
+        uro_only_on_d_var[d] = u_only
+
+    # --- Rule: 1B may be empty only when a urology-only surgeon is on Urology. ---
+    for d in range(num_days):
+        b_1b_empty = model.NewBoolVar(f"1b_empty_d_{d}")
+        add_named_constraint(
+            f"1B empty indicator: Day {days[d]} 1B == -1",
+            model.Add, X[(d, "1B")] == -1,
+        ).OnlyEnforceIf(b_1b_empty)
+        add_named_constraint(
+            f"1B empty indicator: Day {days[d]} 1B != -1",
+            model.Add, X[(d, "1B")] != -1,
+        ).OnlyEnforceIf(b_1b_empty.Not())
+        # If 1B is empty on day d, then a urology-only surgeon must be on Urology that day.
+        add_named_constraint(
+            f"1B may be empty only if urology-only on Urology: Day {days[d]}",
+            model.AddImplication, b_1b_empty, uro_only_on_d_var[d],
+        )
+
+    if urology_only_ids:
+        for s_id in urology_only_ids:
+            uro_count = model.NewIntVar(0, num_days, f"urology_count_{s_id}")
+            add_named_constraint(
+                f"Urology-only count for surgeon {s_id}",
+                model.Add,
+                uro_count == sum(indicators[(d, "Urology", s_id)] for d in range(num_days)),
+            )
+            if urology_max_cfg < num_days:
+                add_named_constraint(
+                    f"Max Urology calls for surgeon {s_id}",
+                    model.Add, uro_count <= urology_max_cfg,
+                )
+            if urology_min_cfg > 0:
+                add_named_constraint(
+                    f"Min Urology calls for surgeon {s_id}",
+                    model.Add, uro_count >= urology_min_cfg,
+                )
+
+    if enable_l2g1_primary_calls and group1_ids and urology_only_ids:
+        for d in range(num_days):
+            for s in group1_ids:
+                for u in urology_only_ids:
+                    add_named_constraint(
+                        f"L2G1 on 1A forbids urology-only on 1B: Day {days[d]} 1A={s} 1B!={u}",
+                        model.Add,
+                        X[(d, "1B")] != u,
+                    ).OnlyEnforceIf(indicators[(d, "1A", s)])
+
+    # #region agent log
+    try:
+        _weekend_ph_days = []
+        for _d, _day_str in enumerate(days):
+            _dt = datetime.datetime.strptime(_day_str, "%Y-%m-%d").date()
+            if _dt.weekday() >= 5 or (public_holidays and _day_str in public_holidays):
+                _weekend_ph_days.append(_day_str)
+        _debug_log(
+            "scheduler.py:urology-constraints",
+            "Urology mirror + min/max constraints installed",
+            {
+                "urology_ids": urology_ids,
+                "urology_only_ids": urology_only_ids,
+                "urology_and_1b_ids": urology_and_1b_ids,
+                "urology_min_cfg": urology_min_cfg,
+                "urology_max_cfg": urology_max_cfg,
+                "num_urology_only": len(urology_only_ids),
+                "num_urology_and_1b": len(urology_and_1b_ids),
+                "num_weekend_ph_days": len(_weekend_ph_days),
+                "weekend_ph_days": _weekend_ph_days,
+                "num_days": num_days,
+                "max_constraint_applied": urology_max_cfg < num_days,
+                "min_constraint_applied": urology_min_cfg > 0,
+            },
+            hypothesis="H1,H3,H5",
+        )
+    except Exception as _e:
+        _debug_log("scheduler.py:urology-constraints", "log-error", {"err": str(_e)}, hypothesis="H1,H3")
+    # #endregion
+
     # --- At most one 2B‐shift per Group 4 surgeon over the entire schedule ---
     if enable_max_2B_group4:
         for s in group4_ids:
@@ -726,22 +960,22 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
 
     if enable_l2g1_primary_calls and group1_ids:
         try:
-            max_l2g1_1ab = int(max_config.get("l2g1_1ab", 4))
+            max_l2g1_1a = int(max_config.get("l2g1_1a", max_config.get("l2g1_1ab", 4)))
         except Exception:
-            max_l2g1_1ab = 4
-        if max_l2g1_1ab < 0:
-            max_l2g1_1ab = 0
+            max_l2g1_1a = 4
+        if max_l2g1_1a < 0:
+            max_l2g1_1a = 0
         for s_id in group1_ids:
-            c_l2g1 = model.NewIntVar(0, num_days * 2, f"count_l2g1_1ab_{s_id}")
+            c_l2g1 = model.NewIntVar(0, num_days, f"count_l2g1_1a_{s_id}")
             add_named_constraint(
-                f"L2G1 1A+1B count for surgeon {s_id}",
+                f"L2G1 1A count for surgeon {s_id}",
                 model.Add,
-                c_l2g1 == sum(indicators[(d, "1A", s_id)] + indicators[(d, "1B", s_id)] for d in range(num_days)),
+                c_l2g1 == sum(indicators[(d, "1A", s_id)] for d in range(num_days)),
             )
             add_named_constraint(
-                f"Max L2G1 1A+1B calls for surgeon {s_id}",
+                f"Max L2G1 1A calls for surgeon {s_id}",
                 model.Add,
-                c_l2g1 <= max_l2g1_1ab,
+                c_l2g1 <= max_l2g1_1a,
             )
 
     # --- Hard minimum total calls for NLTH surgeons ---
@@ -1249,7 +1483,7 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                 ).OnlyEnforceIf(b.Not())
                 empty_indicators.append(b)
 
-    l2g1_same_day_overlap_flags = []
+    l2g1_missing_2a_pair_flags = []
     if (
         enable_l2g1_primary_calls
         and enable_l2g1_primary_2a_same_day_penalty
@@ -1257,27 +1491,24 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
         and group1_ids
     ):
         for d in range(num_days):
-            ors_1ab = []
-            for sid in group1_ids:
-                ors_1ab.append(indicators[(d, "1A", sid)])
-                ors_1ab.append(indicators[(d, "1B", sid)])
+            ors_1a = [indicators[(d, "1A", sid)] for sid in group1_ids]
             ors_2a = [indicators[(d, "2A", sid)] for sid in group1_ids]
-            any_1ab = model.NewBoolVar(f"l2g1_any_1ab_d{d}")
+            any_1a = model.NewBoolVar(f"l2g1_any_1a_d{d}")
             any_2a = model.NewBoolVar(f"l2g1_any_2a_d{d}")
-            overlap_d = model.NewBoolVar(f"l2g1_grp_overlap_d{d}")
-            add_named_constraint(f"L2G1 any 1A/1B on {days[d]}", model.AddMaxEquality, any_1ab, ors_1ab)
+            missing_pair_d = model.NewBoolVar(f"l2g1_missing_2a_pair_d{d}")
+            add_named_constraint(f"L2G1 any 1A on {days[d]}", model.AddMaxEquality, any_1a, ors_1a)
             add_named_constraint(f"L2G1 any 2A on {days[d]}", model.AddMaxEquality, any_2a, ors_2a)
             add_named_constraint(
-                f"L2G1 group overlap on {days[d]}",
+                f"L2G1 missing 2A pair on {days[d]}",
                 model.AddBoolAnd,
-                [any_1ab, any_2a],
-            ).OnlyEnforceIf(overlap_d)
+                [any_1a, any_2a.Not()],
+            ).OnlyEnforceIf(missing_pair_d)
             add_named_constraint(
-                f"L2G1 group overlap off {days[d]}",
+                f"L2G1 has 2A pair on {days[d]}",
                 model.AddBoolOr,
-                [any_1ab.Not(), any_2a.Not()],
-            ).OnlyEnforceIf(overlap_d.Not())
-            l2g1_same_day_overlap_flags.append(overlap_d)
+                [any_1a.Not(), any_2a],
+            ).OnlyEnforceIf(missing_pair_d.Not())
+            l2g1_missing_2a_pair_flags.append(missing_pair_d)
 
     objective_terms = []
     # Remove overall fairness term; use per-group fairness instead
@@ -1297,8 +1528,8 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
     if enable_weekend_team_diversity and unique_presence_vars:
         # maximize unique teams per weekend day by minimizing negative sum
         objective_terms.append(- gamma_weekend_team_diversity * sum(unique_presence_vars))
-    if l2g1_same_day_overlap_flags:
-        objective_terms.append(gamma_l2g1_primary_2a_same_day * sum(l2g1_same_day_overlap_flags))
+    if l2g1_missing_2a_pair_flags:
+        objective_terms.append(gamma_l2g1_primary_2a_same_day * sum(l2g1_missing_2a_pair_flags))
     # team day preferences
     if enable_team_day_prefs and td_terms:
         objective_terms += [- coef * b for coef, b in td_terms]
@@ -1365,6 +1596,20 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
         add_named_constraint("Objective pass0 empty count", model.Minimize, empty_count_expr)
         solver_empty = _build_solver()
         status_empty = solver_empty.Solve(model)
+        # #region agent log
+        _debug_log(
+            "scheduler.py:pass0-empty-count",
+            "allow_empty pass0 solve status",
+            {
+                "status": int(status_empty),
+                "status_str": solver_empty.StatusName(status_empty),
+                "best_empty_count": int(solver_empty.Value(empty_count_expr)) if status_empty in (cp_model.OPTIMAL, cp_model.FEASIBLE) else None,
+                "allow_empty": allow_empty,
+                "relax_fairness_caps": _relax_fairness_caps,
+            },
+            hypothesis="H1,H4",
+        )
+        # #endregion
         if status_empty in (cp_model.OPTIMAL, cp_model.FEASIBLE):
             best_empty_count = int(solver_empty.Value(empty_count_expr))
             add_named_constraint("Lock pass0 empty count", model.Add, empty_count_expr <= best_empty_count)
@@ -1377,6 +1622,30 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
             solver, status = solver_empty, status_empty
     else:
         solver, status = _solve_secondary_objective()
+    # #region agent log
+    try:
+        _empty_by_level = {}
+        if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+            for _lvl in all_levels:
+                _empty_by_level[_lvl] = sum(1 for _d in range(num_days) if solver.Value(X[(_d, _lvl)]) == -1)
+        _debug_log(
+            "scheduler.py:final-solve-status",
+            "Final solve status and empty counts",
+            {
+                "status": int(status),
+                "status_str": solver.StatusName(status) if hasattr(solver, 'StatusName') else str(status),
+                "allow_empty": allow_empty,
+                "relax_fairness_caps": _relax_fairness_caps,
+                "diagnostic_run": _diagnostic_run,
+                "solver_mode_used": solver_mode_used,
+                "num_days": num_days,
+                "empty_counts_by_level": _empty_by_level,
+            },
+            hypothesis="H1,H3,H4,H5",
+        )
+    except Exception as _e:
+        _debug_log("scheduler.py:final-solve-status", "log-error", {"err": str(_e)}, hypothesis="H1")
+    # #endregion
     if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         solution = {
             days[d]: {
@@ -1384,9 +1653,33 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                 for level in all_levels
             } for d in range(num_days)
         }
+        # Display-level mirror: when a urology-only surgeon is on Urology, the 1B
+        # slot is left empty by the solver but is shown as the 1A surgeon (who
+        # clinically covers 1B duty that day). The solver-side 1A+1B fairness
+        # cohort is unaffected because we don't add a 1B indicator for that day.
+        for d in range(num_days):
+            try:
+                if solver.Value(uro_only_on_d_var[d]) == 1:
+                    solution[days[d]]["1B"] = solution[days[d]]["1A"]
+            except Exception:
+                pass
         solution["__solver_mode__"] = solver_mode_used
         return solution, solver.ObjectiveValue()
     else:
+        # #region agent log
+        _debug_log(
+            "scheduler.py:infeasible-entered",
+            "Solver infeasible, considering auto-relax fallback",
+            {
+                "enable_fairness_hard_cap": enable_fairness_hard_cap,
+                "fairness_fallback_policy": fairness_fallback_policy,
+                "_diagnostic_run": _diagnostic_run,
+                "_relax_fairness_caps": _relax_fairness_caps,
+                "allow_empty": allow_empty,
+            },
+            hypothesis="H1,H3,H5",
+        )
+        # #endregion
         # Strict fairness-cap first with optional auto-relax fallback.
         if (
             enable_fairness_hard_cap

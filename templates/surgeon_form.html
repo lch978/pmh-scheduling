@@ -85,13 +85,16 @@
     <div style="margin-bottom:18px;">
       <label>Call Levels</label>
       <div class="checkbox-grid">
-        {% for lvl in ['1A','1B','2A','2B','3','4'] %}
+        {% for lvl in ['1A','1B','Urology','2A','2B','3','4'] %}
           <label>
             <input type="checkbox" name="call_levels" value="{{ lvl }}" {% if lvl in surgeon.call_levels.split(',') %}checked{% endif %}>
             {{ lvl }}
           </label>
         {% endfor %}
       </div>
+      <p style="margin:6px 0 0;font-size:12px;color:#666;">
+        Urology may be combined with 1A and/or 1B only. Other levels selected together with Urology will be ignored on save.
+      </p>
     </div>
 
     <div style="margin-bottom:18px;">

@@ -10,7 +10,7 @@ import scheduler
 
 
 def _run_solver_with_overrides(*, days, surgeons, preassignments, availability, config, max_calls_config=None):
-    mc = max_calls_config if max_calls_config is not None else {"1": 10, "2": 10, "3": 10, "4": 10, "l2g1_1ab": 4}
+    mc = max_calls_config if max_calls_config is not None else {"1": 10, "2": 10, "3": 10, "4": 10, "l2g1_1a": 4}
     with patch.object(helper, "get_global_config", return_value=config), \
          patch.object(helper, "get_max_calls_config", return_value=mc), \
          patch.object(helper, "get_availability_requests", return_value=availability), \
@@ -78,8 +78,8 @@ def _base_config():
 
 
 class SchedulerFairnessCreditTests(unittest.TestCase):
-    def test_l2g1_primary_monthly_cap_conflicts_with_two_preassigned_1ab(self):
-        """L2G1 on 1A/1B when enabled: combined 1A+1B per month capped by l2g1_1ab."""
+    def test_l2g1_primary_monthly_cap_conflicts_with_two_preassigned_1a(self):
+        """L2G1 on 1A when enabled: 1A per month capped by l2g1_1a."""
         days = ["2026-06-01", "2026-06-02"]
         surgeons = [
             {"id": 1, "name": "PrimaryAB", "call_levels": "1A,1B", "nlth": False, "team": "Team 1"},
@@ -96,7 +96,7 @@ class SchedulerFairnessCreditTests(unittest.TestCase):
         cfg["enable_l2g1_primary_2a_same_day_penalty"] = "0"
         preassignments = {
             days[0]: {"1A": 2},
-            days[1]: {"1B": 2},
+            days[1]: {"1A": 2},
         }
         sched, _ = _run_solver_with_overrides(
             days=days,
@@ -104,12 +104,12 @@ class SchedulerFairnessCreditTests(unittest.TestCase):
             preassignments=preassignments,
             availability={},
             config=cfg,
-            max_calls_config={"1": 10, "2": 10, "3": 10, "4": 10, "l2g1_1ab": 1},
+            max_calls_config={"1": 10, "2": 10, "3": 10, "4": 10, "l2g1_1a": 1},
         )
         self.assertIsInstance(sched, dict)
         self.assertIn("errors", sched)
 
-    def test_l2g1_primary_single_1ab_preassignment_feasible(self):
+    def test_l2g1_primary_single_1a_preassignment_feasible(self):
         days = ["2026-06-01"]
         surgeons = [
             {"id": 1, "name": "PrimaryAB", "call_levels": "1A,1B", "nlth": False, "team": "Team 1"},
@@ -131,11 +131,69 @@ class SchedulerFairnessCreditTests(unittest.TestCase):
             preassignments=preassignments,
             availability={},
             config=cfg,
-            max_calls_config={"1": 10, "2": 10, "3": 10, "4": 10, "l2g1_1ab": 1},
+            max_calls_config={"1": 10, "2": 10, "3": 10, "4": 10, "l2g1_1a": 1},
         )
         self.assertIsInstance(sched, dict)
         self.assertNotIn("errors", sched)
         self.assertEqual(sched.get(days[0], {}).get("1A"), "L2G1Only")
+
+    def test_l2g1_on_1a_forbids_urology_only_on_1b(self):
+        days = ["2026-06-07"]
+        surgeons = [
+            {"id": 1, "name": "PrimaryAB", "call_levels": "1A,1B", "nlth": False, "team": "Team 1"},
+            {"id": 2, "name": "L2G1A", "call_levels": "2A", "nlth": False, "team": "Team 2"},
+            {"id": 3, "name": "L2G1B", "call_levels": "2A", "nlth": False, "team": "Team 3"},
+            {"id": 4, "name": "UroOnly", "call_levels": "Urology", "nlth": False, "team": "Team 4"},
+            {"id": 5, "name": "Super2B", "call_levels": "2B", "nlth": False, "team": "Team 1"},
+            {"id": 6, "name": "Third", "call_levels": "3", "nlth": False, "team": "Team 2"},
+        ]
+        cfg = _base_config()
+        cfg["enable_l2g1_primary_calls"] = "1"
+        cfg["enable_fairness_hard_cap"] = "0"
+        cfg["enable_force_1B_weekend"] = "0"
+        cfg["enable_l2g1_primary_2a_same_day_penalty"] = "0"
+        preassignments = {days[0]: {"1A": 2, "1B": 4, "Urology": 4}}
+        sched, _ = _run_solver_with_overrides(
+            days=days,
+            surgeons=surgeons,
+            preassignments=preassignments,
+            availability={},
+            config=cfg,
+            max_calls_config={"1": 10, "2": 10, "3": 10, "4": 10, "l2g1_1a": 4, "urology_min": 0, "urology_max": 10},
+        )
+        self.assertIsInstance(sched, dict)
+        self.assertIn("errors", sched)
+
+    def test_l2g1_on_1a_prefers_another_l2g1_on_2a(self):
+        days = ["2026-06-01"]
+        surgeons = [
+            {"id": 1, "name": "PrimaryAB", "call_levels": "1A,1B", "nlth": False, "team": "Team 1"},
+            {"id": 2, "name": "L2G1A", "call_levels": "2A", "nlth": False, "team": "Team 2"},
+            {"id": 3, "name": "L2G1B", "call_levels": "2A", "nlth": False, "team": "Team 3"},
+            {"id": 4, "name": "L2G2", "call_levels": "2A,2B", "nlth": False, "team": "Team 4"},
+            {"id": 5, "name": "Super2B", "call_levels": "2B", "nlth": False, "team": "Team 1"},
+            {"id": 6, "name": "Third", "call_levels": "3", "nlth": False, "team": "Team 2"},
+        ]
+        cfg = _base_config()
+        cfg["enable_l2g1_primary_calls"] = "1"
+        cfg["enable_fairness_hard_cap"] = "0"
+        cfg["enable_force_1B_weekend"] = "0"
+        cfg["enable_l2g1_primary_2a_same_day_penalty"] = "1"
+        cfg["gamma_l2g1_primary_2a_same_day"] = "10000"
+        preassignments = {days[0]: {"1A": 2}}
+        sched, _ = _run_solver_with_overrides(
+            days=days,
+            surgeons=surgeons,
+            preassignments=preassignments,
+            availability={},
+            config=cfg,
+            max_calls_config={"1": 10, "2": 10, "3": 10, "4": 10, "l2g1_1a": 4},
+        )
+        self.assertIsInstance(sched, dict)
+        self.assertNotIn("errors", sched)
+        day_assign = sched.get(days[0], {})
+        self.assertEqual(day_assign.get("1A"), "L2G1A")
+        self.assertIn(day_assign.get("2A"), ("L2G1B", "L2G1A"))
 
     def test_l2_group_cap_auto_relax_returns_schedule_when_strict_is_infeasible(self):
         days = ["2026-03-02", "2026-03-03", "2026-03-04", "2026-03-05"]

@@ -318,7 +318,7 @@ def init_db():
             db.execute(insert_gc, {"key": key, "value": val})
 
         # ── 3) Seed max_calls_config defaults ──
-        max_defaults = {"1": 10, "2": 10, "3": 10, "4": 10, "l2g1_1ab": 4}
+        max_defaults = {"1": 10, "2": 10, "3": 10, "4": 10, "l2g1_1ab": 4, "l2g1_1a": 4, "urology_min": 2, "urology_max": 6}
         insert_mc = text("""
             INSERT INTO max_calls_config (level_group, max_calls)
             VALUES (:group, :max_calls)
@@ -883,7 +883,7 @@ def get_horizon_prior_levels_and_credit(year: int, month: int, surgeons: list):
 
     id_by_name = {s["name"]: s["id"] for s in surgeons}
     all_ids = [s["id"] for s in surgeons]
-    levels = ["1A","1B","2A","2B","3","4"]
+    levels = ["1A","1B","Urology","2A","2B","3","4"]
     prior_levels = {L: {sid: 0 for sid in all_ids} for L in levels}
 
     # Determine half-year window
@@ -985,7 +985,7 @@ def build_half_year_cohort_summary(year: int, month: int, surgeons: list | None 
     if surgeons is None:
         surgeons = get_all_surgeons()
 
-    levels = ["1A", "1B", "2A", "2B", "3", "4"]
+    levels = ["1A", "1B", "Urology", "2A", "2B", "3", "4"]
     months = get_half_year_months_before(month)
     id_by_name = {s.get("name"): s.get("id") for s in surgeons if s.get("name")}
     counts_by_sid = {int(s["id"]): {L: 0 for L in levels} for s in surgeons if s.get("id") is not None}

@@ -72,17 +72,18 @@
                 {% set rank = 99 %}
                 {% if '1A' in lvls %}{% set rank = 1 %}
                 {% elif '1B' in lvls %}{% set rank = 2 %}
-                {% elif '2A' in lvls %}{% set rank = 3 %}
-                {% elif '2B' in lvls %}{% set rank = 4 %}
-                {% elif '3' in lvls %}{% set rank = 5 %}
-                {% elif '4' in lvls %}{% set rank = 6 %}
+                {% elif 'Urology' in lvls %}{% set rank = 3 %}
+                {% elif '2A' in lvls %}{% set rank = 4 %}
+                {% elif '2B' in lvls %}{% set rank = 5 %}
+                {% elif '3' in lvls %}{% set rank = 6 %}
+                {% elif '4' in lvls %}{% set rank = 7 %}
                 {% endif %}
                 {% set name_sort = (s.name or '~')|lower %}
-                {% set col.items = col.items + [(rank, name_sort, s)] %}
+                {% set col.items = col.items + [(rank, name_sort, s.id, s)] %}
               {% endif %}
             {% endfor %}
 
-            {% for _, _, s in col.items | sort %}
+            {% for _, _, _, s in col.items | sort %}
               {% set s_levels = parse_call_levels(s.call_levels) %}
               <details class="sm-card">
                 <summary>
@@ -105,7 +106,7 @@
                     <input type="hidden" name="team_{{ s.id }}" value="{{ s.team or '' }}">
                     <input class="sm-name-input" type="text" name="name_{{ s.id }}" value="{{ s.name or '' }}" placeholder="Unnamed surgeon">
                     <div class="sm-levels">
-                      {% for level in ['1A','1B','2A','2B','3','4'] %}
+                      {% for level in ['1A','1B','Urology','2A','2B','3','4'] %}
                         <label>
                           <input type="checkbox" name="call_levels_{{ s.id }}" value="{{ level }}" {% if level in s_levels %}checked{% endif %}>
                           {{ level }}

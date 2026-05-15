@@ -105,7 +105,7 @@
       <thead>
         <tr>
           <th>Date</th>
-          {% for level in ['1A','1B','2A','2B','3','4'] %}
+          {% for level in ['1A','1B','Urology','2A','2B','3','4'] %}
             <th>{{ level }}</th>
           {% endfor %}
         </tr>
@@ -117,8 +117,8 @@
         {% if day in public_holidays %}{% set _=classes.append('holiday') %}{% endif %}
         <tr class="{{ classes|join(' ') }}">
           <td>{{ day }}</td>
-          {% for level in ['1A','1B','2A','2B','3','4'] %}
-            {% set surgeon_name = assignments[level] if assignments[level] else '' %}
+          {% for level in ['1A','1B','Urology','2A','2B','3','4'] %}
+            {% set surgeon_name = assignments[level] if assignments.get(level) else '' %}
             <td class="schedule-cell-name" data-surgeon-name="{{ surgeon_name|trim }}">{{ surgeon_name }}</td>
           {% endfor %}
         </tr>

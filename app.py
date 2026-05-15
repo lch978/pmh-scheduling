@@ -1,6 +1,7 @@
 import random
 import math
 import datetime
+from functools import wraps
 import calendar
 import json
 import holidays
@@ -10,7 +11,6 @@ import os
 import io
 import pandas as pd
 from sqlalchemy import text
-from flask_basicauth import BasicAuth
 from dotenv import load_dotenv
 from helper import *
 from helper import save_prior_last_two as save_prior_last_two_db
@@ -18,6 +18,33 @@ from flask import Flask, render_template, request, redirect, url_for, flash, jso
 from flask_wtf import CSRFProtect
 from flask_wtf.csrf import generate_csrf
 from jinja2 import TemplateNotFound
+
+
+def sanitize_call_levels(call_levels_list):
+    """
+    Validate and sanitize a list of call-level strings.
+    - Strips empty / whitespace-only entries.
+    - Enforces the Urology rule: a surgeon may have 'Urology' only with
+      '1A' and/or '1B' (or alone). Any level outside {'1A','1B','Urology'}
+      alongside 'Urology' is dropped.
+    Returns a deduplicated list preserving canonical order.
+    """
+    canonical_order = ['1A', '1B', 'Urology', '2A', '2B', '3', '4']
+    cleaned = []
+    seen = set()
+    for raw in (call_levels_list or []):
+        token = str(raw or '').strip()
+        if not token or token in seen:
+            continue
+        cleaned.append(token)
+        seen.add(token)
+
+    if 'Urology' in seen:
+        allowed_with_urology = {'Urology', '1A', '1B'}
+        cleaned = [lvl for lvl in cleaned if lvl in allowed_with_urology]
+
+    cleaned.sort(key=lambda lvl: canonical_order.index(lvl) if lvl in canonical_order else 999)
+    return cleaned
 
 
 def coerce_json_column(value):
@@ -50,9 +77,7 @@ def create_app():
     # CSRF
     csrf = CSRFProtect(app)
 
-    # login for stuff
     load_dotenv()
-    basic_auth = BasicAuth(app)
     app.config['BASIC_AUTH_USERNAME'] = os.getenv('BASIC_AUTH_USERNAME')
     app.config['BASIC_AUTH_PASSWORD'] = os.getenv('BASIC_AUTH_PASSWORD')
 
@@ -137,13 +162,16 @@ def create_app():
         }
 
     def is_admin_authenticated():
-        if session.get('is_admin_logged_in'):
-            return True
-        auth = request.authorization
-        if auth and is_valid_admin_credentials(auth.username, auth.password):
-            session['is_admin_logged_in'] = True
-            return True
-        return False
+        return bool(session.get('is_admin_logged_in'))
+
+    def admin_required(f):
+        @wraps(f)
+        def wrapped(*args, **kwargs):
+            if not is_admin_authenticated():
+                next_url = request.full_path if request.query_string else request.path
+                return redirect(url_for('admin_login', next=next_url))
+            return f(*args, **kwargs)
+        return wrapped
     
     @app.after_request
     def set_security_headers(resp):
@@ -196,11 +224,11 @@ def create_app():
     #############################################
 
     @app.route('/surgeons')
-    @basic_auth.required
+    @admin_required
     def list_surgeons():
         surgeons = get_all_surgeons()
         if request.args.get('sort'):
-            level_order = {"1A": 1, "1B": 1, "2A": 2, "2B": 2, "3": 3, "4": 4}
+            level_order = {"1A": 1, "1B": 1, "Urology": 2, "2A": 3, "2B": 3, "3": 4, "4": 5}
             def get_lowest_level(s):
                 levels = parse_call_levels(s.get("call_levels", ""))
                 if not levels:
@@ -211,12 +239,12 @@ def create_app():
         return render_template('surgeons_list.html', surgeons=surgeons)
     
     @app.route('/surgeons/sort_by_team_then_level')
-    @basic_auth.required
+    @admin_required
     def list_surgeons_by_team_then_level():
         surgeons = get_all_surgeons()
 
         # same order you use elsewhere for levels
-        level_order = {"1A":1, "1B":1, "2A":2, "2B":2, "3":3, "4":4}
+        level_order = {"1A":1, "1B":1, "Urology":2, "2A":3, "2B":3, "3":4, "4":5}
         def lowest_level(s):
             levels = parse_call_levels(s.get("call_levels",""))
             if not levels:
@@ -233,11 +261,11 @@ def create_app():
         return render_template('surgeons_list.html', surgeons=surgeons)
 
     @app.route('/surgeons/add', methods=['GET', 'POST'])
-    @basic_auth.required
+    @admin_required
     def add_surgeon():
         if request.method == 'POST':
             name = request.form['name']
-            call_levels_list = request.form.getlist('call_levels')
+            call_levels_list = sanitize_call_levels(request.form.getlist('call_levels'))
             call_levels = ','.join(call_levels_list)
             team  = request.form['team']
             try:
@@ -283,7 +311,7 @@ def create_app():
         return render_template('surgeon_form.html', surgeon=default_surgeon, action="Add")
 
     @app.route('/surgeons/add_quick', methods=['POST'])
-    @basic_auth.required
+    @admin_required
     def add_surgeon_quick():
         team = (request.form.get('team') or '').strip()
         if team == "__UNASSIGNED__":
@@ -309,13 +337,13 @@ def create_app():
         flash(f"Added a new blank surgeon to {(team or 'Unassigned')}.", "success")
         return redirect(url_for('list_surgeons'))
     @app.route('/surgeons/edit/<int:surgeon_id>', methods=['GET', 'POST'])
-    @basic_auth.required
+    @admin_required
     def edit_surgeon(surgeon_id):
         db = get_db()
         if request.method == 'POST':
             try:
                 name = request.form.get('name', '').strip()
-                call_levels_list = request.form.getlist('call_levels')
+                call_levels_list = sanitize_call_levels(request.form.getlist('call_levels'))
                 call_levels = ','.join(call_levels_list)
                 team = request.form.get('team', '')
                 try:
@@ -369,10 +397,10 @@ def create_app():
         return render_template('surgeon_form.html', surgeon=surgeon, action="Edit")
 
     @app.route('/surgeons/update/<int:surgeon_id>', methods=['POST'])
-    @basic_auth.required
+    @admin_required
     def update_surgeon_inline(surgeon_id):
         name = request.form['name']
-        call_levels_list = request.form.getlist('call_levels')
+        call_levels_list = sanitize_call_levels(request.form.getlist('call_levels'))
         call_levels = ','.join(call_levels_list)
         team = request.form['team']
         try:
@@ -413,7 +441,7 @@ def create_app():
             return redirect(url_for('list_surgeons'))
 
     @app.route('/update_all_surgeons', methods=['POST'])
-    @basic_auth.required
+    @admin_required
     def update_all_surgeons():
         db = get_db()
         # Prepare a single text‐Clause for performance
@@ -438,7 +466,7 @@ def create_app():
                     team_field = f"team_{sid}"
 
                     new_name   = request.form.get(name_field, surgeon['name'])
-                    new_levels = request.form.getlist(levels_field)
+                    new_levels = sanitize_call_levels(request.form.getlist(levels_field))
                     new_levels_str = ",".join(new_levels)
                     new_team = request.form.get(team_field) or ""
 
@@ -467,21 +495,37 @@ def create_app():
     #############################################
 
     @app.route('/config_max_calls', methods=['GET', 'POST'])
-    @basic_auth.required
+    @admin_required
     def config_max_calls():
         if request.method == 'POST':
+            try:
+                urology_min_val = int(request.form.get("urology_min", 2))
+            except Exception:
+                urology_min_val = 2
+            try:
+                urology_max_val = int(request.form.get("urology_max", 6))
+            except Exception:
+                urology_max_val = 6
+            urology_min_val = max(0, urology_min_val)
+            urology_max_val = max(0, urology_max_val)
+            if urology_max_val < urology_min_val:
+                urology_max_val = urology_min_val
             new_config = {
                 "1": int(request.form.get("group_1", 10)),
                 "2": int(request.form.get("group_2", 10)),
                 "3": int(request.form.get("group_3", 10)),
                 "4": int(request.form.get("group_4", 10)),
-                "l2g1_1ab": int(request.form.get("group_l2g1_1ab", 4)),
+                "l2g1_1a": int(request.form.get("group_l2g1_1a", 4)),
+                "urology_min": urology_min_val,
+                "urology_max": urology_max_val,
             }
             update_max_calls_config(new_config)
             flash("Maximum calls configuration updated successfully!")
             return redirect(url_for('config_max_calls'))
         config = get_max_calls_config()
-        config.setdefault("l2g1_1ab", 4)
+        config.setdefault("l2g1_1a", config.get("l2g1_1ab", 4))
+        config.setdefault("urology_min", 2)
+        config.setdefault("urology_max", 6)
         return render_template('config_max_calls.html', config=config)
 
     #############################################
@@ -489,7 +533,7 @@ def create_app():
     #############################################
 
     @app.route('/global_config', methods=['GET', 'POST'])
-    @basic_auth.required
+    @admin_required
     def global_config_page():
         teams = ['Team 1','Team 2','Team 3','Team 4','Urology']
         if request.method == 'POST':
@@ -602,7 +646,7 @@ def create_app():
     #############################################
 
     @app.route('/constraint_weights', methods=['GET', 'POST'])
-    @basic_auth.required
+    @admin_required
     def constraint_weights():
         if request.method == 'POST':
             # Retrieve new weight values from the form.
@@ -744,7 +788,7 @@ def create_app():
                 })
 
     @app.route('/new_schedule', methods=['GET'])
-    @basic_auth.required
+    @admin_required
     def new_schedule():
         import datetime, calendar, json
         from scheduler import solve_schedule_or_tools
@@ -826,7 +870,7 @@ def create_app():
 
         def candidates_for(level: str):
             base = [s for s in surgeons if level in parse_call_levels(s.get("call_levels", ""))]
-            if _l2g1_primary and level in ("1A", "1B"):
+            if _l2g1_primary and level == "1A":
                 in_base = {s.get("id") for s in base}
                 for s in surgeons:
                     if get_level2_group(s) == 1 and s.get("id") is not None and s["id"] not in in_base:
@@ -834,7 +878,7 @@ def create_app():
                         in_base.add(s["id"])
             return base
 
-        candidates = {lvl: sorted(candidates_for(lvl), key=lambda s: s["name"]) for lvl in ["1A","1B","2A","2B","3","4"]}
+        candidates = {lvl: sorted(candidates_for(lvl), key=lambda s: s["name"]) for lvl in ["1A","1B","Urology","2A","2B","3","4"]}
         cohort_summary = build_half_year_cohort_summary(year_sel, month_sel, surgeons=surgeons)
         solver_mode_used = None
 
@@ -907,7 +951,7 @@ def create_app():
         )
 
     @app.route('/save_schedule', methods=['POST'])
-    @basic_auth.required
+    @admin_required
     def save_schedule():
         # 1) Figure out which month/year we’re saving
         year_str = request.form.get('year') or request.args.get('year')
@@ -999,7 +1043,7 @@ def create_app():
                             year=year_sel, month=month_sel)
 
     @app.route('/save_prior_last_two', methods=['POST'])
-    @basic_auth.required
+    @admin_required
     def save_prior_last_two():
         data = request.get_json()
         try:
@@ -1019,7 +1063,7 @@ def create_app():
         return jsonify({'ok': True})
 
     @app.route('/save_surgeon_call_credits', methods=['POST'])
-    @basic_auth.required
+    @admin_required
     def save_surgeon_call_credits():
         data = request.get_json() or {}
         raw_credits = data.get("credits") or {}
@@ -1064,7 +1108,7 @@ def create_app():
         return jsonify({"ok": True, "updated": len(payload)})
 
     @app.route('/export_schedule', methods=['POST'])
-    @basic_auth.required
+    @admin_required
     def export_schedule():
         year = int(request.form['year'])
         month = int(request.form['month'])
@@ -1082,11 +1126,14 @@ def create_app():
             .rename_axis('Date')
             .reset_index()
         )
-        cols = ['Date','1A','1B','2A','2B','3','4']
+        cols = ['Date','1A','1B','Urology','2A','2B','3','4']
+        for c in cols:
+            if c not in df_sched.columns:
+                df_sched[c] = None
         df_sched = df_sched[cols]
 
         # 3) Compute per-surgeon stats
-        level_ranks = {"1A":1,"1B":1,"2A":2,"2B":3,"3":4,"4":5}
+        level_ranks = {"1A":1,"1B":1,"Urology":2,"2A":3,"2B":4,"3":5,"4":6}
         stats = {}
         weekend = set(d for d in schedule if datetime.date.fromisoformat(d).weekday() >= 5)
         for date, assigns in schedule.items():
@@ -1124,7 +1171,7 @@ def create_app():
             else:
                 hy_months = list(range(7, month + 1))
             # Aggregate level counts per surgeon name
-            levels = ["1A","1B","2A","2B","3","4"]
+            levels = ["1A","1B","Urology","2A","2B","3","4"]
             hy_level_counts = {}
             def add_count(nm, lvl):
                 if not nm:
@@ -1576,7 +1623,7 @@ def create_app():
     #############################################
 
     @app.route('/export_requests', methods=['POST'])
-    @basic_auth.required
+    @admin_required
     def export_requests():
         try:
             year = int(request.form.get("year"))
@@ -1598,7 +1645,7 @@ def create_app():
         weekend_idx = {d.day for d in days if d.weekday() >= 5}
 
         all_surgeons = get_all_surgeons()
-        level_rank = {"1A": 1, "1B": 1, "2A": 2, "2B": 3, "3": 4, "4": 5}
+        level_rank = {"1A": 1, "1B": 1, "Urology": 2, "2A": 3, "2B": 4, "3": 5, "4": 6}
 
         def get_call_rank(call_levels):
             levels = parse_call_levels(call_levels or "")
@@ -1832,7 +1879,7 @@ def create_app():
         )
 
     @app.route('/eligible_for_day')
-    @basic_auth.required
+    @admin_required
     def eligible_for_day():
         # Return per-level eligible candidate lists for the given date based on availability/no_call only
         day = request.args.get('day')
@@ -1845,7 +1892,7 @@ def create_app():
         # parse levels
         def has_level(s, lvl):
             return lvl in parse_call_levels(s.get('call_levels',''))
-        result = {lvl: [] for lvl in ["1A","1B","2A","2B","3","4"]}
+        result = {lvl: [] for lvl in ["1A","1B","Urology","2A","2B","3","4"]}
         for lvl in result.keys():
             for s in surgeons:
                 if not has_level(s, lvl):
@@ -1869,7 +1916,7 @@ def create_app():
         return jsonify(result)
 
     @app.route('/eligible_for_month')
-    @basic_auth.required
+    @admin_required
     def eligible_for_month():
         try:
             year = int(request.args.get('year'))
@@ -1900,7 +1947,7 @@ def create_app():
         # Precompute level eligibility per surgeon
         def has_level(s, lvl):
             return lvl in parse_call_levels(s.get('call_levels',''))
-        levels = ["1A","1B","2A","2B","3","4"]
+        levels = ["1A","1B","Urology","2A","2B","3","4"]
         base_by_level = {lvl: [s for s in surgeons if has_level(s, lvl)] for lvl in levels}
         # Build response map
         res = {}
@@ -1917,7 +1964,7 @@ def create_app():
 
     # Provide surgeon id/name lookup for UI reconciliation
     @app.route('/surgeons_lookup')
-    @basic_auth.required
+    @admin_required
     def surgeons_lookup():
         surgeons = get_all_surgeons()
         by_id = {int(s['id']): s['name'] for s in surgeons}
@@ -1925,7 +1972,7 @@ def create_app():
         return jsonify({"by_id": by_id, "by_name": by_name})
 
     @app.route('/edit_month_data')
-    @basic_auth.required
+    @admin_required
     def edit_month_data():
         """Comprehensive data for the edit/publish page: eligibility, availability details, surgeon list, prior-month carry-over."""
         try:
@@ -2014,7 +2061,7 @@ def create_app():
     #############################################
 
     @app.route('/surgeons/delete/<int:surgeon_id>', methods=['POST'])
-    @basic_auth.required
+    @admin_required
     def delete_surgeon(surgeon_id):
         db = get_db()
         with db.begin():
@@ -2037,7 +2084,7 @@ def create_app():
     #############################################
 
     @app.route('/stats', methods=['GET'])
-    @basic_auth.required
+    @admin_required
     def stats():
         import datetime
         # Get the start and end period from query parameters.
@@ -2072,10 +2119,11 @@ def create_app():
         level_ranks = {
             "1A": 1,
             "1B": 1,
-            "2A": 2,
-            "2B": 3,
-            "3": 4,
-            "4": 5
+            "Urology": 2,
+            "2A": 3,
+            "2B": 4,
+            "3": 5,
+            "4": 6
         }
         
         # Initialize dictionary to aggregate stats for each surgeon.
@@ -2140,7 +2188,7 @@ def create_app():
     #############################################
 
     @app.route('/edit_publish', methods=['GET'])
-    @basic_auth.required
+    @admin_required
     def edit_publish():
         try:
             # Default to next month when no params supplied
@@ -2160,7 +2208,7 @@ def create_app():
                     # build empty schedule for the month
                     import calendar as _cal
                     num_days = _cal.monthrange(year_sel, month_sel)[1]
-                    levels = ["1A","1B","2A","2B","3","4"]
+                    levels = ["1A","1B","Urology","2A","2B","3","4"]
                     data = { datetime.date(year_sel, month_sel, d).isoformat(): {lvl: None for lvl in levels} for d in range(1, num_days+1) }
                 
                 # Commit any implicit transaction from previous reads before starting the write block
@@ -2185,7 +2233,7 @@ def create_app():
             return f"Error in edit_publish: {e}", 500
 
     @app.route('/list_schedule_versions')
-    @basic_auth.required
+    @admin_required
     def list_schedule_versions():
         try:
             year = int(request.args.get('year'))
@@ -2201,7 +2249,7 @@ def create_app():
             if data is None:
                 import calendar as _cal
                 num_days = _cal.monthrange(year, month)[1]
-                levels = ["1A","1B","2A","2B","3","4"]
+                levels = ["1A","1B","Urology","2A","2B","3","4"]
                 data = { datetime.date(year, month, d).isoformat(): {lvl: None for lvl in levels} for d in range(1, num_days+1) }
             
             db.commit()
@@ -2226,7 +2274,7 @@ def create_app():
         })
 
     @app.route('/rename_schedule_version', methods=['POST'])
-    @basic_auth.required
+    @admin_required
     def rename_schedule_version():
         data = request.get_json() or {}
         try:
@@ -2253,7 +2301,7 @@ def create_app():
         return jsonify({"ok": True, "version": version, "version_name": version_name})
 
     @app.route('/publish_schedule_version', methods=['POST'])
-    @basic_auth.required
+    @admin_required
     def publish_schedule_version():
         data = request.get_json() or {}
         try:
@@ -2275,7 +2323,7 @@ def create_app():
         return jsonify({"ok": True})
 
     @app.route('/delete_schedule_version', methods=['POST'])
-    @basic_auth.required
+    @admin_required
     def delete_schedule_version():
         data = request.get_json() or {}
         try:
@@ -2292,7 +2340,7 @@ def create_app():
         return jsonify({"ok": True})
 
     @app.route('/load_schedule_version')
-    @basic_auth.required
+    @admin_required
     def load_schedule_version():
         try:
             year = int(request.args.get('year'))
@@ -2310,7 +2358,7 @@ def create_app():
         return jsonify({"schedule": data})
 
     @app.route('/preassignments_for_month')
-    @basic_auth.required
+    @admin_required
     def preassignments_for_month():
         try:
             year = int(request.args.get('year'))
@@ -2345,7 +2393,7 @@ def create_app():
         return jsonify(enriched)
 
     @app.route('/save_schedule_version', methods=['POST'])
-    @basic_auth.required
+    @admin_required
     def save_schedule_version():
         data = request.get_json()
         try:
@@ -2401,7 +2449,7 @@ def create_app():
         return jsonify({"version": next_ver, "version_name": final_name, "published": publish, "overwrote": overwrite_version is not None})
 
     @app.route('/save_schedule_version_form', methods=['POST'])
-    @basic_auth.required
+    @admin_required
     def save_schedule_version_form():
         try:
             year = int(request.form.get('year'))
@@ -2468,7 +2516,7 @@ def create_app():
 
     # --- Route to start a new solve job ---
     @app.route('/start_solve', methods=['POST'])
-    @basic_auth.required
+    @admin_required
     def start_solve():
         data = request.get_json()
         year, month = int(data['year']), int(data['month'])
@@ -2570,7 +2618,7 @@ def create_app():
 
     # --- Route to poll status of a job ---
     @app.route('/solve_status/<job_id>')
-    @basic_auth.required
+    @admin_required
     def solve_status(job_id):
         job = solve_jobs.get(job_id)
         if not job:
@@ -2595,7 +2643,7 @@ def create_app():
 
     # --- Route to cancel a running job ---
     @app.route('/cancel_solve/<job_id>', methods=['POST'])
-    @basic_auth.required
+    @admin_required
     def cancel_solve(job_id):
         job = solve_jobs.get(job_id)
         if job and job['status'] == 'running':
@@ -2609,7 +2657,7 @@ def create_app():
 # Preassignment
 #############################################
     @app.route('/preassignment', methods=['GET', 'POST'])
-    @basic_auth.required
+    @admin_required
     def preassignment():
         import calendar, datetime
         from helper import get_all_surgeons, parse_call_levels
@@ -2671,9 +2719,9 @@ def create_app():
             _gc_pre = get_global_config()
             _l2g1_pre = str(_gc_pre.get("enable_l2g1_primary_calls", "0")) == "1"
             candidates = {}
-            for level in ["1A", "1B", "2A", "2B", "3", "4"]:
+            for level in ["1A", "1B", "Urology", "2A", "2B", "3", "4"]:
                 candidate_options = [s for s in surgeons if level in parse_call_levels(s.get("call_levels", ""))]
-                if _l2g1_pre and level in ("1A", "1B"):
+                if _l2g1_pre and level == "1A":
                     have = {s.get("id") for s in candidate_options}
                     for s in surgeons:
                         if get_level2_group(s) == 1 and s.get("id") is not None and s["id"] not in have:
@@ -2696,7 +2744,7 @@ def create_app():
                 year=year,
                 month=month,
                 days=days,
-                levels=["1A", "1B", "2A", "2B", "3", "4"],
+                levels=["1A", "1B", "Urology", "2A", "2B", "3", "4"],
                 candidates=candidates,
                 preassignments=preassignments
             )

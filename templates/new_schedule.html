@@ -281,9 +281,9 @@
   <!-- Prior-month last two days assignment inputs -->
   <div style="margin: 20px 0; padding: 12px; border: 1px solid #ddd; border-radius: 6px;">
     <div style="margin-bottom: 12px; font-weight: bold;">Previous Month On-Call (for 3-day rule)</div>
-    <div style="display: grid; grid-template-columns: 180px repeat(6, 1fr); gap: 8px; align-items: center; margin-bottom: 8px;">
+    <div style="display: grid; grid-template-columns: 180px repeat(7, 1fr); gap: 8px; align-items: center; margin-bottom: 8px;">
       <div>{{ prev_day_minus_2 }} (2nd last day)</div>
-      {% for lev in ['1A','1B','2A','2B','3','4'] %}
+      {% for lev in ['1A','1B','Urology','2A','2B','3','4'] %}
         <select id="prev_m2_{{ lev }}" data-day="-2" data-level="{{ lev }}">
           <option value="">— {{ lev }} —</option>
           {% for s in candidates[lev] %}
@@ -292,9 +292,9 @@
         </select>
       {% endfor %}
     </div>
-    <div style="display: grid; grid-template-columns: 180px repeat(6, 1fr); gap: 8px; align-items: center;">
+    <div style="display: grid; grid-template-columns: 180px repeat(7, 1fr); gap: 8px; align-items: center;">
       <div>{{ prev_day_minus_1 }} (last day)</div>
-      {% for lev in ['1A','1B','2A','2B','3','4'] %}
+      {% for lev in ['1A','1B','Urology','2A','2B','3','4'] %}
         <select id="prev_m1_{{ lev }}" data-day="-1" data-level="{{ lev }}">
           <option value="">— {{ lev }} —</option>
           {% for s in candidates[lev] %}
@@ -460,7 +460,7 @@
         <thead>
           <tr>
             <th>Date</th>
-            {% for lev in ['1A','1B','2A','2B','3','4'] %}
+            {% for lev in ['1A','1B','Urology','2A','2B','3','4'] %}
               <th>{{ lev }}</th>
             {% endfor %}
           </tr>
@@ -474,7 +474,7 @@
             {% if day in public_holidays %}{% set _=classes.append('holiday') %}{% endif %}
             <tr class="{{ classes|join(' ') }}">
               <td>{{ day }}</td>
-              {% for lev in ['1A','1B','2A','2B','3','4'] %}
+              {% for lev in ['1A','1B','Urology','2A','2B','3','4'] %}
                 {% set cell_val = row[lev]|default('', true) %}
                 {% set is_empty_cell = (cell_val == '') %}
                 {% set should_highlight_empty = is_empty_cell and (lev != '2B' or row_2a == '') %}
@@ -674,7 +674,7 @@
       // rebuild HTML
       const container = document.getElementById('scheduleContainer');
       let html = '<div class="table-scroll table-mobile-compact sticky-first-col"><table class="schedule-table"><thead><tr><th>Date</th>'
-               + ['1A','1B','2A','2B','3','4']
+               + ['1A','1B','Urology','2A','2B','3','4']
                  .map(l=>`<th>${l}</th>`).join('')
                + '</tr></thead><tbody>';
       for (const day of dayKeys) {
@@ -684,7 +684,7 @@
         const row = (sol[day] && typeof sol[day] === 'object' && !Array.isArray(sol[day])) ? sol[day] : {};
         const val2A = row['2A'] != null && row['2A'] !== '' ? row['2A'] : '';
         html += `<tr class="${classes.join(' ')}"><td>${day}</td>`;
-        for (const lvl of ['1A','1B','2A','2B','3','4']) {
+        for (const lvl of ['1A','1B','Urology','2A','2B','3','4']) {
           const val = row[lvl] != null && row[lvl] !== '' ? row[lvl] : '';
           const isEmptyCell = val === '';
           const shouldHighlightEmpty = isEmptyCell && (lvl !== '2B' || val2A === '');
@@ -834,7 +834,7 @@
       const m = +document.getElementById('month').value;
       // collect prior-month selections
       const prior = { m2: {}, m1: {} };
-      for (const lev of ['1A','1B','2A','2B','3','4']) {
+      for (const lev of ['1A','1B','Urology','2A','2B','3','4']) {
         const v2 = document.getElementById(`prev_m2_${lev}`).value;
         const v1 = document.getElementById(`prev_m1_${lev}`).value;
         if (v2) prior.m2[lev] = parseInt(v2, 10);
@@ -873,7 +873,7 @@
       const y = +document.getElementById('year').value;
       const m = +document.getElementById('month').value;
       const m2 = {}, m1 = {};
-      for (const lev of ['1A','1B','2A','2B','3','4']) {
+      for (const lev of ['1A','1B','Urology','2A','2B','3','4']) {
         const v2 = document.getElementById(`prev_m2_${lev}`).value;
         const v1 = document.getElementById(`prev_m1_${lev}`).value;
         if (v2) m2[lev] = parseInt(v2, 10);
