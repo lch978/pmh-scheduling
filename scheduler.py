@@ -494,10 +494,19 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
         # 3) collect bans by *target* day (0-based)
         #    - anyone on day−2 bans target day 0
         #    - anyone on day−1 bans target days 0 and 1
+        #
+        # Compute target range from the ACTUAL date distance to the first
+        # scheduled day, not from the element's index in last_two.  If only
+        # one of the two days has on-call data, using the index would
+        # incorrectly treat day−1 as day−2 and miss banning day 1.
+        first_day = datetime.datetime.strptime(days[0], "%Y-%m-%d").date()
         ban_by_day = {}
-        for idx, pd in enumerate(last_two):
-            # idx = 0 → prev-day = −2, ban target days = [0]
-            # idx = 1 → prev-day = −1, ban target days = [0,1]
+        for pd in last_two:
+            distance = (first_day - pd).days  # 1 for day−1, 2 for day−2, …
+            if distance <= 0 or distance > 2:
+                continue  # outside the 3-day window
+            # ban target days 0 … (2 − distance) inclusive
+            max_target = 2 - distance  # 1 for day−1, 0 for day−2
             prev_str = pd.isoformat()
             for lvl in all_levels:
                 prev_name = prev_schedule.get(prev_str, {}).get(lvl)
@@ -505,7 +514,7 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                 if sid is None:
                     continue
 
-                for target in range(idx + 1):
+                for target in range(max_target + 1):
                     if target >= num_days:
                         break
                     ban_by_day.setdefault(target, set()).add(sid)

@@ -200,6 +200,11 @@
 <script>
 document.addEventListener('DOMContentLoaded', () => {
   const LEVELS = ['1A','1B','Urology','2A','2B','3','4'];
+  // 1B+Urology on the same surgeon/day is allowed (mirrored coverage; matches solver).
+  function isAllowedSameDayPair(lvl1, lvl2) {
+    const a = lvl1, b = lvl2;
+    return (a === '1B' && b === 'Urology') || (a === 'Urology' && b === '1B');
+  }
   const DAY_NAMES = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
   const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
@@ -745,6 +750,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const sid = sched[day][lvl];
         if (!sid) continue;
         if (seen[sid]) {
+          if (isAllowedSameDayPair(seen[sid], lvl)) continue;
           violations.push({ id:`sameday-${day}-${sid}`, type:'Same Day', severity:'hard',
             message:`${sname(sid)} assigned to both ${seen[sid]} and ${lvl} on ${formatDay(day)}`,
             cells:[{day,level:seen[sid]},{day,level:lvl}] });
