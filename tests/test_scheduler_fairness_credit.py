@@ -488,6 +488,35 @@ class HalfYearCohortSummaryTests(unittest.TestCase):
         self.assertEqual(by_name["Frank"]["status"], "below")
         self.assertEqual(by_name["Gina"]["status"], "above")
 
+    def test_same_surgeon_on_1a_and_1b_counts_once_in_g1(self):
+        """A surgeon shown in both 1A and 1B on the same published day counts as
+        one Level-1 call for the G1 (1A+1B) cohort, not two."""
+        surgeons = [
+            {"id": 1, "name": "Alice", "call_levels": "1A,1B", "nlth": False, "team": "Team 1"},
+            {"id": 2, "name": "Bob", "call_levels": "1A,1B", "nlth": False, "team": "Team 1"},
+        ]
+        # Day 1: Alice holds BOTH 1A and 1B (e.g. via the display mirror).
+        # Day 2: Bob on 1A, Alice on 1B (distinct surgeons).
+        month7 = {
+            "2026-07-01": {"1A": "Alice", "1B": "Alice"},
+            "2026-07-02": {"1A": "Bob", "1B": "Alice"},
+        }
+
+        def fake_published(year, month):
+            if year == 2026 and month == 7:
+                return month7
+            return None
+
+        with patch.object(helper, "get_published_schedule_version", side_effect=fake_published):
+            summary = helper.build_half_year_cohort_summary(2026, 8, surgeons=surgeons)
+
+        g1 = next(g for g in summary["groups"] if g["key"] == "g1")
+        by_name = {m["name"]: m for m in g1["members"]}
+        # Alice: day1 (1A+1B same day) -> 1, day2 (1B) -> 1 => 2 Level-1 days.
+        self.assertEqual(by_name["Alice"]["count"], 2)
+        # Bob: day2 (1A) -> 1.
+        self.assertEqual(by_name["Bob"]["count"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

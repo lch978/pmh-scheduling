@@ -5,10 +5,6 @@
   .schedule-container {
     max-width: 1000px;
     margin: auto;
-    background: #fff;
-    padding: 20px;
-    border-radius: 8px;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
   }
   .schedule-header {
     text-align: center;
@@ -18,28 +14,12 @@
     text-align: center;
     margin-bottom: 10px;
   }
-  .schedule-form select,
-  .schedule-form button {
-    padding: 8px 12px;
+  .schedule-form select {
     margin: 0 4px;
-    font-size: 14px;
   }
   .schedule-table {
-    width: 100%;
-    border-collapse: collapse;
     margin-top: 20px;
   }
-  .schedule-table th,
-  .schedule-table td {
-    border: 1px solid #ccc;
-    padding: 10px;
-    text-align: center;
-  }
-  .schedule-table th {
-    background-color: #f2f2f2;
-  }
-  .weekend { background-color: #f9f2f4; }
-  .holiday { background-color: #eef9ff; }
   .empty-assignment {
     background-color: #f8d7da;
     color: #8a1c26;
@@ -59,38 +39,7 @@
     text-align: center;
     margin-top: 10px;
   }
-  .button-group {
-    text-align: center;
-    margin-top: 20px;
-  }
-  .button-group button {
-    padding: 10px 15px;
-    font-size: 14px;
-    margin: 0 4px;
-    border: none;
-    border-radius: 4px;
-    background-color: #337ab7;
-    color: #fff;
-    cursor: pointer;
-    transition: background-color 0.3s;
-  }
-  .button-group button:hover {
-    background-color: #286090;
-  }
-  #btnExportRequests {
-    padding: 10px 15px;
-    font-size: 14px;
-    margin: 0 4px;
-    border: none;
-    border-radius: 4px;
-    background-color: #5cb85c;
-    color: #fff;
-    cursor: pointer;
-    transition: background-color 0.3s;
-  }
-  #btnExportRequests:hover {
-    background-color: #4cae4c;
-  }
+  .schedule-form .btn { margin: 5px; }
   .cohort-credit-panel {
     margin: 20px 0;
     padding: 16px;
@@ -274,9 +223,9 @@
 {% endblock %}
 
 {% block content %}
-<div class="schedule-container">
+<div class="card schedule-container">
   <div class="schedule-header">
-    <h1>Schedule for {{ year }}-{{ '%02d'|format(month) }}</h1>
+    <h1 class="page-title">Schedule for {{ year }}-{{ '%02d'|format(month) }}</h1>
   </div>
   <!-- Prior-month last two days assignment inputs -->
   <div style="margin: 20px 0; padding: 12px; border: 1px solid #ddd; border-radius: 6px;">
@@ -304,7 +253,7 @@
       {% endfor %}
     </div>
     <div style="margin-top: 12px; text-align: right;">
-      <button type="button" id="btnSavePrior" style="padding:8px 12px; font-size:14px; border:none; border-radius:4px; background-color:#5cb85c; color:#fff;">Save Prior On-Call</button>
+      <button type="button" id="btnSavePrior" class="btn btn-success">Save Prior On-Call</button>
     </div>
   </div>
   <div class="cohort-credit-panel">
@@ -319,8 +268,8 @@
       {% endif %}
     </div>
     <div class="credit-controls">
-      <button type="button" id="btnToggleCohortTable" style="padding:8px 12px; font-size:14px; border:none; border-radius:4px; background-color:#5f6b7a; color:#fff;">Show Cohort Tables</button>
-      <button type="button" id="btnSaveCredits" style="padding:8px 12px; font-size:14px; border:none; border-radius:4px; background-color:#337ab7; color:#fff;">Save Call Credits</button>
+      <button type="button" id="btnToggleCohortTable" class="btn btn-secondary">Show Cohort Tables</button>
+      <button type="button" id="btnSaveCredits" class="btn btn-primary">Save Call Credits</button>
     </div>
 
     <div id="cohortTablesWrap" class="cohort-tables-wrap hidden">
@@ -395,17 +344,16 @@
     </select>
   </div>
   <div style="margin-bottom: 10px;"></div>
-    <!-- All buttons are now inline and use the same styling -->
-    <button type="button" id="btnGenerate" style="padding:10px 15px; font-size:14px; margin: 5px;">Generate Schedule</button>
-    <button type="button" id="btnStop" disabled style="padding:10px 15px; font-size:14px; margin: 5px;">Stop</button>
+    <button type="button" id="btnGenerate" class="btn btn-primary">Generate Schedule</button>
+    <button type="button" id="btnStop" disabled class="btn btn-secondary">Stop</button>
     
     <form method="post" action="{{ url_for('save_schedule') }}" style="display:inline;">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="year" value="{{ year }}">
       <input type="hidden" name="month" value="{{ month }}">
       <input type="hidden" name="schedule_json" id="schedule_json">
-      <button type="submit" id="btnSave" style="padding:10px 15px; font-size:14px; margin:5px;">Save Current Schedule</button>
-      <button type="submit" id="btnSaveGoEditPublish" name="after_save" value="edit_publish" style="padding:10px 15px; font-size:14px; margin:5px; background-color:#4f46e5; color:#fff; border:none; border-radius:4px;">Save and Go to Edit/Publish</button>
+      <button type="submit" id="btnSave" class="btn btn-secondary">Save Current Schedule</button>
+      <button type="submit" id="btnSaveGoEditPublish" name="after_save" value="edit_publish" class="btn btn-primary">Save and Go to Edit/Publish</button>
     </form>
     
     <form method="post" action="{{ url_for('export_schedule') }}" style="display:inline;">
@@ -413,14 +361,14 @@
       <input type="hidden" name="year" value="{{ year }}">
       <input type="hidden" name="month" value="{{ month }}">
       <input type="hidden" name="schedule_json" id="export_schedule_json" value="">
-      <button type="submit" id="btnExport" style="padding:10px 15px; font-size:14px; margin:5px; background-color: rgb(0, 119, 255); color: #fff; border:none; border-radius:4px;">Download Schedule as Excel</button>
+      <button type="submit" id="btnExport" class="btn btn-success">Download Schedule as Excel</button>
     </form>
     
     <form method="post" action="{{ url_for('export_requests') }}" style="display:inline;">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="year" value="{{ year }}">
       <input type="hidden" name="month" value="{{ month }}">
-      <button type="submit" id="btnExportRequests" style="padding:10px 15px; font-size:14px; margin:5px;">Export Requests Matrix (Excel)</button>
+      <button type="submit" id="btnExportRequests" class="btn btn-success">Export Requests Matrix (Excel)</button>
     </form>
   </div>
 <div id="progress" style="text-align:center; margin-top:10px;">
@@ -456,7 +404,7 @@
   <div id="scheduleContainer">
     {% if schedule is mapping and schedule %}
       <div class="table-scroll table-mobile-compact sticky-first-col">
-      <table class="schedule-table">
+      <table class="data-table schedule-table">
         <thead>
           <tr>
             <th>Date</th>
@@ -486,7 +434,7 @@
       </table>
       </div>
     {% else %}
-      <p style="text-align:center; margin-top:20px;">No saved schedule yet.</p>
+      <p class="empty-state">No saved schedule yet.</p>
     {% endif %}
   </div>
   <div id="cohortMiniSummary" class="cohort-mini-summary"></div>
@@ -605,7 +553,8 @@
           key: 'g1',
           label: 'Group 1 (1A+1B)',
           members: nonNlth.filter(s => hasLevel(s, '1A') || hasLevel(s, '1B')),
-          countFn: (dayRow, sid, name) => (dayRow['1A'] === name ? 1 : 0) + (dayRow['1B'] === name ? 1 : 0),
+          // Same surgeon on both 1A and 1B the same day (e.g. urology mirror) counts once.
+          countFn: (dayRow, sid, name) => ((dayRow['1A'] === name || dayRow['1B'] === name) ? 1 : 0),
         },
         {
           key: 'g2',
@@ -673,7 +622,7 @@
       const dayKeys = Object.keys(sol).filter((k) => /^\d{4}-\d{2}-\d{2}$/.test(k));
       // rebuild HTML
       const container = document.getElementById('scheduleContainer');
-      let html = '<div class="table-scroll table-mobile-compact sticky-first-col"><table class="schedule-table"><thead><tr><th>Date</th>'
+      let html = '<div class="table-scroll table-mobile-compact sticky-first-col"><table class="data-table schedule-table"><thead><tr><th>Date</th>'
                + ['1A','1B','Urology','2A','2B','3','4']
                  .map(l=>`<th>${l}</th>`).join('')
                + '</tr></thead><tbody>';

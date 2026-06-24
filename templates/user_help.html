@@ -5,23 +5,22 @@
     .help-page {
       max-width: 720px;
       margin: 0 auto;
-      background: #fff;
-      border: 1px solid #e5e7eb;
-      border-radius: 10px;
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
       padding: 24px 28px;
       line-height: 1.55;
-      color: #1f2937;
+      color: var(--color-text);
     }
     .help-page h1 {
       font-size: 1.5rem;
       margin: 0 0 16px;
-      color: #111827;
     }
     .help-page h2 {
       font-size: 1.1rem;
       margin: 28px 0 10px;
-      color: #111827;
-      border-bottom: 1px solid #e5e7eb;
+      border-bottom: 1px solid var(--color-border);
       padding-bottom: 6px;
     }
     .help-page h2:first-of-type {
@@ -36,9 +35,6 @@
     }
     .help-page li {
       margin: 6px 0;
-    }
-    .help-page a {
-      color: #1d4ed8;
     }
   </style>
 {% endblock %}

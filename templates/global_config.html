@@ -4,27 +4,26 @@
 <style>
   .gc-wrap { max-width: 1180px; margin: 20px auto; }
   .gc-form { display: grid; grid-template-columns: minmax(280px, 360px) 1fr; gap: 18px; align-items: start; }
-  .gc-card { background: #fff; border: 1px solid #d8d8d8; border-radius: 10px; padding: 14px; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04); }
+  .gc-card { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius); padding: 14px; box-shadow: var(--shadow); }
   .gc-card h3 { margin: 0 0 10px; font-size: 16px; }
-  .gc-desc { margin-top: 4px; font-size: 12px; color: #666; }
-  .gc-divider { margin: 12px 0; border: 0; border-top: 1px solid #e5e5e5; }
+  .gc-desc { margin-top: 4px; font-size: 12px; color: var(--color-text-muted); }
+  .gc-divider { margin: 12px 0; border: 0; border-top: 1px solid var(--color-border); }
   .gc-check { display: block; margin: 8px 0; }
   .gc-inline { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   .gc-inline input[type="number"] { width: 88px; }
-  .gc-select, .gc-number, .gc-time { padding: 6px 8px; border: 1px solid #c8c8c8; border-radius: 6px; background: #fff; }
+  .gc-select, .gc-number, .gc-time { padding: 6px 8px; border: 1px solid var(--color-border-strong); border-radius: var(--radius-sm); background: var(--color-surface); font-family: inherit; }
   .gc-weight-row { margin: 0 0 14px; max-width: 760px; }
   .gc-weight-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 4px; font-size: 14px; }
   .gc-weight-value { min-width: 40px; text-align: right; font-variant-numeric: tabular-nums; }
   .gc-weight-row input[type="range"] { width: 100%; }
   .gc-actions { grid-column: 1 / span 2; display: flex; justify-content: flex-end; margin-top: 4px; }
-  .gc-btn { padding: 10px 16px; border-radius: 6px; border: 1px solid #666; background: #fff; cursor: pointer; }
-  .gc-table-wrap { grid-column: 1 / span 2; margin-top: 8px; background: #fff; border: 1px solid #d8d8d8; border-radius: 10px; overflow: auto; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04); }
+  .gc-table-wrap { grid-column: 1 / span 2; margin-top: 8px; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius); overflow: auto; box-shadow: var(--shadow); }
   .gc-table { width: 100%; border-collapse: collapse; min-width: 820px; }
-  .gc-table th, .gc-table td { border: 1px solid #e6e6e6; padding: 8px 10px; text-align: center; white-space: nowrap; }
-  .gc-table thead th { position: sticky; top: 0; z-index: 2; background: #f3f6fa; font-weight: 600; }
-  .gc-table .gc-team-col { position: sticky; left: 0; z-index: 1; background: #fafafa; text-align: left; font-weight: 600; }
-  .gc-pref-select { width: 100%; min-width: 140px; padding: 6px 8px; border: 1px solid #c8c8c8; border-radius: 6px; background: #fff; }
-  .gc-note { grid-column: 1 / span 2; margin-top: 6px; font-size: 12px; color: #666; }
+  .gc-table th, .gc-table td { border: 1px solid var(--color-border); padding: 8px 10px; text-align: center; white-space: nowrap; }
+  .gc-table thead th { position: sticky; top: 0; z-index: 2; background: var(--color-table-head); font-weight: 600; }
+  .gc-table .gc-team-col { position: sticky; left: 0; z-index: 1; background: var(--color-table-head); text-align: left; font-weight: 600; }
+  .gc-pref-select { width: 100%; min-width: 140px; padding: 6px 8px; border: 1px solid var(--color-border-strong); border-radius: var(--radius-sm); background: var(--color-surface); font-family: inherit; }
+  .gc-note { grid-column: 1 / span 2; margin-top: 6px; font-size: 12px; color: var(--color-text-muted); }
   @media (max-width: 980px) {
     .gc-form { grid-template-columns: 1fr; }
     .gc-actions, .gc-table-wrap, .gc-note { grid-column: 1; }
@@ -34,7 +33,7 @@
 
 {% block content %}
 <div class="gc-wrap">
-  <h1 style="text-align: center;">Global Configuration</h1>
+  <h1 class="page-title">Global Configuration</h1>
   <form method="post" action="{{ url_for('global_config_page') }}" class="gc-form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
@@ -89,6 +88,7 @@
       <label class="gc-check"><input type="checkbox" name="enable_weekend_balance" value="1" {% if config.get('enable_weekend_balance','1') != '0' %}checked{% endif %}> Weekend fairness (groups)</label>
       <label class="gc-check"><input type="checkbox" name="enable_weekend_consecutive_penalty" value="1" {% if config.get('enable_weekend_consecutive_penalty','1') != '0' %}checked{% endif %}> Penalize consecutive weekend days</label>
       <label class="gc-check"><input type="checkbox" name="enable_weekend_team_diversity_enable" value="1" {% if config.get('enable_weekend_team_diversity_enable','1') != '0' %}checked{% endif %}> Weekend team diversity</label>
+      <label class="gc-check"><input type="checkbox" name="enable_urology_weekend_penalty" value="1" {% if config.get('enable_urology_weekend_penalty','1') != '0' %}checked{% endif %}> Reduce urology-only weekend/holiday calls</label>
       <label class="gc-check"><input type="checkbox" name="enable_team_day_prefs" value="1" {% if config.get('enable_team_day_prefs','1') != '0' %}checked{% endif %}> Team-day Increase/Decrease weights</label>
 
       <hr class="gc-divider">
@@ -211,6 +211,14 @@
 
       <div class="gc-weight-row">
         <div class="gc-weight-head">
+          <label for="gamma_urology_weekend">Penalty for urology-only weekend/holiday calls</label>
+          <span class="gc-weight-value" id="guwOut">{{ config.get('gamma_urology_weekend', '50') }}</span>
+        </div>
+        <input type="range" id="gamma_urology_weekend" name="gamma_urology_weekend" min="0" max="500" value="{{ config.get('gamma_urology_weekend', '50') }}" data-output="guwOut">
+      </div>
+
+      <div class="gc-weight-row">
+        <div class="gc-weight-head">
           <label for="max_weekend_calls">Max weekend calls per surgeon</label>
           <span class="gc-weight-value" id="mwcOut">{{ config.get('max_weekend_calls', '3') }}</span>
         </div>
@@ -251,7 +259,7 @@
     </div>
 
     <div class="gc-actions">
-      <button type="submit" class="gc-btn">Save Global Configuration</button>
+      <button type="submit" class="btn btn-primary">Save Global Configuration</button>
     </div>
 
     {% set day_names = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'] %}
@@ -291,7 +299,7 @@
     </div>
 
     <div class="gc-actions">
-      <button type="submit" class="gc-btn">Update Global Configuration</button>
+      <button type="submit" class="btn btn-primary">Update Global Configuration</button>
     </div>
   </form>
 </div>

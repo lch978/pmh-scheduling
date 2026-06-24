@@ -2,19 +2,13 @@
 {% block title %}Edit and Publish{% endblock %}
 {% block head %}
 <style>
-  .ep-container { max-width:1400px; margin:auto; background:#fff; padding:20px; border-radius:8px; box-shadow:0 2px 4px rgba(0,0,0,0.1); }
+  .ep-container { max-width:1400px; margin:auto; }
   .ep-container h1 { text-align:center; margin-bottom:12px; font-size:1.5rem; }
   .ep-controls { display:flex; flex-wrap:wrap; gap:10px; justify-content:center; align-items:center; margin-bottom:12px; }
   .ep-controls label { font-weight:600; font-size:14px; }
-  .ep-controls select { padding:6px 10px; border-radius:4px; border:1px solid #ccc; font-size:14px; }
-  .btn { padding:8px 14px; font-size:13px; border:none; border-radius:4px; color:#fff; cursor:pointer; transition:background-color .15s, box-shadow .15s; }
-  .btn:hover { box-shadow:0 1px 4px rgba(0,0,0,0.15); }
-  .btn-primary { background:#0077ff; } .btn-primary:hover { background:#0062cc; }
-  .btn-success { background:#2e7d32; } .btn-success:hover { background:#256628; }
-  .btn-secondary { background:#6c757d; } .btn-secondary:hover { background:#5a6268; }
-  .btn-green { background:#5cb85c; } .btn-green:hover { background:#4cae4c; }
-  .btn-danger { background:#c62828; } .btn-danger:hover { background:#a52222; }
-  .btn-sm { padding:5px 10px; font-size:12px; }
+  .ep-controls select { padding:6px 10px; border-radius:var(--radius-sm); border:1px solid var(--color-border-strong); font-size:14px; font-family:inherit; }
+  /* Extra accent for the "Export Requests" action; base provides the rest of the .btn system */
+  .btn-green { background:var(--color-success); } .btn-green:hover { background:var(--color-success-hover); }
 
   .ep-layout { display:flex; flex-direction:column; gap:12px; align-items:stretch; }
   .ep-main { min-width:0; }
@@ -70,9 +64,9 @@
   .sched-table { width:100%; border-collapse:collapse; font-size:13px; }
   .sched-table th { border:1px solid #ccc; padding:6px 8px; background:#f5f5f5; position:sticky; top:0; z-index:2; text-align:center; font-size:13px; }
   .sched-table td { border:1px solid #ccc; padding:0; text-align:center; position:relative; }
-  .sched-table tr.weekend-row > td { background:#f0f3fa; }
-  .sched-table tr.holiday-row > td { background:#fef3e8; }
-  .sched-table tr.weekend-row.holiday-row > td { background:#ede8f5; }
+  .sched-table tr.weekend-row > td { background:var(--color-weekend); }
+  .sched-table tr.holiday-row > td { background:var(--color-holiday); }
+  .sched-table tr.weekend-row.holiday-row > td { background:var(--color-weekend-holiday); }
   .sched-table tr.is-expanded > td { border-bottom-color:transparent; background:#e3f2fd; }
   .sched-table .day-cell { font-weight:600; font-size:12px; white-space:nowrap; min-width:70px; text-align:left; padding:6px 8px; cursor:pointer; user-select:none; }
   .sched-table .day-cell:hover { background:#e3f2fd; }
@@ -114,10 +108,11 @@
   .expand-item.status-al:hover { opacity:1; }
   .expand-item.unassign-item { justify-content:center; color:#999; font-style:italic; font-size:11px; border-bottom:1px solid #eee; padding:5px 8px; }
   .expand-item.unassign-item:hover { background:#fce4ec; color:#c62828; }
+  .expand-separator { padding:4px 8px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.03em; color:#78909c; background:#eef1f5; border-top:1px solid #d6dce3; border-bottom:1px solid #d6dce3; text-align:center; cursor:default; }
 </style>
 {% endblock %}
 {% block content %}
-<div class="ep-container">
+<div class="card ep-container">
   <h1>Edit and Publish</h1>
 
   <div class="ep-controls">
@@ -457,18 +452,49 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // ── Surgeon options for a level on a day, ordered by availability ──
+  // For the 1A level, 2A surgeons (not already 1A-eligible) are appended as
+  // a secondary group so they can be manually assigned beneath a separator.
   function surgeonOptions(day, level) {
     if (!monthData) return [];
     const avail = monthData.availability[day] || {};
-    const opts = [];
-    for (const s of monthData.all_surgeons) {
-      if (!parseLevels(s.call_levels).includes(level)) continue;
-      const status = avail[String(s.id)] || 'available';
-      opts.push({ id: s.id, name: s.name, status });
-    }
     const order = { available: 0, no_call: 1, study_leave: 1, unavailable: 2 };
-    opts.sort((a, b) => (order[a.status] ?? 0) - (order[b.status] ?? 0));
-    return opts;
+    const primary = [];
+    const secondary = [];
+    for (const s of monthData.all_surgeons) {
+      const levels = parseLevels(s.call_levels);
+      const status = avail[String(s.id)] || 'available';
+      if (levels.includes(level)) {
+        primary.push({ id: s.id, name: s.name, status, secondary: false });
+      } else if (level === '1A' && levels.includes('2A')) {
+        secondary.push({ id: s.id, name: s.name, status, secondary: true });
+      }
+    }
+    primary.sort((a, b) => (order[a.status] ?? 0) - (order[b.status] ?? 0));
+    secondary.sort((a, b) => (order[a.status] ?? 0) - (order[b.status] ?? 0));
+    return primary.concat(secondary);
+  }
+
+  // ── Build the option items HTML for a level column (shared by initial render
+  //    and refresh), inserting a separator before the secondary (2A) group. ──
+  function buildOptionItemsHTML(opts, lvl, curId) {
+    let html = `<div class="expand-item unassign-item${!curId ? ' selected' : ''}" data-level="${lvl}" data-sid="">--- None ---</div>`;
+    let sepInserted = false;
+    for (const o of opts) {
+      if (o.secondary && !sepInserted) {
+        sepInserted = true;
+        html += `<div class="expand-separator">2A surgeons</div>`;
+      }
+      const isSel = curId && o.id === curId;
+      let dotCls = 'avail', statusCls = 'status-avail', tag = '';
+      if (o.status === 'no_call') { dotCls = 'nc'; statusCls = 'status-nc'; tag = 'NC'; }
+      else if (o.status === 'study_leave') { dotCls = 'nc'; statusCls = 'status-nc'; tag = 'SL'; }
+      else if (o.status === 'unavailable') { dotCls = 'al'; statusCls = 'status-al'; tag = 'AL'; }
+      html += `<div class="expand-item ${statusCls}${isSel ? ' selected' : ''}" data-level="${lvl}" data-sid="${o.id}">`;
+      html += `<span class="dot ${dotCls}"></span><span class="ename">${isSel ? '&#10003; ' : ''}${o.name}</span>`;
+      if (tag) html += `<span class="etag">${tag}</span>`;
+      html += '</div>';
+    }
+    return html;
   }
 
   function statusOf(day, sid) {
@@ -535,7 +561,8 @@ document.addEventListener('DOMContentLoaded', () => {
       {
         label: 'Group 1 (1A+1B)',
         members: nonNlth.filter(s => hasLevel(s, '1A') || hasLevel(s, '1B')),
-        countFn: (row, sid) => ((row['1A'] === sid) ? 1 : 0) + ((row['1B'] === sid) ? 1 : 0),
+        // Same surgeon on both 1A and 1B the same day (e.g. urology mirror) counts once.
+        countFn: (row, sid) => ((row['1A'] === sid || row['1B'] === sid) ? 1 : 0),
       },
       {
         label: 'Group 2 (2A+2B)',
@@ -645,19 +672,7 @@ document.addEventListener('DOMContentLoaded', () => {
       html += '<div class="expand-col">';
       html += `<div class="expand-col-header">${lvl}</div>`;
       html += '<div class="expand-items">';
-      html += `<div class="expand-item unassign-item${!curId ? ' selected' : ''}" data-level="${lvl}" data-sid="">--- None ---</div>`;
-      for (const o of opts) {
-        const isSel = curId && o.id === curId;
-        let dotCls = 'avail', statusCls = 'status-avail', tag = '';
-        if (o.status === 'no_call') { dotCls = 'nc'; statusCls = 'status-nc'; tag = 'NC'; }
-        else if (o.status === 'study_leave') { dotCls = 'nc'; statusCls = 'status-nc'; tag = 'SL'; }
-        else if (o.status === 'unavailable') { dotCls = 'al'; statusCls = 'status-al'; tag = 'AL'; }
-        html += `<div class="expand-item ${statusCls}${isSel ? ' selected' : ''}" data-level="${lvl}" data-sid="${o.id}">`;
-        html += `<span class="dot ${dotCls}"></span>`;
-        html += `<span class="ename">${isSel ? '&#10003; ' : ''}${o.name}</span>`;
-        if (tag) html += `<span class="etag">${tag}</span>`;
-        html += '</div>';
-      }
+      html += buildOptionItemsHTML(opts, lvl, curId);
       html += '</div></div>';
     }
     html += '</div>';
@@ -695,18 +710,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const opts = surgeonOptions(day, lvl);
     const curId = currentSchedule[day] ? currentSchedule[day][lvl] : null;
     let html = `<div class="expand-col-header">${lvl}</div><div class="expand-items">`;
-    html += `<div class="expand-item unassign-item${!curId ? ' selected' : ''}" data-level="${lvl}" data-sid="">--- None ---</div>`;
-    for (const o of opts) {
-      const isSel = curId && o.id === curId;
-      let dotCls = 'avail', statusCls = 'status-avail', tag = '';
-      if (o.status === 'no_call') { dotCls = 'nc'; statusCls = 'status-nc'; tag = 'NC'; }
-      else if (o.status === 'study_leave') { dotCls = 'nc'; statusCls = 'status-nc'; tag = 'SL'; }
-      else if (o.status === 'unavailable') { dotCls = 'al'; statusCls = 'status-al'; tag = 'AL'; }
-      html += `<div class="expand-item ${statusCls}${isSel ? ' selected' : ''}" data-level="${lvl}" data-sid="${o.id}">`;
-      html += `<span class="dot ${dotCls}"></span><span class="ename">${isSel ? '&#10003; ' : ''}${o.name}</span>`;
-      if (tag) html += `<span class="etag">${tag}</span>`;
-      html += '</div>';
-    }
+    html += buildOptionItemsHTML(opts, lvl, curId);
     html += '</div>';
     cols[idx].innerHTML = html;
     cols[idx].querySelectorAll('.expand-item[data-sid]').forEach(item => {

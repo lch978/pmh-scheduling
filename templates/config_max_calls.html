@@ -1,46 +1,58 @@
 {% extends "base.html" %}
 {% block title %}Configure Maximum Calls{% endblock %}
+{% block head %}
+<style>
+  .cmc-card { max-width: 620px; margin: 0 auto; }
+  .cmc-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 16px; }
+  .cmc-row label { font-weight: 600; flex: 1; min-width: 240px; }
+  .cmc-row input { width: 120px; }
+  .cmc-hint { font-size: 13px; color: var(--color-text-muted); margin: -6px 0 16px; }
+  .cmc-actions { text-align: center; margin-top: 8px; }
+</style>
+{% endblock %}
 {% block content %}
-  <h1 style="text-align: center;">Configure Maximum Calls per Level Group</h1>
-  <form method="post" action="{{ url_for('config_max_calls') }}" style="text-align: center; margin-top: 20px;">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <div>
-      <label for="group_1">Level Group 1 (1A &amp; 1B):</label>
-      <input type="number" name="group_1" id="group_1" value="{{ config['1'] }}" required>
-    </div>
-    <br>
-    <div>
-      <label for="group_2">Level Group 2 (2A &amp; 2B):</label>
-      <input type="number" name="group_2" id="group_2" value="{{ config['2'] }}" required>
-    </div>
-    <br>
-    <div>
-      <label for="group_3">Level Group 3 (3):</label>
-      <input type="number" name="group_3" id="group_3" value="{{ config['3'] }}" required>
-    </div>
-    <br>
-    <div>
-      <label for="group_4">Level Group 4 (4):</label>
-      <input type="number" name="group_4" id="group_4" value="{{ config['4'] }}" required>
-    </div>
-    <br>
-    <div>
-      <label for="group_l2g1_1a">Maximum number of 1A calls for 2A surgeons:</label>
-      <input type="number" name="group_l2g1_1a" id="group_l2g1_1a" value="{{ config.get('l2g1_1a', config.get('l2g1_1ab', 4)) }}" min="0" required>
-    </div>
-    <p style="max-width:520px;margin:12px auto 0;font-size:13px;color:#444;text-align:left;">Applies to Level-2 Group 1 (2A-only) surgeons when &quot;Allow Level-2 Group 1 on 1A&quot; is enabled in Global Configuration. Set to 0 to disallow 1A assignments.</p>
-    <br>
-    <div>
-      <label for="urology_min">Urology-only surgeons &mdash; Min calls per month:</label>
-      <input type="number" name="urology_min" id="urology_min" value="{{ config.get('urology_min', 2) }}" min="0" required>
-    </div>
-    <br>
-    <div>
-      <label for="urology_max">Urology-only surgeons &mdash; Max calls per month:</label>
-      <input type="number" name="urology_max" id="urology_max" value="{{ config.get('urology_max', 6) }}" min="0" required>
-    </div>
-    <p style="max-width:520px;margin:12px auto 0;font-size:13px;color:#444;text-align:left;">Applies only to surgeons whose only call level is &quot;Urology&quot;. Min/Max is enforced per month in the schedule.</p>
-    <br>
-    <button type="submit">Save Configuration</button>
-  </form>
+  <div class="card cmc-card">
+    <h1 class="page-title">Configure Maximum Calls per Level Group</h1>
+    <form method="post" action="{{ url_for('config_max_calls') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="cmc-row">
+        <label for="group_1">Level Group 1 (1A &amp; 1B):</label>
+        <input class="form-control" type="number" name="group_1" id="group_1" value="{{ config['1'] }}" required>
+      </div>
+      <div class="cmc-row">
+        <label for="group_2">Level Group 2 (2A &amp; 2B):</label>
+        <input class="form-control" type="number" name="group_2" id="group_2" value="{{ config['2'] }}" required>
+      </div>
+      <div class="cmc-row">
+        <label for="group_3">Level Group 3 (3):</label>
+        <input class="form-control" type="number" name="group_3" id="group_3" value="{{ config['3'] }}" required>
+      </div>
+      <div class="cmc-row">
+        <label for="group_4">Level Group 4 (4):</label>
+        <input class="form-control" type="number" name="group_4" id="group_4" value="{{ config['4'] }}" required>
+      </div>
+      <div class="cmc-row">
+        <label for="group_l2g1_1a">Maximum number of 1A calls for 2A surgeons:</label>
+        <input class="form-control" type="number" name="group_l2g1_1a" id="group_l2g1_1a" value="{{ config.get('l2g1_1a', config.get('l2g1_1ab', 4)) }}" min="0" required>
+      </div>
+      <p class="cmc-hint">Applies to Level-2 Group 1 (2A-only) surgeons when &quot;Allow Level-2 Group 1 on 1A&quot; is enabled in Global Configuration. Set to 0 to disallow 1A assignments.</p>
+      <div class="cmc-row">
+        <label for="group_l2g1_1a_total">Maximum number of 1A calls for 2A surgeons as a whole (per month):</label>
+        <input class="form-control" type="number" name="group_l2g1_1a_total" id="group_l2g1_1a_total" value="{{ config.get('l2g1_1a_total', 8) }}" min="0" required>
+      </div>
+      <p class="cmc-hint">Caps the total number of 1A calls held by all Level-2 Group 1 (2A-only) surgeons combined in a month. Set to 0 to disallow 1A assignments for this group.</p>
+      <div class="cmc-row">
+        <label for="urology_min">Urology-only surgeons &mdash; Min calls per month:</label>
+        <input class="form-control" type="number" name="urology_min" id="urology_min" value="{{ config.get('urology_min', 2) }}" min="0" required>
+      </div>
+      <div class="cmc-row">
+        <label for="urology_max">Urology-only surgeons &mdash; Max calls per month:</label>
+        <input class="form-control" type="number" name="urology_max" id="urology_max" value="{{ config.get('urology_max', 6) }}" min="0" required>
+      </div>
+      <p class="cmc-hint">Applies only to surgeons whose only call level is &quot;Urology&quot;. Min/Max is enforced per month in the schedule.</p>
+      <div class="cmc-actions">
+        <button type="submit" class="btn btn-primary">Save Configuration</button>
+      </div>
+    </form>
+  </div>
 {% endblock %}

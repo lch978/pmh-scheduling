@@ -6,6 +6,57 @@
   <title>{% block title %}Call List Scheduler{% endblock %}</title>
   <meta name="csrf-token" content="{{ csrf_token() }}">
   <style>
+    /* ── Design tokens ─────────────────────────────────────────── */
+    :root {
+      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+
+      /* Brand / actions */
+      --color-primary: #2563eb;
+      --color-primary-hover: #1d4ed8;
+      --color-success: #16a34a;
+      --color-success-hover: #15803d;
+      --color-danger: #dc2626;
+      --color-danger-hover: #b91c1c;
+      --color-secondary: #64748b;
+      --color-secondary-hover: #475569;
+
+      /* Surfaces / text */
+      --color-bg: #f1f5f9;
+      --color-surface: #ffffff;
+      --color-border: #e2e8f0;
+      --color-border-strong: #cbd5e1;
+      --color-text: #1e293b;
+      --color-text-muted: #64748b;
+      --color-heading: #0f172a;
+
+      /* Navigation */
+      --nav-bg: #1e293b;
+      --nav-bg-hover: #334155;
+      --nav-active: #2563eb;
+      --nav-public: #15803d;
+      --nav-text: #e2e8f0;
+
+      /* Schedule semantics (shared across all schedule tables) */
+      --color-weekend: #f1f5f9;
+      --color-holiday: #fff7ed;
+      --color-weekend-holiday: #f5f3ff;
+      --color-table-head: #f8fafc;
+      --color-row-hover: #eff6ff;
+
+      /* Scale */
+      --space-1: 4px;
+      --space-2: 8px;
+      --space-3: 12px;
+      --space-4: 16px;
+      --space-5: 20px;
+      --space-6: 24px;
+      --radius: 8px;
+      --radius-sm: 4px;
+      --radius-pill: 999px;
+      --shadow: 0 1px 3px rgba(15, 23, 42, 0.08), 0 1px 2px rgba(15, 23, 42, 0.04);
+      --shadow-md: 0 4px 12px rgba(15, 23, 42, 0.08);
+    }
+
     /* Reset and base font styles */
     * {
       box-sizing: border-box;
@@ -13,9 +64,27 @@
       padding: 0;
     }
     body, html {
-      font-family: Arial, sans-serif;
+      font-family: var(--font-sans);
       height: 100%;
-      background-color: #f8f8f8;
+      background-color: var(--color-bg);
+      color: var(--color-text);
+    }
+    h1, h2, h3, h4 {
+      color: var(--color-heading);
+    }
+    a {
+      color: var(--color-primary);
+    }
+    /* Accessible keyboard focus */
+    a:focus-visible,
+    button:focus-visible,
+    input:focus-visible,
+    select:focus-visible,
+    textarea:focus-visible,
+    summary:focus-visible,
+    [tabindex]:focus-visible {
+      outline: 2px solid var(--color-primary);
+      outline-offset: 2px;
     }
     /* Phone dropdown nav + sidebar navigation */
     .mobile-nav {
@@ -34,10 +103,10 @@
     .nav-select {
       width: 100%;
       padding: 9px 12px;
-      border-radius: 999px;
-      border: 1px solid #555;
-      background: #333;
-      color: #f2f2f2;
+      border-radius: var(--radius-pill);
+      border: 1px solid var(--nav-bg-hover);
+      background: var(--nav-bg);
+      color: var(--nav-text);
       font-size: 13px;
       box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
     }
@@ -48,7 +117,7 @@
       left: 0;
       width: 220px;
       height: 100%;
-      background-color: #333;
+      background-color: var(--nav-bg);
       overflow-y: auto;
       padding-top: 20px;
     }
@@ -61,20 +130,28 @@
     }
     .desktop-sidebar a {
       display: block;
-      color: #f2f2f2;
+      color: var(--nav-text);
       text-decoration: none;
-      padding: 12px 16px;
-      transition: background-color 0.2s ease;
+      padding: 12px 18px;
+      font-size: 14px;
+      border-left: 3px solid transparent;
+      transition: background-color 0.15s ease, border-color 0.15s ease;
     }
     .desktop-sidebar a.public {
-      background-color: #396344;
+      color: #bbf7d0;
     }
     .desktop-sidebar a.active {
-      background-color: #575757;
+      background-color: var(--nav-bg-hover);
+      border-left-color: var(--nav-active);
+      color: #fff;
       font-weight: 600;
     }
+    .desktop-sidebar a.public.active {
+      border-left-color: var(--nav-public);
+    }
     .desktop-sidebar a:hover {
-      background-color: #575757;
+      background-color: var(--nav-bg-hover);
+      color: #fff;
     }
     /* Main content styling */
     .main-content {
@@ -97,7 +174,7 @@
       position: sticky;
       left: 0;
       z-index: 1;
-      background: #fff;
+      background: var(--color-surface);
     }
     .table-scroll.sticky-first-col > table thead th:first-child {
       z-index: 3;
@@ -144,6 +221,146 @@
         max-width: none;
       }
     }
+    /* ── Reusable components ───────────────────────────────────── */
+    /* Cards / surfaces */
+    .card {
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: var(--space-5);
+      margin: 0 auto;
+    }
+    .page-title {
+      text-align: center;
+      margin-bottom: var(--space-4);
+      font-size: 1.5rem;
+    }
+    .subtle {
+      color: var(--color-text-muted);
+      font-size: 14px;
+    }
+
+    /* Buttons */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 8px 14px;
+      font-size: 14px;
+      font-family: inherit;
+      font-weight: 600;
+      line-height: 1.2;
+      border: 1px solid transparent;
+      border-radius: var(--radius-sm);
+      color: #fff;
+      background: var(--color-primary);
+      cursor: pointer;
+      text-decoration: none;
+      transition: background-color 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
+    }
+    .btn:hover { box-shadow: var(--shadow-md); }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; box-shadow: none; }
+    .btn-primary { background: var(--color-primary); }
+    .btn-primary:hover { background: var(--color-primary-hover); }
+    .btn-success { background: var(--color-success); }
+    .btn-success:hover { background: var(--color-success-hover); }
+    .btn-danger { background: var(--color-danger); }
+    .btn-danger:hover { background: var(--color-danger-hover); }
+    .btn-secondary { background: var(--color-secondary); }
+    .btn-secondary:hover { background: var(--color-secondary-hover); }
+    /* Neutral/outline button for low-emphasis actions */
+    .btn-ghost {
+      background: var(--color-surface);
+      color: var(--color-text);
+      border-color: var(--color-border-strong);
+    }
+    .btn-ghost:hover { background: var(--color-bg); }
+    .btn-sm { padding: 5px 10px; font-size: 12px; }
+
+    /* Form controls */
+    .form-control,
+    .toolbar select,
+    .toolbar input {
+      padding: 8px 10px;
+      font-size: 14px;
+      font-family: inherit;
+      color: var(--color-text);
+      background: var(--color-surface);
+      border: 1px solid var(--color-border-strong);
+      border-radius: var(--radius-sm);
+    }
+    .field {
+      display: inline-flex;
+      flex-direction: column;
+      gap: var(--space-1);
+      font-size: 13px;
+      color: var(--color-text-muted);
+      text-align: left;
+    }
+
+    /* Toolbar: row of controls/buttons */
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-2);
+      align-items: center;
+      justify-content: center;
+      margin-bottom: var(--space-4);
+    }
+    .toolbar label { font-weight: 600; font-size: 14px; }
+
+    /* Data tables */
+    .data-table {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--color-surface);
+      font-size: 14px;
+    }
+    .data-table th,
+    .data-table td {
+      border: 1px solid var(--color-border);
+      padding: 10px;
+      text-align: center;
+    }
+    .data-table thead th {
+      background: var(--color-table-head);
+      color: var(--color-heading);
+      font-weight: 600;
+      position: sticky;
+      top: 0;
+      z-index: 2;
+    }
+    .data-table tbody tr:hover td { background: var(--color-row-hover); }
+    .data-table .weekend > td,
+    .data-table tr.weekend td { background: var(--color-weekend); }
+    .data-table .holiday > td,
+    .data-table tr.holiday td { background: var(--color-holiday); }
+    .data-table tr.weekend.holiday td { background: var(--color-weekend-holiday); }
+
+    /* Badges / status chips */
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      font-size: 11px;
+      font-weight: 600;
+      border-radius: var(--radius-pill);
+      border: 1px solid var(--color-border);
+      background: var(--color-table-head);
+      color: var(--color-text-muted);
+    }
+    .badge-success { background: #dcfce7; border-color: #bbf7d0; color: #166534; }
+    .badge-danger { background: #fee2e2; border-color: #fecaca; color: #991b1b; }
+
+    /* Empty state */
+    .empty-state {
+      text-align: center;
+      color: var(--color-text-muted);
+      padding: var(--space-6) var(--space-4);
+      font-size: 14px;
+    }
+
     /* Flash messages */
     .toast-container { position: fixed; top: 16px; right: 16px; z-index: 9999; display: flex; flex-direction: column; gap: 10px; }
     .toast { min-width: 280px; max-width: 420px; padding: 10px 12px; border: 1px solid; border-radius: 6px; box-shadow: 0 6px 16px rgba(0,0,0,0.1); display: flex; align-items: center; justify-content: space-between; animation: toast-in 200ms ease-out; }
@@ -194,7 +411,7 @@
   <aside class="desktop-sidebar">
     <img
       src="{{ url_for('static', filename='img/logo.svg') }}"
-      alt="My App Logo"
+      alt="Call List Scheduler logo"
     />
     {% if admin_logged_in %}
       <a href="{{ url_for('index') }}" class="{% if request.endpoint == 'index' %}active{% endif %}">Home</a>
@@ -211,7 +428,7 @@
       <a href="{{ url_for('stats') }}" class="{% if request.endpoint == 'stats' %}active{% endif %}">Stats</a>
       <form method="post" action="{{ url_for('admin_logout') }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <button type="submit" style="width:100%; text-align:left; padding:12px 16px; border:none; color:#f2f2f2; background:#5d2b2b; cursor:pointer;">Admin Logout</button>
+        <button type="submit" style="width:100%; text-align:left; padding:12px 18px; border:none; border-left:3px solid transparent; color:var(--nav-text); background:#7f1d1d; cursor:pointer; font-size:14px; font-family:inherit;">Admin Logout</button>
       </form>
     {% else %}
       <a href="{{ url_for('index') }}" class="{% if request.endpoint == 'index' %}active{% endif %}">Home</a>

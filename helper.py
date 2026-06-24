@@ -186,6 +186,17 @@ def init_db():
                 UNIQUE (year, month, version)
             );
             """
+            ,
+            # Stores which surgeon is the NLTH surgeon for a given (year, month)
+            """
+            CREATE TABLE IF NOT EXISTS monthly_nlth (
+                id SERIAL PRIMARY KEY,
+                year INTEGER NOT NULL,
+                month INTEGER NOT NULL,
+                surgeon_id INTEGER,
+                UNIQUE (year, month)
+            );
+            """
         ]
         
         for ddl in ddl_statements:
@@ -302,8 +313,11 @@ def init_db():
             "spacing_threshold":     "7",
             "gamma_weekend_balance": "50",
             "gamma_consec_weekend":  "20",
+            "gamma_urology_weekend": "50",
+            "enable_urology_weekend_penalty": "1",
             "gamma_team_pref":       "10",
             "enable_two_pass_fairness_priority": "1",
+            "enable_deviation_sum": "1",
             "enable_l2g1_primary_calls": "0",
             "enable_l2g1_primary_2a_same_day_penalty": "1",
             "gamma_l2g1_primary_2a_same_day": "30",
@@ -318,7 +332,7 @@ def init_db():
             db.execute(insert_gc, {"key": key, "value": val})
 
         # ── 3) Seed max_calls_config defaults ──
-        max_defaults = {"1": 10, "2": 10, "3": 10, "4": 10, "l2g1_1ab": 4, "l2g1_1a": 4, "urology_min": 2, "urology_max": 6}
+        max_defaults = {"1": 10, "2": 10, "3": 10, "4": 10, "l2g1_1ab": 4, "l2g1_1a": 4, "l2g1_1a_total": 8, "urology_min": 2, "urology_max": 6}
         insert_mc = text("""
             INSERT INTO max_calls_config (level_group, max_calls)
             VALUES (:group, :max_calls)
@@ -624,12 +638,16 @@ def get_max_calls_config():
 
 def update_max_calls_config(new_config):
     db = get_db()
+    upsert_stmt = text(
+        """
+        INSERT INTO max_calls_config (level_group, max_calls)
+        VALUES (:group, :max_val)
+        ON CONFLICT (level_group) DO UPDATE SET max_calls = EXCLUDED.max_calls
+        """
+    )
     with db.begin():
         for group, max_val in new_config.items():
-            db.execute(
-                text("UPDATE max_calls_config SET max_calls = :max_val WHERE level_group = :group"),
-                {"group": group, "max_val": max_val}
-            )
+            db.execute(upsert_stmt, {"group": group, "max_val": max_val})
 
 def get_availability_requests():
     db = get_db()
@@ -885,6 +903,11 @@ def get_horizon_prior_levels_and_credit(year: int, month: int, surgeons: list):
     all_ids = [s["id"] for s in surgeons]
     levels = ["1A","1B","Urology","2A","2B","3","4"]
     prior_levels = {L: {sid: 0 for sid in all_ids} for L in levels}
+    # Per-day deduplicated Level-1 (1A or 1B) day count: a surgeon who held both
+    # 1A and 1B on the same published day counts as ONE Level-1 call that day,
+    # matching the live solver's once-per-day rule. The scheduler uses this for
+    # the 1A+1B cohort fairness horizon total instead of prior 1A + prior 1B.
+    prior_level1_days = {sid: 0 for sid in all_ids}
 
     # Determine half-year window
     if 1 <= month <= 6:
@@ -909,6 +932,17 @@ def get_horizon_prior_levels_and_credit(year: int, month: int, surgeons: list):
                 if sid is None:
                     continue
                 prior_levels[L][sid] = prior_levels[L].get(sid, 0) + 1
+            # Count each surgeon at most once per day for Level-1 (1A or 1B).
+            lvl1_sids_today = set()
+            for L in ("1A", "1B"):
+                name = assigns.get(L)
+                if not name:
+                    continue
+                sid = id_by_name.get(name)
+                if sid is not None:
+                    lvl1_sids_today.add(sid)
+            for sid in lvl1_sids_today:
+                prior_level1_days[sid] = prior_level1_days.get(sid, 0) + 1
 
     # Compute unavailability credit across same window (up to month-1)
     # Range: [year-start_month-01, year-(month-1)-last_day]
@@ -957,6 +991,7 @@ def get_horizon_prior_levels_and_credit(year: int, month: int, surgeons: list):
 
     return {
         "prior_levels": prior_levels,
+        "prior_level1_days": prior_level1_days,
         "prior_unavail_days": prior_unavail_days,
         "prior_unavail_credit_calls": prior_unavail_credit_calls,
     }
@@ -989,6 +1024,9 @@ def build_half_year_cohort_summary(year: int, month: int, surgeons: list | None 
     months = get_half_year_months_before(month)
     id_by_name = {s.get("name"): s.get("id") for s in surgeons if s.get("name")}
     counts_by_sid = {int(s["id"]): {L: 0 for L in levels} for s in surgeons if s.get("id") is not None}
+    # Per-day deduplicated Level-1 (1A or 1B) day count, so a surgeon shown in
+    # both 1A and 1B on the same published day counts once for the G1 cohort.
+    level1_days_by_sid = {int(s["id"]): 0 for s in surgeons if s.get("id") is not None}
 
     for m in months:
         sched = get_published_schedule_version(year, m)
@@ -1005,6 +1043,16 @@ def build_half_year_cohort_summary(year: int, month: int, surgeons: list | None 
                 if sid is None or sid not in counts_by_sid:
                     continue
                 counts_by_sid[sid][L] += 1
+            lvl1_sids_today = set()
+            for L in ("1A", "1B"):
+                name = assigns.get(L)
+                if not name:
+                    continue
+                sid = id_by_name.get(name)
+                if sid is not None and sid in level1_days_by_sid:
+                    lvl1_sids_today.add(sid)
+            for sid in lvl1_sids_today:
+                level1_days_by_sid[sid] += 1
 
     def has_level(surgeon_obj, level):
         return level in parse_call_levels(surgeon_obj.get("call_levels", ""))
@@ -1028,7 +1076,7 @@ def build_half_year_cohort_summary(year: int, month: int, surgeons: list | None 
     group4_members = sorted([s for s in surgeons if has_level(s, "4")], key=lambda s: s.get("name", ""))
 
     group_definitions = [
-        ("g1", "G1 (1A+1B)", group1_members, lambda sid: counts_by_sid.get(sid, {}).get("1A", 0) + counts_by_sid.get(sid, {}).get("1B", 0)),
+        ("g1", "G1 (1A+1B)", group1_members, lambda sid: level1_days_by_sid.get(sid, 0)),
         ("g2", "G2 (2A+2B)", group2_members, lambda sid: counts_by_sid.get(sid, {}).get("2A", 0) + counts_by_sid.get(sid, {}).get("2B", 0)),
         ("g3", "G3 (3 + 2B if subgroup 4)", group3_members, lambda sid: counts_by_sid.get(sid, {}).get("3", 0) + (counts_by_sid.get(sid, {}).get("2B", 0) if sid in group4_l2_ids else 0)),
         ("g4", "G4 (4)", group4_members, lambda sid: counts_by_sid.get(sid, {}).get("4", 0)),
@@ -1115,3 +1163,74 @@ def save_prior_last_two(year: int, month: int, m2: dict, m1: dict):
             """
         )
         db.execute(stmt, {"y": year, "m": month, "m2": json.dumps(m2 or {}), "m1": json.dumps(m1 or {})})
+
+
+def get_monthly_nlth(year: int, month: int):
+    """Return the surgeon_id designated as the NLTH surgeon for (year, month), or None."""
+    db = get_db()
+    row = db.execute(
+        text("SELECT surgeon_id FROM monthly_nlth WHERE year = :y AND month = :m"),
+        {"y": int(year), "m": int(month)},
+    ).mappings().fetchone()
+    if not row:
+        return None
+    sid = row["surgeon_id"]
+    try:
+        return int(sid) if sid is not None else None
+    except Exception:
+        return None
+
+
+def get_monthly_nlth_map(year: int, months):
+    """Return {month: surgeon_id} for the given year and list of months (missing/blank -> None)."""
+    result = {int(m): None for m in months}
+    if not months:
+        return result
+    db = get_db()
+    rows = db.execute(
+        text("SELECT month, surgeon_id FROM monthly_nlth WHERE year = :y"),
+        {"y": int(year)},
+    ).mappings().all()
+    for r in rows:
+        m = int(r["month"])
+        if m in result:
+            sid = r["surgeon_id"]
+            try:
+                result[m] = int(sid) if sid is not None else None
+            except Exception:
+                result[m] = None
+    return result
+
+
+def set_monthly_nlth(year: int, month: int, surgeon_id):
+    """Upsert the NLTH surgeon for (year, month). Pass surgeon_id=None to clear it."""
+    db = get_db()
+    try:
+        sid = int(surgeon_id) if surgeon_id not in (None, "", "0", 0) else None
+    except Exception:
+        sid = None
+    with db.begin():
+        stmt = text(
+            """
+            INSERT INTO monthly_nlth (year, month, surgeon_id)
+            VALUES (:y, :m, :sid)
+            ON CONFLICT (year, month) DO UPDATE
+            SET surgeon_id = EXCLUDED.surgeon_id
+            """
+        )
+        db.execute(stmt, {"y": int(year), "m": int(month), "sid": sid})
+
+
+def apply_monthly_nlth(surgeons, year, month):
+    """Mutate the surgeons list so that only the NLTH surgeon for (year, month) has nlth=True.
+
+    The per-surgeon `nlth` flag is now driven entirely by the monthly assignment,
+    so any stale per-surgeon value is overridden here before the solver runs.
+    """
+    try:
+        nlth_sid = get_monthly_nlth(year, month)
+    except Exception:
+        nlth_sid = None
+    for s in surgeons:
+        s["nlth"] = (nlth_sid is not None and s.get("id") == nlth_sid)
+    return surgeons

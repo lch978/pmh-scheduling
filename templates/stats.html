@@ -4,68 +4,50 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.7.1/chart.min.css" integrity="sha512-/IUus8nlnTp2Rgh1F6PGEY8IhkIj+sD7vjJnFmjOoDaNeagKBItlEVcUB4fFYo0EpwN/mNKRZP5eL55N8PRvZA==" crossorigin="anonymous" referrerpolicy="no-referrer" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.7.1/chart.min.js" integrity="sha512-/IOU2pcehWmqGa2nhPnMo+U4HBnMb5cl61IY8OrVj6IblHKR5/s8v9fcZGIq5geNz6c4uUKgRu+4sS8M52f2WA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
   <style>
-    /* Table styling with group-specific shading */
-    table {
-      border-collapse: collapse;
-      width: 100%;
-      margin-top: 20px;
-    }
-    th, td {
-      border: 1px solid #ccc;
-      padding: 8px;
-      text-align: center;
-    }
-    th {
-      background-color: #f2f2f2;
-    }
-    /* Define background colors per group rank */
-    .group-1 { background-color: #c6f5d6; } /* light green */
-    .group-2 { background-color: #d6eaf8; } /* light blue */
-    .group-3 { background-color: #f9e79f; } /* light yellow */
-    .group-4 { background-color: #fadbd8; } /* light orange/pink */
-    .group-5 { background-color: #f5b7b1; } /* light red/pink */
+    .stats-table { margin-top: 20px; }
+    /* Background colors per group rank (page-specific legend) */
+    .stats-table tr.group-1 td { background-color: #c6f5d6; } /* light green */
+    .stats-table tr.group-2 td { background-color: #d6eaf8; } /* light blue */
+    .stats-table tr.group-3 td { background-color: #f9e79f; } /* light yellow */
+    .stats-table tr.group-4 td { background-color: #fadbd8; } /* light orange/pink */
+    .stats-table tr.group-5 td { background-color: #f5b7b1; } /* light red/pink */
+    .stats-chart-wrap { max-width: 900px; margin: 0 auto; }
   </style>
 {% endblock %}
 {% block content %}
-  <h1 style="text-align: center;">Surgeon Call Statistics</h1>
-  
+  <h1 class="page-title">Surgeon Call Statistics</h1>
+
   <!-- Date Range Selection Form -->
-  <form method="get" action="{{ url_for('stats') }}" style="text-align: center; margin-bottom: 20px;">
-    <div>
-      <label for="start_year">Start Year:</label>
-      <select name="start_year" id="start_year">
-        {% for y in range(2020, 2031) %}
-          <option value="{{ y }}" {% if y == start_year %}selected{% endif %}>{{ y }}</option>
-        {% endfor %}
-      </select>
-      <label for="start_month">Start Month:</label>
-      <select name="start_month" id="start_month">
-        {% for m in range(1, 13) %}
-          <option value="{{ m }}" {% if m == start_month %}selected{% endif %}>{{ m }}</option>
-        {% endfor %}
-      </select>
-    </div>
-    <br>
-    <div>
-      <label for="end_year">End Year:</label>
-      <select name="end_year" id="end_year">
-        {% for y in range(2020, 2031) %}
-          <option value="{{ y }}" {% if y == end_year %}selected{% endif %}>{{ y }}</option>
-        {% endfor %}
-      </select>
-      <label for="end_month">End Month:</label>
-      <select name="end_month" id="end_month">
-        {% for m in range(1, 13) %}
-          <option value="{{ m }}" {% if m == end_month %}selected{% endif %}>{{ m }}</option>
-        {% endfor %}
-      </select>
-    </div>
-    <br>
-    <button type="submit">Load Statistics</button>
+  <form class="toolbar" method="get" action="{{ url_for('stats') }}">
+    <label for="start_year">Start Year:</label>
+    <select class="form-control" name="start_year" id="start_year">
+      {% for y in range(2020, 2031) %}
+        <option value="{{ y }}" {% if y == start_year %}selected{% endif %}>{{ y }}</option>
+      {% endfor %}
+    </select>
+    <label for="start_month">Start Month:</label>
+    <select class="form-control" name="start_month" id="start_month">
+      {% for m in range(1, 13) %}
+        <option value="{{ m }}" {% if m == start_month %}selected{% endif %}>{{ m }}</option>
+      {% endfor %}
+    </select>
+    <label for="end_year">End Year:</label>
+    <select class="form-control" name="end_year" id="end_year">
+      {% for y in range(2020, 2031) %}
+        <option value="{{ y }}" {% if y == end_year %}selected{% endif %}>{{ y }}</option>
+      {% endfor %}
+    </select>
+    <label for="end_month">End Month:</label>
+    <select class="form-control" name="end_month" id="end_month">
+      {% for m in range(1, 13) %}
+        <option value="{{ m }}" {% if m == end_month %}selected{% endif %}>{{ m }}</option>
+      {% endfor %}
+    </select>
+    <button type="submit" class="btn btn-primary">Load Statistics</button>
   </form>
-  
+
   <!-- Bar Chart -->
-  <div style="max-width: 900px; margin: auto;">
+  <div class="stats-chart-wrap">
     <canvas id="statsChart"></canvas>
   </div>
   
@@ -128,7 +110,7 @@
   </script>
   
   <!-- Statistics Table -->
-  <table>
+  <table class="data-table stats-table">
     <thead>
       <tr>
         <th>Surgeon</th>

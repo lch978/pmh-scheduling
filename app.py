@@ -223,6 +223,45 @@ def create_app():
     # Surgeon Management Endpoints
     #############################################
 
+    def build_nlth_context(surgeons):
+        """Build template context for the per-month NLTH surgeon panel.
+
+        Reads `nlth_year` and `nlth_half` from the query string (with sensible
+        defaults), and returns the year options, the 6 months for the selected
+        half, the candidate surgeons (1A/1B only), and any saved assignments.
+        """
+        today = datetime.date.today()
+        try:
+            nlth_year = int(request.args.get('nlth_year') or today.year)
+        except Exception:
+            nlth_year = today.year
+        nlth_half = request.args.get('nlth_half') or ('H1' if today.month <= 6 else 'H2')
+        if nlth_half not in ('H1', 'H2'):
+            nlth_half = 'H1'
+        month_nums = list(range(1, 7)) if nlth_half == 'H1' else list(range(7, 13))
+        nlth_months = [(m, calendar.month_abbr[m]) for m in month_nums]
+
+        candidates = [
+            s for s in surgeons
+            if set(parse_call_levels(s.get("call_levels", ""))).intersection({"1A", "1B"})
+        ]
+        candidates.sort(key=lambda s: (s.get("name") or "").lower())
+
+        assignments = get_monthly_nlth_map(nlth_year, month_nums)
+
+        year_options = list(range(today.year - 1, today.year + 3))
+        if nlth_year not in year_options:
+            year_options = sorted(set(year_options) | {nlth_year})
+
+        return {
+            "nlth_year": nlth_year,
+            "nlth_half": nlth_half,
+            "nlth_months": nlth_months,
+            "nlth_candidates": candidates,
+            "nlth_assignments": assignments,
+            "nlth_year_options": year_options,
+        }
+
     @app.route('/surgeons')
     @admin_required
     def list_surgeons():
@@ -236,7 +275,7 @@ def create_app():
                 orders = [level_order.get(l, 99) for l in levels]
                 return min(orders)
             surgeons.sort(key=lambda s: (get_lowest_level(s), s["name"].lower()))
-        return render_template('surgeons_list.html', surgeons=surgeons)
+        return render_template('surgeons_list.html', surgeons=surgeons, **build_nlth_context(surgeons))
     
     @app.route('/surgeons/sort_by_team_then_level')
     @admin_required
@@ -258,7 +297,7 @@ def create_app():
             s['name'].lower()
         ))
 
-        return render_template('surgeons_list.html', surgeons=surgeons)
+        return render_template('surgeons_list.html', surgeons=surgeons, **build_nlth_context(surgeons))
 
     @app.route('/surgeons/add', methods=['GET', 'POST'])
     @admin_required
@@ -449,7 +488,6 @@ def create_app():
             UPDATE surgeons
             SET name       = :name,
                 call_levels= :levels,
-                nlth       = :nlth,
                 team       = :team
             WHERE id         = :id
         """)
@@ -462,7 +500,6 @@ def create_app():
                     sid = surgeon['id']
                     name_field = f"name_{sid}"
                     levels_field = f"call_levels_{sid}"
-                    nlth_field = f"nlth_{sid}"
                     team_field = f"team_{sid}"
 
                     new_name   = request.form.get(name_field, surgeon['name'])
@@ -470,15 +507,11 @@ def create_app():
                     new_levels_str = ",".join(new_levels)
                     new_team = request.form.get(team_field) or ""
 
-                    # Checkbox: if the field is present in form data, checkbox was checked
-                    new_nlth = (request.form.get(nlth_field) == 'on')
-
                     db.execute(
                         stmt,
                         {
                             "name":   new_name,
                             "levels": new_levels_str,
-                            "nlth":   new_nlth,
                             "team":   new_team,
                             "id":     sid
                         }
@@ -489,6 +522,29 @@ def create_app():
             traceback.print_exc()
             flash(f"Failed to update surgeons: {e}", "error")
         return redirect(url_for('list_surgeons'))
+
+    @app.route('/update_monthly_nlth', methods=['POST'])
+    @admin_required
+    def update_monthly_nlth():
+        try:
+            year = int(request.form.get('nlth_year'))
+        except Exception:
+            flash("Invalid year for NLTH surgeon.", "error")
+            return redirect(url_for('list_surgeons'))
+        half = request.form.get('nlth_half') or 'H1'
+        if half not in ('H1', 'H2'):
+            half = 'H1'
+        month_nums = list(range(1, 7)) if half == 'H1' else list(range(7, 13))
+        try:
+            for m in month_nums:
+                raw = request.form.get(f"nlth_surgeon_{m}")
+                set_monthly_nlth(year, m, raw)
+            flash("NLTH surgeon assignments saved.", "success")
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            flash(f"Failed to save NLTH surgeon assignments: {e}", "error")
+        return redirect(url_for('list_surgeons', nlth_year=year, nlth_half=half))
 
     #############################################
     # Maximum Calls Configuration Endpoint
@@ -516,6 +572,7 @@ def create_app():
                 "3": int(request.form.get("group_3", 10)),
                 "4": int(request.form.get("group_4", 10)),
                 "l2g1_1a": int(request.form.get("group_l2g1_1a", 4)),
+                "l2g1_1a_total": max(0, int(request.form.get("group_l2g1_1a_total", 8))),
                 "urology_min": urology_min_val,
                 "urology_max": urology_max_val,
             }
@@ -524,6 +581,7 @@ def create_app():
             return redirect(url_for('config_max_calls'))
         config = get_max_calls_config()
         config.setdefault("l2g1_1a", config.get("l2g1_1ab", 4))
+        config.setdefault("l2g1_1a_total", 8)
         config.setdefault("urology_min", 2)
         config.setdefault("urology_max", 6)
         return render_template('config_max_calls.html', config=config)
@@ -537,7 +595,6 @@ def create_app():
     def global_config_page():
         teams = ['Team 1','Team 2','Team 3','Team 4','Urology']
         if request.method == 'POST':
-            existing_config = get_global_config()
             days = list(range(7))
             new_prefs = {}
             for team in teams:
@@ -559,6 +616,7 @@ def create_app():
             gamma_team_pref = request.form.get("gamma_team_pref", "10")
             gamma_weekend_balance = request.form.get("gamma_weekend_balance", "50")
             gamma_consec_weekend = request.form.get("gamma_consec_weekend", "20")
+            gamma_urology_weekend = request.form.get("gamma_urology_weekend", "50")
             gamma_weekend_team_diversity = request.form.get("gamma_weekend_team_diversity", "50")
             gamma_balance = request.form.get("gamma_balance", "100")
             max_weekend_calls = request.form.get("max_weekend_calls", "3")
@@ -573,15 +631,9 @@ def create_app():
             fairness_fallback_policy = request.form.get("fairness_fallback_policy", "auto_relax")
             if fairness_fallback_policy not in ("auto_relax", "no_fallback"):
                 fairness_fallback_policy = "auto_relax"
-            # checkboxes
+            # checkboxes (unchecked boxes are omitted from form data → treat as '0')
             def cb(name, default='0'):
-                """
-                Preserve existing persisted value when a checkbox field is absent.
-                This prevents partial/legacy forms from silently disabling flags.
-                """
-                if name in request.form:
-                    return '1' if request.form.get(name) == '1' else '0'
-                return str(existing_config.get(name, default))
+                return '1' if request.form.get(name) == '1' else '0'
             flags = {
                 "enable_spacing_penalty": cb("enable_spacing_penalty", "1"),
                 "enable_availability_unavail_prev_penalty": cb("enable_availability_unavail_prev_penalty", "1"),
@@ -605,6 +657,7 @@ def create_app():
                 "enable_unavail_deadline": cb("enable_unavail_deadline", "0"),
                 "enable_l2g1_primary_calls": cb("enable_l2g1_primary_calls", "0"),
                 "enable_l2g1_primary_2a_same_day_penalty": cb("enable_l2g1_primary_2a_same_day_penalty", "1"),
+                "enable_urology_weekend_penalty": cb("enable_urology_weekend_penalty", "1"),
             }
             gamma_l2g1_primary_2a_same_day = request.form.get("gamma_l2g1_primary_2a_same_day", "30")
             update_global_config({
@@ -618,6 +671,7 @@ def create_app():
                 "gamma_team_pref": gamma_team_pref,
                 "gamma_weekend_balance": gamma_weekend_balance,
                 "gamma_consec_weekend": gamma_consec_weekend,
+                "gamma_urology_weekend": gamma_urology_weekend,
                 "gamma_weekend_team_diversity": gamma_weekend_team_diversity,
                 "gamma_balance": gamma_balance,
                 "gamma_unavail_credit": gamma_unavail_credit,
@@ -633,6 +687,7 @@ def create_app():
                 "gamma_l2g1_primary_2a_same_day": gamma_l2g1_primary_2a_same_day,
                 **flags
             })
+            get_db().commit()
             flash("Global configuration saved.", "success")
             return redirect(url_for('global_config_page'))
         else:
@@ -865,6 +920,8 @@ def create_app():
 
         # Build candidates per level for UI selects
         surgeons = get_all_surgeons()
+        # NLTH surgeon is chosen per month; override the per-surgeon flag accordingly.
+        apply_monthly_nlth(surgeons, year_sel, month_sel)
         _gc_ns = get_global_config()
         _l2g1_primary = str(_gc_ns.get("enable_l2g1_primary_calls", "0")) == "1"
 
@@ -1173,12 +1230,23 @@ def create_app():
             # Aggregate level counts per surgeon name
             levels = ["1A","1B","Urology","2A","2B","3","4"]
             hy_level_counts = {}
+            # Per-day deduplicated Level-1 days: a surgeon on both 1A and 1B the
+            # same day (e.g. urology mirror) counts ONCE toward the G1 cohort.
+            hy_level1_days = {}
             def add_count(nm, lvl):
                 if not nm:
                     return
                 rec = hy_level_counts.setdefault(nm, {L:0 for L in levels})
                 if lvl in rec:
                     rec[lvl] += 1
+            def add_level1_day(assigns):
+                names = set()
+                for L in ("1A", "1B"):
+                    nm = assigns.get(L)
+                    if nm:
+                        names.add(nm)
+                for nm in names:
+                    hy_level1_days[nm] = hy_level1_days.get(nm, 0) + 1
             # Prior months (published schedules)
             for m in [m for m in hy_months if m != month]:
                 prev = get_published_schedule_version(year, m)
@@ -1189,10 +1257,14 @@ def create_app():
                         continue
                     for L in levels:
                         add_count(assigns.get(L), L)
+                    add_level1_day(assigns)
             # Current month (use in-memory schedule)
             for _, assigns in schedule.items():
+                if not isinstance(assigns, dict):
+                    continue
                 for L in levels:
                     add_count(assigns.get(L), L)
+                add_level1_day(assigns)
 
             # Group membership by surgeon name
             def has_level(s, L):
@@ -1209,7 +1281,7 @@ def create_app():
             g3_total = {}
             g4_total = {}
             for nm, lc in hy_level_counts.items():
-                g1_total[nm] = int(lc.get('1A',0) + lc.get('1B',0))
+                g1_total[nm] = int(hy_level1_days.get(nm, 0))
                 g2_total[nm] = int(lc.get('2A',0) + lc.get('2B',0))
                 # group 3: level 3 for all; plus 2B only for grp4 surgeons
                 g3_extra_2b = lc.get('2B',0) if nm in group4_l2_names else 0
@@ -2571,6 +2643,8 @@ def create_app():
             preassignments = {}
 
         surgeons = get_all_surgeons()
+        # NLTH surgeon is chosen per month; override the per-surgeon flag accordingly.
+        apply_monthly_nlth(surgeons, year, month)
         # Half-year horizon prior counts and credits
         cfg = get_global_config()
         enable_horizon = str(cfg.get('enable_horizon_fairness','0')) == '1'

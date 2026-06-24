@@ -2,72 +2,9 @@
 {% block title %}Saved Schedule for {{ year }}-{{ '%02d'|format(month) }}{% endblock %}
 {% block head %}
   <style>
-    .schedule-container {
-      max-width: 1000px;
-      margin: auto;
-      background-color: #fff;
-      padding: 20px;
-      border-radius: 8px;
-      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    }
-    .schedule-header {
-      text-align: center;
-      margin-bottom: 20px;
-    }
-    .schedule-form {
-      text-align: center;
-      margin-bottom: 20px;
-    }
-    .schedule-form select,
-    .schedule-form button {
-      padding: 8px 12px;
-      margin: 4px;
-      font-size: 14px;
-    }
-    .schedule-table {
-      width: 100%;
-      border-collapse: collapse;
-      margin-bottom: 20px;
-    }
-    .schedule-table th,
-    .schedule-table td {
-      border: 1px solid #ccc;
-      padding: 10px;
-      text-align: center;
-    }
-    .schedule-table th {
-      background-color: #f2f2f2;
-    }
-    .weekend {
-      background-color: #f9f2f4;
-    }
-    .holiday {
-      background-color: #eef9ff;
-    }
-    .button-group {
-      text-align: center;
-      margin-top: 20px;
-    }
-    .button-group form {
-      display: inline-block;
-      margin: 4px;
-    }
-    .button-group button {
-      padding: 10px 15px;
-      font-size: 14px;
-      cursor: pointer;
-      border: none;
-      border-radius: 4px;
-      background-color: #337ab7;
-      color: #fff;
-      transition: background-color 0.3s;
-    }
-    .button-group button:hover {
-      background-color: #286090;
-    }
-    .schedule-cell-name {
-      cursor: pointer;
-    }
+    .schedule-container { max-width: 1000px; }
+    .schedule-table { margin-bottom: 20px; }
+    .schedule-cell-name { cursor: pointer; }
     .schedule-cell-name.highlight-match {
       background-color: #d9f7d9;
       font-weight: 600;
@@ -75,33 +12,29 @@
   </style>
 {% endblock %}
 {% block content %}
-  <div class="schedule-container">
-    <div class="schedule-header">
-      <h1>Saved Schedule for {{ year }}-{{ '%02d'|format(month) }}</h1>
-    </div>
-    
+  <div class="card schedule-container">
+    <h1 class="page-title">Saved Schedule for {{ year }}-{{ '%02d'|format(month) }}</h1>
+
     <!-- Year/Month Selection Form -->
-    <div class="schedule-form">
-      <form method="get" action="{{ url_for('saved_schedule') }}">
-        <label for="year">Year:</label>
-        <select name="year" id="year">
-          {% for y in range(2020, 2031) %}
-            <option value="{{ y }}" {% if y == year %}selected{% endif %}>{{ y }}</option>
-          {% endfor %}
-        </select>
-        <label for="month">Month:</label>
-        <select name="month" id="month">
-          {% for m in range(1, 13) %}
-            <option value="{{ m }}" {% if m == month %}selected{% endif %}>{{ m }}</option>
-          {% endfor %}
-        </select>
-        <button type="submit">Load Schedule</button>
-      </form>
-    </div>
-    
+    <form class="toolbar" method="get" action="{{ url_for('saved_schedule') }}">
+      <label for="year">Year:</label>
+      <select class="form-control" name="year" id="year">
+        {% for y in range(2020, 2031) %}
+          <option value="{{ y }}" {% if y == year %}selected{% endif %}>{{ y }}</option>
+        {% endfor %}
+      </select>
+      <label for="month">Month:</label>
+      <select class="form-control" name="month" id="month">
+        {% for m in range(1, 13) %}
+          <option value="{{ m }}" {% if m == month %}selected{% endif %}>{{ m }}</option>
+        {% endfor %}
+      </select>
+      <button class="btn btn-primary" type="submit">Load Schedule</button>
+    </form>
+
     <!-- Schedule Table -->
     <div class="table-scroll table-mobile-compact sticky-first-col">
-    <table class="schedule-table">
+    <table class="data-table schedule-table">
       <thead>
         <tr>
           <th>Date</th>

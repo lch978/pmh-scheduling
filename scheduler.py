@@ -147,6 +147,22 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
     # Policy: keep cohorts unchanged, enforce max-min <= 1 when hard cap is enabled.
     # If configured stricter (0), preserve it.
     fairness_hard_cap_effective = _effective_fairness_cap(fairness_hard_cap_range)
+    # Cap enforcement mode (per the call-balance design):
+    #   - "no_fallback": cap is a HARD constraint; infeasibility surfaces an error.
+    #   - "auto_relax" (default): cap is SOFT and per-cohort. The solver keeps
+    #     every cohort at <= cap whenever feasible and exceeds it by the minimum
+    #     amount only in the specific cohort(s) where <= cap is impossible,
+    #     instead of dropping the cap globally.
+    use_hard_cap = (
+        enable_fairness_hard_cap
+        and not _relax_fairness_caps
+        and fairness_fallback_policy == "no_fallback"
+    )
+    use_soft_cap = (
+        enable_fairness_hard_cap
+        and not _relax_fairness_caps
+        and fairness_fallback_policy == "auto_relax"
+    )
     gamma_no_call = int(global_config.get("gamma_no_call", "10"))
     gamma_unavail_prev = int(global_config.get("gamma_unavail_prev", "5"))
     gamma_1B = int(global_config.get("gamma_1B", "1"))
@@ -173,7 +189,10 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
     # Heavier scaling in allow-empty mode; still keep empty-slot penalty highest elsewhere in objective.
     fairness_scale = 200 if allow_empty else 100
     fairness_weight = max(fairness_weight, base_max_soft * fairness_scale)
-    gamma_balance   = max(gamma_balance,   base_max_soft * fairness_scale)
+    # NOTE: gamma_balance is the weight of the call-distribution (L1 dispersion)
+    # term and is taken straight from config (default 100). It must NOT be scaled
+    # up to fairness_weight, otherwise interior-distribution flattening would
+    # compete with (instead of being subordinate to) the max-min range objective.
     gamma_weekend_balance = int(global_config.get("gamma_weekend_balance", "50"))
     max_weekend_calls_cfg = int(global_config.get("max_weekend_calls", "3"))
     min_calls_nlth_cfg = int(global_config.get("min_calls_nlth", "3"))
@@ -182,6 +201,8 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
     # New: encourage balanced team presence on weekends (more diverse teams across weekends)
     gamma_weekend_team_diversity = int(global_config.get("gamma_weekend_team_diversity", "50"))
     gamma_2b_usage = int(global_config.get("gamma_2b_usage", "0"))
+    # New: discourage assigning urology-only surgeons to weekend Urology calls (soft).
+    gamma_urology_weekend = int(global_config.get("gamma_urology_weekend", "50"))
     gamma_fairness_l2_groups = int(global_config.get("gamma_fairness_l2_groups", "500"))
     # New: credit for unavailability (each k days → 1 fewer call, soft)
     gamma_unavail_credit = int(global_config.get("gamma_unavail_credit", "50"))
@@ -214,6 +235,7 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
     enable_unavail_credit            = is_enabled("enable_unavail_credit")
     enable_l2g1_primary_calls        = is_enabled("enable_l2g1_primary_calls", "0")
     enable_l2g1_primary_2a_same_day_penalty = is_enabled("enable_l2g1_primary_2a_same_day_penalty", "1")
+    enable_urology_weekend_penalty   = is_enabled("enable_urology_weekend_penalty", "1")
     try:
         gamma_l2g1_primary_2a_same_day = int(global_config.get("gamma_l2g1_primary_2a_same_day", "30"))
     except Exception:
@@ -812,6 +834,27 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                 ).OnlyEnforceIf(b.Not())
                 indicators[(d, lev, s_id)] = b
 
+    # --- Level-1 "on call" per day: a surgeon who holds 1A and/or 1B on day d
+    # counts as ONE level-1 call that day, never two. We use the OR (max) of the
+    # 1A and 1B indicators instead of their sum, so that if the same surgeon ever
+    # occupies both slots on the same day (or the display mirror shows them in
+    # both), every per-surgeon tally (overall calls, 1A+1B cohort fairness, the
+    # max-calls-per-month cap, NLTH minimums via call_count_overall) charges a
+    # single call. With the current per-day uniqueness rule (X[1A] != X[1B]) at
+    # most one of the two indicators is 1, so OR == sum and this is a no-op; it
+    # only changes behavior in the same-surgeon-both-slots case the user wants.
+    lvl1_any = {}
+    non_lvl1_levels = [lev for lev in all_levels if lev not in ("1A", "1B")]
+    for s_id in all_ids:
+        for d in range(num_days):
+            b = model.NewBoolVar(f"lvl1_any_s{s_id}_d{d}")
+            add_named_constraint(
+                f"Level-1 on-call (1A or 1B): Day {d} surgeon {s_id}",
+                model.AddMaxEquality, b,
+                [indicators[(d, "1A", s_id)], indicators[(d, "1B", s_id)]],
+            )
+            lvl1_any[(s_id, d)] = b
+
     # --- Urology level membership (used for min/max + mirror logic) ---
     urology_ids = [
         s["id"] for s in surgeons
@@ -956,14 +999,19 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
     call_count_overall = {}
     for s in all_surgeon_ids:
         call_count_overall[s] = model.NewIntVar(0, num_days * len(all_levels), f'count_all_{s}')
+        # 1A+1B contribute a single call per day (lvl1_any); all other levels are
+        # summed normally.
         add_named_constraint(f"Total calls for surgeon {s}",
-            model.Add, call_count_overall[s] == sum(indicators[(d, level, s)] for d in range(num_days) for level in all_levels))
+            model.Add, call_count_overall[s] == (
+                sum(lvl1_any[(s, d)] for d in range(num_days))
+                + sum(indicators[(d, level, s)] for d in range(num_days) for level in non_lvl1_levels)
+            ))
     
     if enable_max_calls_level1:
         for s_id in all_ids:
-            c1 = model.NewIntVar(0, num_days*2, f"count1_{s_id}")
+            c1 = model.NewIntVar(0, num_days, f"count1_{s_id}")
             add_named_constraint(f"1A+1B calls for surgeon {s_id}",
-                model.Add, c1 == sum(indicators[(d, "1A", s_id)] + indicators[(d, "1B", s_id)] for d in range(num_days)))
+                model.Add, c1 == sum(lvl1_any[(s_id, d)] for d in range(num_days)))
             add_named_constraint(f"Max 1A+1B calls for surgeon {s_id}",
                 model.Add, c1 <= max_calls_level1)
 
@@ -987,6 +1035,30 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                 c_l2g1 <= max_l2g1_1a,
             )
 
+        # Group-wide monthly cap: total 1A calls held by all L2G1 (2A-only)
+        # surgeons combined cannot exceed this configured maximum.
+        try:
+            max_l2g1_1a_total = int(max_config.get("l2g1_1a_total", 8))
+        except Exception:
+            max_l2g1_1a_total = 8
+        if max_l2g1_1a_total < 0:
+            max_l2g1_1a_total = 0
+        total_l2g1_1a = model.NewIntVar(0, num_days * len(group1_ids), "count_l2g1_1a_total")
+        add_named_constraint(
+            "L2G1 1A total count across 2A surgeons",
+            model.Add,
+            total_l2g1_1a == sum(
+                indicators[(d, "1A", s_id)]
+                for s_id in group1_ids
+                for d in range(num_days)
+            ),
+        )
+        add_named_constraint(
+            "Max L2G1 1A calls across all 2A surgeons (monthly)",
+            model.Add,
+            total_l2g1_1a <= max_l2g1_1a_total,
+        )
+
     # --- Hard minimum total calls for NLTH surgeons ---
     if min_calls_nlth_cfg > 0 and nlth_ids:
         for s in nlth_ids:
@@ -1004,29 +1076,80 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
 
     # --- Per-group fairness terms (replace overall fairness) ---
     group_fairness_diffs = []
+    # Soft per-cohort cap overflow (how much a cohort's range exceeds the cap).
+    # Minimized lexicographically before everything else so <= cap holds whenever
+    # feasible and is exceeded by the minimum only in cohorts where it's impossible.
+    group_cap_overflows = []
+
+    def _add_cohort_cap_overflow(tag, diff_var):
+        """Soft cap: overflow = max(0, diff - cap). Returns the overflow var.
+
+        Used in auto_relax mode so the <= cap target is kept per-cohort whenever
+        feasible and exceeded by the minimum only in the cohort(s) where it is
+        impossible, instead of dropping the cap across every cohort.
+        """
+        ov = model.NewIntVar(0, fairness_abs_bound * 2, f"{tag}_cap_overflow")
+        add_named_constraint(f"{tag} cap overflow >= diff - cap",
+            model.Add, ov >= diff_var - fairness_hard_cap_effective)
+        group_cap_overflows.append(ov)
+        return ov
+
+    # L1 dispersion terms. The range (max-min) keeps the spread within the hard
+    # cap (<=1) where feasible, but range is blind to the interior distribution:
+    # [4,6,6,6,6,6] and [5,5,5,6,6,6] both have range 2, yet the second is far
+    # more balanced. These terms add the scaled sum of absolute deviations from
+    # each cohort mean, so among all min-range solutions the solver prefers the
+    # flattest one (and degrades gracefully when a cohort must exceed range 1).
+    group_l1_terms = []
+
+    def _accumulate_l1_dispersion(tag, totals):
+        """Append scaled |total_s - mean| terms for a cohort to group_l1_terms.
+
+        We avoid fractional means by scaling: dev_s = n*total_s - sum(totals),
+        which equals n*(total_s - mean). Minimizing sum_s |dev_s| minimizes the
+        L1 distance to the mean for the whole cohort.
+        """
+        if not enable_deviation_sum:
+            return
+        n = len(totals)
+        if n <= 1:
+            return
+        dev_bound = 2 * fairness_abs_bound * n
+        sum_t = model.NewIntVar(-fairness_abs_bound * n, fairness_abs_bound * n, f"{tag}_l1_sum")
+        add_named_constraint(f"{tag} L1 sum", model.Add, sum_t == sum(totals))
+        for idx, t in enumerate(totals):
+            dev = model.NewIntVar(-dev_bound, dev_bound, f"{tag}_l1_dev_{idx}")
+            add_named_constraint(f"{tag} L1 dev {idx}", model.Add, dev == n * t - sum_t)
+            a = model.NewIntVar(0, dev_bound, f"{tag}_l1_abs_{idx}")
+            add_named_constraint(f"{tag} L1 abs {idx}", model.AddAbsEquality, a, dev)
+            group_l1_terms.append(a)
 
     # Group 1: (1A + 1B); optionally merge Level-2 Group 1 (supervised 2A-only) for fairness when enabled
     group_level1_ids = [s["id"] for s in surgeons if set(parse_call_levels(s.get("call_levels",""))).intersection({"1A","1B"}) and s["id"] not in nlth_ids]
     if enable_l2g1_primary_calls and group1_ids:
         group_level1_ids = sorted(set(group_level1_ids) | {sid for sid in group1_ids if sid not in nlth_ids})
     if len(group_level1_ids) > 1:
-        lvl1_counts = {s: model.NewIntVar(0, num_days * 2, f"lvl1_count_{s}") for s in group_level1_ids}
+        lvl1_counts = {s: model.NewIntVar(0, num_days, f"lvl1_count_{s}") for s in group_level1_ids}
         for s in group_level1_ids:
+            # Count once per day when the same surgeon holds both 1A and 1B.
             add_named_constraint(f"(1A+1B) count for surgeon {s}",
-                model.Add, lvl1_counts[s] == sum(indicators[(d, lvl, s)] for d in range(num_days) for lvl in ["1A","1B"]))
+                model.Add, lvl1_counts[s] == sum(lvl1_any[(s, d)] for d in range(num_days)))
         fairness_vars_lvl1 = []
         for s in group_level1_ids:
-            # prior horizon counts (1A+1B)
-            prior_1a = 0
-            prior_1b = 0
+            # prior horizon counts (1A+1B), counting a same-day 1A+1B as one call.
+            # Prefer the per-day deduplicated count when available; fall back to
+            # prior 1A + prior 1B for older horizon payloads without it.
+            prior_total = 0
             if isinstance(horizon_prior_counts, dict):
                 try:
-                    prior_levels = horizon_prior_counts.get("prior_levels", {})
-                    prior_1a = int(prior_levels.get("1A", {}).get(s, 0))
-                    prior_1b = int(prior_levels.get("1B", {}).get(s, 0))
+                    prior_level1_days = horizon_prior_counts.get("prior_level1_days")
+                    if isinstance(prior_level1_days, dict):
+                        prior_total = int(prior_level1_days.get(s, 0))
+                    else:
+                        prior_levels = horizon_prior_counts.get("prior_levels", {})
+                        prior_total = int(prior_levels.get("1A", {}).get(s, 0)) + int(prior_levels.get("1B", {}).get(s, 0))
                 except Exception:
-                    prior_1a = prior_1b = 0
-            prior_total = prior_1a + prior_1b
+                    prior_total = 0
             # Credit semantics for fairness caps:
             # +1 credit means "one fewer expected raw call", so we add credit to
             # the adjusted fairness total (not subtract). This pushes the solver
@@ -1046,9 +1169,12 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
         add_named_constraint("Min (1A+1B) count", model.AddMinEquality, gmin, fairness_vars_lvl1)
         diff = model.NewIntVar(0, fairness_abs_bound * 2, "lvl1_diff")
         add_named_constraint("(1A+1B) diff", model.Add, diff == gmax - gmin)
-        if enable_fairness_hard_cap and not _relax_fairness_caps:
+        if use_hard_cap:
             add_named_constraint("Fairness cap: (1A+1B) range <= cap", model.Add, diff <= fairness_hard_cap_effective)
+        elif use_soft_cap:
+            _add_cohort_cap_overflow("lvl1", diff)
         group_fairness_diffs.append(diff)
+        _accumulate_l1_dispersion("lvl1", fairness_vars_lvl1)
 
     # Group 2 (updated): single (2A + 2B) fairness across ALL L2 subgroups 1, 2, and 3 combined
     l2_union_ids = [s for s in (list(set(group1_ids + group2_ids + group3_ids))) if s not in nlth_ids]
@@ -1084,9 +1210,12 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
         add_named_constraint("Min (2A+2B) all-L2", model.AddMinEquality, gmin, fairness_vars_lvl2_all)
         diff = model.NewIntVar(0, fairness_abs_bound * 2, "lvl2_all_diff")
         add_named_constraint("(2A+2B) all-L2 diff", model.Add, diff == gmax - gmin)
-        if enable_fairness_hard_cap and not _relax_fairness_caps:
+        if use_hard_cap:
             add_named_constraint("Fairness cap: (2A+2B) all-L2 range <= cap", model.Add, diff <= fairness_hard_cap_effective)
+        elif use_soft_cap:
+            _add_cohort_cap_overflow("lvl2_all", diff)
         group_fairness_diffs.append(diff)
+        _accumulate_l1_dispersion("lvl2_all", fairness_vars_lvl2_all)
 
     # Group 3: include all surgeons with level 3, plus L2 subgroup 4; 
     # counts include level 3 for everyone, and add 2B only for subgroup 4.
@@ -1128,9 +1257,12 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
         add_named_constraint("Min lvl3 union count", model.AddMinEquality, gmin, fairness_vars_g3)
         diff = model.NewIntVar(0, fairness_abs_bound * 2, "lvl3_union_diff")
         add_named_constraint("lvl3 union diff", model.Add, diff == gmax - gmin)
-        if enable_fairness_hard_cap and not _relax_fairness_caps:
+        if use_hard_cap:
             add_named_constraint("Fairness cap: lvl3 union range <= cap", model.Add, diff <= fairness_hard_cap_effective)
+        elif use_soft_cap:
+            _add_cohort_cap_overflow("lvl3_union", diff)
         group_fairness_diffs.append(diff)
+        _accumulate_l1_dispersion("lvl3_union", fairness_vars_g3)
 
     # Group 4: level 4 only
     group4_level_ids = [s["id"] for s in surgeons if "4" in parse_call_levels(s.get("call_levels","")) and s["id"] not in nlth_ids]
@@ -1163,9 +1295,12 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
         add_named_constraint("Min (4) count", model.AddMinEquality, gmin, fairness_vars_lvl4)
         diff = model.NewIntVar(0, fairness_abs_bound * 2, "lvl4_diff")
         add_named_constraint("(4) diff", model.Add, diff == gmax - gmin)
-        if enable_fairness_hard_cap and not _relax_fairness_caps:
+        if use_hard_cap:
             add_named_constraint("Fairness cap: (4) range <= cap", model.Add, diff <= fairness_hard_cap_effective)
+        elif use_soft_cap:
+            _add_cohort_cap_overflow("lvl4", diff)
         group_fairness_diffs.append(diff)
+        _accumulate_l1_dispersion("lvl4", fairness_vars_lvl4)
     
     # --- Then, create a per-surgeon, per-day “assigned” BoolVar ----
     assigned = {}
@@ -1543,6 +1678,15 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
     if enable_team_day_prefs and td_terms:
         objective_terms += [- coef * b for coef, b in td_terms]
 
+    # Soft per-cohort cap overflow: penalize exceeding the <= cap target even more
+    # strongly than in-cap range, so the solver only ever goes over the cap in a
+    # cohort when it is genuinely impossible to stay within it.
+    cap_overflow_total = None
+    if group_cap_overflows:
+        cap_overflow_total = model.NewIntVar(0, fairness_abs_bound * 2 * len(group_cap_overflows), "cap_overflow_total")
+        add_named_constraint("Cap overflow total", model.Add, cap_overflow_total == sum(group_cap_overflows))
+        objective_terms.append((fairness_weight * 1000) * cap_overflow_total)
+
     # Add per-group fairness terms
     if group_fairness_diffs:
         objective_terms.extend([fairness_weight * diff for diff in group_fairness_diffs])
@@ -1550,6 +1694,11 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
     if group_fairness_diffs:
         fairness_total = model.NewIntVar(0, fairness_abs_bound * 2 * len(group_fairness_diffs), "fairness_total")
         add_named_constraint("Fairness total", model.Add, fairness_total == sum(group_fairness_diffs))
+    l1_total = None
+    if enable_deviation_sum and group_l1_terms:
+        _l1_ub = 2 * fairness_abs_bound * max(1, len(all_surgeon_ids)) * len(group_l1_terms)
+        l1_total = model.NewIntVar(0, _l1_ub, "fairness_l1_total")
+        add_named_constraint("Fairness L1 total", model.Add, l1_total == sum(group_l1_terms))
 
     # --- Soft penalty for using 2B (reduce supervisor overload when not required) ---
     # Apply whenever gamma_2b_usage > 0 (toggle is optional)
@@ -1562,6 +1711,17 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
             add_named_constraint(f"2B not used on day {days[d]}", model.Add, X[(d, "2B")] == -1).OnlyEnforceIf(b.Not())
             two_b_usage_terms.append(b)
         objective_terms.append(gamma_2b_usage * sum(two_b_usage_terms))
+
+    # --- Soft penalty: reduce urology-only surgeon calls on weekends/PH ---
+    # uro_only_on_d_var[d] is 1 when a urology-only surgeon holds the Urology call
+    # that day. Penalizing it on weekend and public-holiday days nudges the solver
+    # to cover those Urology calls with surgeons who also carry other levels
+    # (e.g. 1B+Urology), when feasible, without forbidding urology-only calls outright.
+    if enable_urology_weekend_penalty and gamma_urology_weekend > 0 and urology_only_ids:
+        uro_weekend_terms = [uro_only_on_d_var[d] for d in range(num_days) if is_wk_or_ph[d]]
+        if uro_weekend_terms:
+            objective_terms.append(gamma_urology_weekend * sum(uro_weekend_terms))
+
     normal_objective_expr = sum(objective_terms) if objective_terms else 0
     empty_count_expr = sum(empty_indicators) if empty_indicators else 0
 
@@ -1573,6 +1733,13 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
             _solver.parameters.max_time_in_seconds = 30
         _solver.parameters.log_search_progress = True
         _solver.parameters.log_to_stdout = True
+        # Use a parallel portfolio of search workers to converge faster within the
+        # time budget. This matters because the soft cap relies on the solver
+        # actually reaching the minimum-range solution before the limit.
+        try:
+            _solver.parameters.num_search_workers = 8
+        except Exception:
+            pass
         return _solver
 
     # --- Solve the Model ---
@@ -1582,19 +1749,43 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
     use_two_pass_fairness = enable_two_pass_fairness_priority and (fairness_total is not None)
 
     def _solve_secondary_objective():
-        if use_two_pass_fairness:
-            add_named_constraint("Objective pass1 fairness total", model.Minimize, fairness_total)
-            solver_pass1 = _build_solver()
-            status_pass1 = solver_pass1.Solve(model)
-            if status_pass1 in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-                best_fairness = int(solver_pass1.Value(fairness_total))
-                add_named_constraint("Lock pass1 fairness total", model.Add, fairness_total <= best_fairness)
-                add_named_constraint("Objective pass2 normal", model.Minimize, normal_objective_expr)
-                solver_pass2 = _build_solver()
-                status_pass2 = solver_pass2.Solve(model)
-                if status_pass2 in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-                    return solver_pass2, status_pass2
-            return solver_pass1, status_pass1
+        # Lexicographic fairness priority (each stage is locked before the next):
+        #   0) minimize the total soft-cap overflow so every cohort stays within
+        #      the <= cap (max-min <= 1) target whenever feasible, and exceeds it
+        #      by the minimum only in the cohort(s) where it is impossible.
+        #   1) minimize the sum of cohort ranges (max-min). With the hard cap on,
+        #      this stays <= 1; with the soft cap it tightens the spread further.
+        #   2) minimize L1 dispersion so that, among all equally-tight-range
+        #      solutions, the interior is as flat (well distributed) as possible.
+        #   3) minimize the remaining soft objective.
+        lex_stages = []
+        if use_two_pass_fairness and cap_overflow_total is not None:
+            # Highest priority: keep every cohort within the <= cap target,
+            # exceeding it only by the minimum where it is impossible.
+            lex_stages.append(("fairness cap overflow", cap_overflow_total))
+        if use_two_pass_fairness and fairness_total is not None:
+            lex_stages.append(("fairness range total", fairness_total))
+        if l1_total is not None:
+            lex_stages.append(("fairness L1 dispersion", l1_total))
+
+        if lex_stages:
+            last_solver = None
+            last_status = None
+            for stage_name, stage_expr in lex_stages:
+                add_named_constraint(f"Objective {stage_name}", model.Minimize, stage_expr)
+                stage_solver = _build_solver()
+                stage_status = stage_solver.Solve(model)
+                if stage_status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+                    return stage_solver, stage_status
+                best_stage = int(stage_solver.Value(stage_expr))
+                add_named_constraint(f"Lock {stage_name}", model.Add, stage_expr <= best_stage)
+                last_solver, last_status = stage_solver, stage_status
+            add_named_constraint("Objective pass normal", model.Minimize, normal_objective_expr)
+            final_solver = _build_solver()
+            final_status = final_solver.Solve(model)
+            if final_status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+                return final_solver, final_status
+            return last_solver, last_status
 
         add_named_constraint("Objective", model.Minimize, normal_objective_expr)
         solver_single = _build_solver()
@@ -1955,17 +2146,27 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                         group_level1_ids = sorted(set(group_level1_ids) | {sid for sid in group1_ids if sid not in nlth_ids})
                     g1_raw = {sid: 0 for sid in group_level1_ids}
                     for assigns in diag_sched.values():
+                        if not isinstance(assigns, dict):
+                            continue
+                        # Same surgeon on 1A and 1B that day = one Level-1 call.
+                        lvl1_sids_today = set()
                         for lvl in ["1A","1B"]:
                             name = assigns.get(lvl)
                             if name:
                                 sid = name_to_id.get(name)
                                 if sid in g1_raw:
-                                    g1_raw[sid] += 1
+                                    lvl1_sids_today.add(sid)
+                        for sid in lvl1_sids_today:
+                            g1_raw[sid] += 1
+                    prior_level1_days = horizon_prior_counts.get("prior_level1_days") if isinstance(horizon_prior_counts, dict) else None
+                    def _prior_level1(sid):
+                        if isinstance(prior_level1_days, dict):
+                            return int(prior_level1_days.get(sid, 0))
+                        return int(prior_levels.get("1A", {}).get(sid, 0)) + int(prior_levels.get("1B", {}).get(sid, 0))
                     g1_counts = {
                         sid: (
                             g1_raw.get(sid, 0)
-                            + int(prior_levels.get("1A", {}).get(sid, 0))
-                            + int(prior_levels.get("1B", {}).get(sid, 0))
+                            + _prior_level1(sid)
                             - (fairness_credit_calls_per_surgeon.get(sid, 0) if cap_uses_credit else 0)
                             - (int(prior_credit.get(sid, 0)) if cap_uses_credit else 0)
                         )

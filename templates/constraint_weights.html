@@ -1,14 +1,14 @@
 {% extends "base.html" %}
 {% block title %}Constraint Weights{% endblock %}
 {% block content %}
-  <h1 style="text-align: center;">Global Configuration</h1>
+  <h1 class="page-title">Global Configuration</h1>
   <form method="post" action="{{ url_for('constraint_weights') }}" style="max-width:900px;margin:20px auto;display:grid;grid-template-columns: 260px 1fr;gap:20px;align-items:start;">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <div style="border:1px solid #ddd;border-radius:8px;padding:12px;">
+    <div class="card" style="padding:14px;">
       <h3 style="margin-top:0;">Enable/Disable Constraints</h3>
       <div style="margin:8px 0;">
         <label for="pre_unavail_mode" style="margin-right:10px;">Day-before unavailability rule:</label>
-        <select name="pre_unavail_mode" id="pre_unavail_mode" style="padding:5px;font-size:14px;">
+        <select name="pre_unavail_mode" id="pre_unavail_mode" class="form-control">
           <option value="hard" {% if config.get('pre_unavail_mode','soft') == 'hard' %}selected{% endif %}>Hard (never assign)</option>
           <option value="soft" {% if config.get('pre_unavail_mode','soft') == 'soft' %}selected{% endif %}>Soft (penalize)</option>
           <option value="off" {% if config.get('pre_unavail_mode','soft') == 'off' %}selected{% endif %}>Off (ignore)</option>
@@ -64,7 +64,7 @@
       </label>
     </div>
 
-    <div style="border:1px solid #ddd;border-radius:8px;padding:12px;">
+    <div class="card" style="padding:14px;">
       <h3 style="margin-top:0;">Weights</h3>
       <div style="display:grid;grid-template-columns: 1fr auto;gap:8px;align-items:center;">
         <div style="grid-column:1 / span 2; width:80%;">
@@ -161,7 +161,7 @@
       </div>
 
       <div style="margin-top:12px;text-align:right;">
-        <button type="submit" style="padding: 10px 20px; font-size: 14px;">Save</button>
+        <button type="submit" class="btn btn-primary">Save</button>
       </div>
     </div>
   </form>

@@ -4,7 +4,7 @@
 
 {% block head %}
 <style>
-  .sm-container { max-width: 1500px; margin: auto; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+  .sm-container { max-width: 1500px; margin: auto; background: var(--color-surface); padding: 20px; border-radius: var(--radius); box-shadow: var(--shadow); }
   .sm-header { text-align: center; margin-bottom: 14px; }
   .sm-header h1 { margin: 0; }
   .sm-grid { border: 1px solid #ddd; border-radius: 8px; overflow: auto; background: #fff; }
@@ -21,18 +21,30 @@
   .sm-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
   .sm-level-tag { font-size: 11px; color: #666; background: #f3f4f6; border: 1px solid #e5e7eb; padding: 1px 6px; border-radius: 999px; }
   .sm-panel { padding: 8px; border-top: 1px dashed #e5e7eb; background: #fafcff; display: grid; grid-template-columns: 40px 1fr; gap: 8px; align-items: start; }
-  .sm-delete { width: 32px; height: 32px; border: none; border-radius: 6px; background: #c62828; color: #fff; font-size: 18px; line-height: 1; cursor: pointer; }
-  .sm-delete:hover { background: #a52222; }
+  .sm-delete { width: 32px; height: 32px; border: none; border-radius: 6px; background: var(--color-danger); color: #fff; font-size: 18px; line-height: 1; cursor: pointer; }
+  .sm-delete:hover { background: var(--color-danger-hover); }
   .sm-fields { display: flex; flex-direction: column; gap: 8px; }
   .sm-name-input { width: 100%; box-sizing: border-box; border: 1px solid #d0d7de; border-radius: 4px; padding: 6px 8px; font-size: 13px; }
   .sm-levels { display: flex; flex-wrap: wrap; gap: 6px 10px; }
-  .sm-levels label, .sm-nlth label { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; }
+  .sm-levels label { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; }
   .sm-col-footer { margin-top: auto; padding: 8px; border-top: 1px solid #eee; background: #fcfcfc; }
-  .sm-add-btn { width: 100%; border: none; border-radius: 6px; padding: 8px 10px; font-size: 12px; background: #1976d2; color: #fff; cursor: pointer; }
-  .sm-add-btn:hover { background: #135fa8; }
+  .sm-add-btn { width: 100%; border: none; border-radius: 6px; padding: 8px 10px; font-size: 12px; background: var(--color-primary); color: #fff; cursor: pointer; }
+  .sm-add-btn:hover { background: var(--color-primary-hover); }
   .sm-actions { margin-top: 14px; display: flex; justify-content: flex-end; }
-  .sm-save-btn { border: none; border-radius: 6px; padding: 10px 14px; font-size: 14px; background: #2e7d32; color: #fff; cursor: pointer; }
-  .sm-save-btn:hover { background: #256628; }
+  .sm-save-btn { border: none; border-radius: 6px; padding: 10px 14px; font-size: 14px; background: var(--color-success); color: #fff; cursor: pointer; }
+  .sm-save-btn:hover { background: var(--color-success-hover); }
+
+  .nlth-panel { border: 1px solid #ddd; border-radius: 8px; background: #fafcff; padding: 14px; margin-bottom: 18px; max-width: 360px; }
+  .nlth-panel h2 { margin: 0 0 10px; font-size: 16px; }
+  .nlth-selectors { display: flex; gap: 10px; margin-bottom: 12px; }
+  .nlth-selectors label { display: flex; flex-direction: column; font-size: 12px; color: #555; gap: 4px; }
+  .nlth-select { border: 1px solid #d0d7de; border-radius: 4px; padding: 6px 8px; font-size: 13px; background: #fff; }
+  .nlth-months { display: flex; flex-direction: column; gap: 8px; }
+  .nlth-month-row { display: grid; grid-template-columns: 60px 1fr; align-items: center; gap: 8px; }
+  .nlth-month-row .nlth-month-label { font-weight: 600; font-size: 13px; }
+  .nlth-actions { margin-top: 12px; display: flex; justify-content: flex-end; }
+  .nlth-save-btn { border: none; border-radius: 6px; padding: 8px 14px; font-size: 13px; background: var(--color-success); color: #fff; cursor: pointer; }
+  .nlth-save-btn:hover { background: var(--color-success-hover); }
 </style>
 {% endblock %}
 
@@ -40,6 +52,53 @@
 <div class="sm-container">
   <div class="sm-header">
     <h1>Surgeon Management</h1>
+  </div>
+
+  <div class="nlth-panel">
+    <h2>NLTH surgeon</h2>
+    <form method="get" action="{{ url_for('list_surgeons') }}" id="nlth-selector-form">
+      <div class="nlth-selectors">
+        <label>
+          Year
+          <select class="nlth-select" name="nlth_year" onchange="document.getElementById('nlth-selector-form').submit();">
+            {% for y in nlth_year_options %}
+              <option value="{{ y }}" {% if y == nlth_year %}selected{% endif %}>{{ y }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>
+          Period
+          <select class="nlth-select" name="nlth_half" onchange="document.getElementById('nlth-selector-form').submit();">
+            <option value="H1" {% if nlth_half == 'H1' %}selected{% endif %}>Jan – Jun</option>
+            <option value="H2" {% if nlth_half == 'H2' %}selected{% endif %}>Jul – Dec</option>
+          </select>
+        </label>
+      </div>
+    </form>
+
+    <form method="post" action="{{ url_for('update_monthly_nlth') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="nlth_year" value="{{ nlth_year }}">
+      <input type="hidden" name="nlth_half" value="{{ nlth_half }}">
+      <div class="nlth-months">
+        {% for m, label in nlth_months %}
+          <div class="nlth-month-row">
+            <span class="nlth-month-label">{{ label }}</span>
+            <select class="nlth-select" name="nlth_surgeon_{{ m }}">
+              <option value="">— None —</option>
+              {% for s in nlth_candidates %}
+                <option value="{{ s.id }}" {% if nlth_assignments.get(m) == s.id %}selected{% endif %}>
+                  {{ s.name if s.name else '(unnamed)' }}
+                </option>
+              {% endfor %}
+            </select>
+          </div>
+        {% endfor %}
+      </div>
+      <div class="nlth-actions">
+        <button type="submit" class="nlth-save-btn">Save NLTH surgeons</button>
+      </div>
+    </form>
   </div>
 
   {% set default_teams = ['Team 1', 'Team 2', 'Team 3', 'Team 4', 'Urology'] %}
@@ -89,7 +148,7 @@
                 <summary>
                   <span class="sm-name">{{ s.name if s.name else '(unnamed)' }}</span>
                   <span class="sm-level-tag">
-                    {{ s.call_levels if s.call_levels else 'Unassigned level' }}{% if s.nlth %} | NLTH{% endif %}
+                    {{ s.call_levels if s.call_levels else 'Unassigned level' }}
                   </span>
                 </summary>
                 <div class="sm-panel">
@@ -112,9 +171,6 @@
                           {{ level }}
                         </label>
                       {% endfor %}
-                    </div>
-                    <div class="sm-nlth">
-                      <label><input type="checkbox" name="nlth_{{ s.id }}" {% if s.nlth %}checked{% endif %}> NLTH</label>
                     </div>
                   </div>
                 </div>

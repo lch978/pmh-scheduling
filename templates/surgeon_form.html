@@ -4,31 +4,18 @@
 
 {% block head %}
 <style>
-  .surgeon-form-wrapper {
-    max-width: 900px;
-    margin: 20px auto;
-    background: #fff;
-    padding: 24px;
-    border-radius: 8px;
-    box-shadow: 0 2px 6px rgba(0,0,0,0.1);
-  }
-  .surgeon-form-title {
-    text-align: center;
-    margin-bottom: 20px;
-  }
+  .surgeon-form-wrapper { max-width: 900px; margin: 20px auto; }
   .surgeon-form label {
     display: block;
     font-weight: 600;
     margin-bottom: 6px;
   }
   .surgeon-form input[type="text"],
+  .surgeon-form input[type="number"],
   .surgeon-form select {
     width: 100%;
-    padding: 10px;
-    border: 1px solid #ccc;
-    border-radius: 4px;
-    font-size: 14px;
   }
+  .surgeon-form .field-row { margin-bottom: 18px; }
   .checkbox-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
@@ -44,45 +31,25 @@
     gap: 10px;
     margin-top: 20px;
   }
-  .btn-primary,
-  .btn-secondary {
-    padding: 10px 18px;
-    font-size: 14px;
-    border: none;
-    border-radius: 4px;
-    cursor: pointer;
-    transition: background-color 0.3s;
-    text-decoration: none;
-    text-align: center;
-  }
-  .btn-primary {
-    background-color: #337ab7;
-    color: #fff;
-  }
-  .btn-primary:hover {
-    background-color: #286090;
-  }
-  .btn-secondary {
-    background-color: #e0e0e0;
-    color: #333;
-  }
-  .btn-secondary:hover {
-    background-color: #c8c8c8;
+  .surgeon-form .form-hint {
+    margin: 6px 0 0;
+    font-size: 12px;
+    color: var(--color-text-muted);
   }
 </style>
 {% endblock %}
 
 {% block content %}
-<div class="surgeon-form-wrapper">
-  <h1 class="surgeon-form-title">{{ action }} Surgeon</h1>
+<div class="card surgeon-form-wrapper">
+  <h1 class="page-title">{{ action }} Surgeon</h1>
   <form method="post" class="surgeon-form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <div style="margin-bottom:18px;">
+    <div class="field-row">
       <label for="name">Name</label>
-      <input type="text" id="name" name="name" value="{{ surgeon.name or '' }}" required>
+      <input class="form-control" type="text" id="name" name="name" value="{{ surgeon.name or '' }}" required>
     </div>
 
-    <div style="margin-bottom:18px;">
+    <div class="field-row">
       <label>Call Levels</label>
       <div class="checkbox-grid">
         {% for lvl in ['1A','1B','Urology','2A','2B','3','4'] %}
@@ -92,14 +59,14 @@
           </label>
         {% endfor %}
       </div>
-      <p style="margin:6px 0 0;font-size:12px;color:#666;">
+      <p class="form-hint">
         Urology may be combined with 1A and/or 1B only. Other levels selected together with Urology will be ignored on save.
       </p>
     </div>
 
-    <div style="margin-bottom:18px;">
+    <div class="field-row">
       <label for="team">Team</label>
-      <select id="team" name="team">
+      <select class="form-control" id="team" name="team">
         <option value="" {% if not surgeon.team %}selected{% endif %}>&mdash; None &mdash;</option>
         <option value="Team 1" {% if surgeon.team == 'Team 1' %}selected{% endif %}>Team 1</option>
         <option value="Team 2" {% if surgeon.team == 'Team 2' %}selected{% endif %}>Team 2</option>
@@ -109,9 +76,10 @@
       </select>
     </div>
 
-    <div style="margin-bottom:18px;">
+    <div class="field-row">
       <label for="manual_less_calls_credit">Manual Less-Calls Credit</label>
       <input
+        class="form-control"
         type="number"
         id="manual_less_calls_credit"
         name="manual_less_calls_credit"
@@ -121,9 +89,10 @@
       >
     </div>
 
-    <div style="margin-bottom:18px;">
+    <div class="field-row">
       <label for="manual_more_calls_credit">Manual More-Calls Credit</label>
       <input
+        class="form-control"
         type="number"
         id="manual_more_calls_credit"
         name="manual_more_calls_credit"
@@ -134,8 +103,8 @@
     </div>
 
     <div class="surgeon-form-actions">
-      <button type="submit" class="btn-primary">{{ action }} Surgeon</button>
-      <a href="{{ url_for('list_surgeons') }}" class="btn-secondary">Cancel</a>
+      <button type="submit" class="btn btn-primary">{{ action }} Surgeon</button>
+      <a href="{{ url_for('list_surgeons') }}" class="btn btn-ghost">Cancel</a>
     </div>
   </form>
 </div>
