@@ -219,6 +219,28 @@
     font-weight: 700;
     background: #f7fafc;
   }
+  .cohort-mini-section-sep td {
+    padding: 4px 8px;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: #78909c;
+    background: #eef1f5;
+    border-top: 1px solid #d6dce3;
+    border-bottom: 1px solid #d6dce3;
+    text-align: center;
+  }
+  .cohort-mini-dual-count {
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .cohort-mini-dual-count .sep {
+    color: #9ca3af;
+    padding: 0 4px;
+    font-weight: 400;
+  }
 </style>
 {% endblock %}
 
@@ -437,7 +459,13 @@
       <p class="empty-state">No saved schedule yet.</p>
     {% endif %}
   </div>
-  <div id="cohortMiniSummary" class="cohort-mini-summary"></div>
+  <div id="cohortMiniSummary" class="cohort-mini-summary">
+    <div style="font-size:13px;font-weight:600;margin-bottom:4px;">Cohort balance (this schedule)</div>
+    <div style="font-size:11px;color:#6b7280;margin-bottom:8px;">
+      Calls in the current month schedule using cohort rules (not raw per-level column totals). Hover a name for half-year horizon.
+    </div>
+    <div id="cohortMiniSummaryGrid"></div>
+  </div>
 
 <script>
   document.addEventListener('DOMContentLoaded', () => {
@@ -458,7 +486,7 @@
       return wd === 0 || wd === 6;
     }
 
-    const surgeonsMeta = {{ (surgeons_meta or [])|tojson }};
+    const cohortHorizonInitial = {{ (cohort_horizon_display or {})|tojson }};
     const solverModeEl = document.getElementById('solverModeUsed');
     const fallbackNoticeEl = document.getElementById('fallbackNotice');
 
@@ -508,21 +536,12 @@
         .replaceAll("'", '&#39;');
     }
 
-    function parseLevels(s) {
-      if (!s) return [];
-      return String(s).split(',').map(v => v.trim()).filter(Boolean);
-    }
-
-    function getLevel2Group(surgeon) {
-      const levels = parseLevels(surgeon.call_levels);
-      const has2A = levels.includes('2A');
-      const has2B = levels.includes('2B');
-      const has3 = levels.includes('3');
-      if (has2A && !has2B) return 1;
-      if (has2A && has2B) return 2;
-      if (!has2A && has2B && !has3) return 3;
-      if (!has2A && has2B && has3) return 4;
-      return null;
+    function computeMedian(values) {
+      if (!values.length) return 0;
+      const arr = [...values].sort((a, b) => a - b);
+      const mid = Math.floor(arr.length / 2);
+      if (arr.length % 2 === 1) return arr[mid];
+      return (arr[mid - 1] + arr[mid]) / 2;
     }
 
     function computeMedian(values) {
@@ -533,86 +552,102 @@
       return (arr[mid - 1] + arr[mid]) / 2;
     }
 
-    function renderCohortMiniSummary(sol) {
-      const host = document.getElementById('cohortMiniSummary');
+    function nameClassForDelta(delta) {
+      if (delta > 1) return 'above-hard';
+      if (delta === 1) return 'above-soft';
+      if (delta < 0) return 'below';
+      return 'at';
+    }
+
+    function cohortThisMonth(m) {
+      return Number((m && (m.this_month ?? m.month)) || 0);
+    }
+
+    function scheduleForCohortApi(sol) {
+      const out = {};
+      for (const [day, assigns] of Object.entries(sol || {})) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) continue;
+        if (assigns && typeof assigns === 'object' && !Array.isArray(assigns)) {
+          out[day] = assigns;
+        }
+      }
+      return out;
+    }
+
+    function renderHorizonCard(label, members) {
+      const vals = (members || []).map(m => cohortThisMonth(m));
+      const median = computeMedian(vals);
+      const rows = (members || [])
+        .slice()
+        .sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')))
+        .map((m) => {
+          const thisMonth = cohortThisMonth(m);
+          const prior = Number(m.prior || 0);
+          const horizon = Number(m.horizon || 0);
+          const cls = nameClassForDelta(thisMonth - median);
+          const title = `This month: ${thisMonth}. Half-year horizon: ${horizon} (prior ${prior} + this month ${thisMonth})`;
+          return `<tr title="${escapeHtml(title)}"><td><span class="cohort-mini-name ${cls}">${escapeHtml(m.name || '')}</span></td><td style="text-align:right;font-weight:600;">${thisMonth}</td></tr>`;
+        }).join('');
+      return `
+        <div class="cohort-mini-card">
+          <h4>${escapeHtml(label)}</h4>
+          <table class="cohort-mini-table">
+            <tbody>
+              ${rows || '<tr><td colspan="2" style="text-align:center;color:#6b7280;">No surgeons</td></tr>'}
+              <tr class="cohort-mini-median"><td>Median (this month)</td><td style="text-align:right;">${Number.isInteger(median) ? median : median.toFixed(1)}</td></tr>
+            </tbody>
+          </table>
+        </div>`;
+    }
+
+    function renderCohortHorizonPayload(payload) {
+      const host = document.getElementById('cohortMiniSummaryGrid');
+      if (!host) return;
+      const cards = (payload && payload.cards) || [];
+      if (!cards.length) {
+        host.innerHTML = '<div style="font-size:12px;color:#6b7280;">No cohort data.</div>';
+        return;
+      }
+      const html = cards.map((card) => {
+        if (card.key === 'g2' && Array.isArray(card.sections)) {
+          return card.sections
+            .map((section) => renderHorizonCard(`${card.label} — ${section.label}`, section.members || []))
+            .join('');
+        }
+        return renderHorizonCard(card.label || card.key, card.members || []);
+      }).join('');
+      host.innerHTML = `<div class="cohort-mini-grid">${html}</div>`;
+    }
+
+    async function renderCohortMiniSummary(sol) {
+      const host = document.getElementById('cohortMiniSummaryGrid');
       if (!host) return;
       if (!sol || typeof sol !== 'object' || Array.isArray(sol) || Object.keys(sol).length === 0) {
         host.innerHTML = '<div style="font-size:12px;color:#6b7280;">No schedule loaded.</div>';
         return;
       }
 
-      const hasLevel = (surgeon, lvl) => parseLevels(surgeon.call_levels).includes(lvl);
-      const nonNlth = surgeonsMeta.filter(s => !s.nlth);
-      const group1Ids = new Set(nonNlth.filter(s => getLevel2Group(s) === 1).map(s => s.id));
-      const group2Ids = new Set(nonNlth.filter(s => getLevel2Group(s) === 2).map(s => s.id));
-      const group3Ids = new Set(nonNlth.filter(s => getLevel2Group(s) === 3).map(s => s.id));
-      const group4Ids = new Set(nonNlth.filter(s => getLevel2Group(s) === 4).map(s => s.id));
-
-      const cohorts = [
-        {
-          key: 'g1',
-          label: 'Group 1 (1A+1B)',
-          members: nonNlth.filter(s => hasLevel(s, '1A') || hasLevel(s, '1B')),
-          // Same surgeon on both 1A and 1B the same day (e.g. urology mirror) counts once.
-          countFn: (dayRow, sid, name) => ((dayRow['1A'] === name || dayRow['1B'] === name) ? 1 : 0),
-        },
-        {
-          key: 'g2',
-          label: 'Group 2 (2A+2B)',
-          members: nonNlth.filter(s => group1Ids.has(s.id) || group2Ids.has(s.id) || group3Ids.has(s.id)),
-          countFn: (dayRow, sid, name) => (dayRow['2A'] === name ? 1 : 0) + (dayRow['2B'] === name ? 1 : 0),
-        },
-        {
-          key: 'g3',
-          label: 'Group 3 (3 +2B grp4)',
-          members: nonNlth.filter(s => hasLevel(s, '3') || group4Ids.has(s.id)),
-          countFn: (dayRow, sid, name) => (dayRow['3'] === name ? 1 : 0) + ((group4Ids.has(sid) && dayRow['2B'] === name) ? 1 : 0),
-        },
-        {
-          key: 'g4',
-          label: 'Group 4 (4)',
-          members: nonNlth.filter(s => hasLevel(s, '4')),
-          countFn: (dayRow, sid, name) => (dayRow['4'] === name ? 1 : 0),
+      const y = +document.getElementById('year').value;
+      const m = +document.getElementById('month').value;
+      host.innerHTML = '<div style="font-size:12px;color:#6b7280;">Updating cohort balance…</div>';
+      try {
+        const res = await fetch('/cohort_horizon', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRFToken': document.querySelector('meta[name="csrf-token"]').getAttribute('content')
+          },
+          body: JSON.stringify({ year: y, month: m, schedule: scheduleForCohortApi(sol) })
+        });
+        if (!res.ok) {
+          throw new Error('Failed to load cohort balance');
         }
-      ];
-
-      const cards = cohorts.map((cohort) => {
-        const counts = {};
-        cohort.members.forEach(m => { counts[m.id] = 0; });
-        for (const day of Object.keys(sol)) {
-          const row = (sol[day] && typeof sol[day] === 'object' && !Array.isArray(sol[day])) ? sol[day] : {};
-          cohort.members.forEach(m => { counts[m.id] += cohort.countFn(row, m.id, m.name); });
-        }
-
-        const vals = cohort.members.map(m => counts[m.id] || 0);
-        const median = computeMedian(vals);
-        const rows = cohort.members
-          .slice()
-          .sort((a, b) => a.name.localeCompare(b.name))
-          .map((m) => {
-            const v = counts[m.id] || 0;
-            const delta = v - median;
-            let cls = 'at';
-            if (delta > 1) cls = 'above-hard';
-            else if (delta === 1) cls = 'above-soft';
-            else if (delta < 0) cls = 'below';
-            return `<tr><td><span class="cohort-mini-name ${cls}">${escapeHtml(m.name)}</span></td><td style="text-align:right;font-weight:600;">${v}</td></tr>`;
-          }).join('');
-
-        return `
-          <div class="cohort-mini-card">
-            <h4>${escapeHtml(cohort.label)}</h4>
-            <table class="cohort-mini-table">
-              <tbody>
-                ${rows || '<tr><td colspan="2" style="text-align:center;color:#6b7280;">No surgeons</td></tr>'}
-                <tr class="cohort-mini-median"><td>Median</td><td style="text-align:right;">${Number.isInteger(median) ? median : median.toFixed(1)}</td></tr>
-              </tbody>
-            </table>
-          </div>
-        `;
-      }).join('');
-
-      host.innerHTML = `<div class="cohort-mini-grid">${cards}</div>`;
+        const payload = await res.json();
+        renderCohortHorizonPayload(payload);
+      } catch (err) {
+        console.error(err);
+        host.innerHTML = '<div style="font-size:12px;color:#b00020;">Could not compute cohort balance for this schedule.</div>';
+      }
     }
 
     function renderSchedule(sol) {
@@ -919,7 +954,19 @@
       });
     }
 
-    renderCohortMiniSummary(initialSchedule);
+    function navigateToSelectedMonth() {
+      const y = document.getElementById('year').value;
+      const m = document.getElementById('month').value;
+      window.location = `?year=${y}&month=${m}`;
+    }
+    document.getElementById('year').addEventListener('change', navigateToSelectedMonth);
+    document.getElementById('month').addEventListener('change', navigateToSelectedMonth);
+
+    if (initialSchedule && Object.keys(initialSchedule).length > 0) {
+      renderCohortMiniSummary(initialSchedule);
+    } else if (cohortHorizonInitial && cohortHorizonInitial.cards) {
+      renderCohortHorizonPayload(cohortHorizonInitial);
+    }
   });
 </script>
 

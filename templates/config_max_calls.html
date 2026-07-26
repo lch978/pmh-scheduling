@@ -7,6 +7,8 @@
   .cmc-row label { font-weight: 600; flex: 1; min-width: 240px; }
   .cmc-row input { width: 120px; }
   .cmc-hint { font-size: 13px; color: var(--color-text-muted); margin: -6px 0 16px; }
+  .cmc-section-title { font-size: 1.05rem; margin: 24px 0 8px; }
+  .cmc-section-intro { margin: 0 0 12px; }
   .cmc-actions { text-align: center; margin-top: 8px; }
 </style>
 {% endblock %}
@@ -24,14 +26,6 @@
         <input class="form-control" type="number" name="group_2" id="group_2" value="{{ config['2'] }}" required>
       </div>
       <div class="cmc-row">
-        <label for="group_3">Level Group 3 (3):</label>
-        <input class="form-control" type="number" name="group_3" id="group_3" value="{{ config['3'] }}" required>
-      </div>
-      <div class="cmc-row">
-        <label for="group_4">Level Group 4 (4):</label>
-        <input class="form-control" type="number" name="group_4" id="group_4" value="{{ config['4'] }}" required>
-      </div>
-      <div class="cmc-row">
         <label for="group_l2g1_1a">Maximum number of 1A calls for 2A surgeons:</label>
         <input class="form-control" type="number" name="group_l2g1_1a" id="group_l2g1_1a" value="{{ config.get('l2g1_1a', config.get('l2g1_1ab', 4)) }}" min="0" required>
       </div>
@@ -41,6 +35,47 @@
         <input class="form-control" type="number" name="group_l2g1_1a_total" id="group_l2g1_1a_total" value="{{ config.get('l2g1_1a_total', 8) }}" min="0" required>
       </div>
       <p class="cmc-hint">Caps the total number of 1A calls held by all Level-2 Group 1 (2A-only) surgeons combined in a month. Set to 0 to disallow 1A assignments for this group.</p>
+      <h2 class="cmc-section-title">Level-2 Group 4 (2B + 3)</h2>
+      <p class="cmc-hint cmc-section-intro">
+        Applies to surgeons in Level-2 subgroup 4 (2B and 3, no 2A).
+        Caps are enforced per month on level-2B and level-3 assignments.
+      </p>
+      <div class="cmc-row">
+        <label for="l2g4_max_2b">Max level-2B calls per month:</label>
+        <input class="form-control" type="number" name="l2g4_max_2b" id="l2g4_max_2b"
+               value="{{ config.get('l2g4_max_2b', 1) }}" min="0" required>
+      </div>
+      <div class="cmc-row">
+        <label for="l2g4_max_3">Max level-3 calls per month:</label>
+        <input class="form-control" type="number" name="l2g4_max_3" id="l2g4_max_3"
+               value="{{ config.get('l2g4_max_3', 10) }}" min="0" required>
+      </div>
+      {% if l2g4_surgeons %}
+      <p class="cmc-hint">Current members: {{ l2g4_surgeons | map(attribute='name') | join(', ') }}.</p>
+      {% else %}
+      <p class="cmc-hint">No surgeons currently in Level-2 Group 4.</p>
+      {% endif %}
+      <h2 class="cmc-section-title">Level 3+4 Surgeons</h2>
+      <p class="cmc-hint cmc-section-intro">
+        Applies to surgeons with <strong>both</strong> level 3 and level 4 in their call levels.
+        Caps are enforced per month on raw level-3 and level-4 assignments.
+        Their combined total (3 + 4 + 2B if L2 subgroup 4) is balanced in Group 3 fairness.
+      </p>
+      <div class="cmc-row">
+        <label for="level34_max_3">Max level-3 calls per month:</label>
+        <input class="form-control" type="number" name="level34_max_3" id="level34_max_3"
+               value="{{ config.get('level34_max_3', config.get('3', 10)) }}" min="0" required>
+      </div>
+      <div class="cmc-row">
+        <label for="level34_max_4">Max level-4 calls per month:</label>
+        <input class="form-control" type="number" name="level34_max_4" id="level34_max_4"
+               value="{{ config.get('level34_max_4', config.get('4', 10)) }}" min="0" required>
+      </div>
+      {% if level34_surgeons %}
+      <p class="cmc-hint">Current members: {{ level34_surgeons | map(attribute='name') | join(', ') }}.</p>
+      {% else %}
+      <p class="cmc-hint">No surgeons currently have both level 3 and level 4.</p>
+      {% endif %}
       <div class="cmc-row">
         <label for="urology_min">Urology-only surgeons &mdash; Min calls per month:</label>
         <input class="form-control" type="number" name="urology_min" id="urology_min" value="{{ config.get('urology_min', 2) }}" min="0" required>

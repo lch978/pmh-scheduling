@@ -566,13 +566,31 @@ def create_app():
             urology_max_val = max(0, urology_max_val)
             if urology_max_val < urology_min_val:
                 urology_max_val = urology_min_val
+            try:
+                level34_max_3 = max(0, int(request.form.get("level34_max_3", 10)))
+            except Exception:
+                level34_max_3 = 10
+            try:
+                level34_max_4 = max(0, int(request.form.get("level34_max_4", 10)))
+            except Exception:
+                level34_max_4 = 10
+            try:
+                l2g4_max_2b = max(0, int(request.form.get("l2g4_max_2b", 1)))
+            except Exception:
+                l2g4_max_2b = 1
+            try:
+                l2g4_max_3 = max(0, int(request.form.get("l2g4_max_3", 10)))
+            except Exception:
+                l2g4_max_3 = 10
             new_config = {
                 "1": int(request.form.get("group_1", 10)),
                 "2": int(request.form.get("group_2", 10)),
-                "3": int(request.form.get("group_3", 10)),
-                "4": int(request.form.get("group_4", 10)),
                 "l2g1_1a": int(request.form.get("group_l2g1_1a", 4)),
                 "l2g1_1a_total": max(0, int(request.form.get("group_l2g1_1a_total", 8))),
+                "l2g4_max_2b": l2g4_max_2b,
+                "l2g4_max_3": l2g4_max_3,
+                "level34_max_3": level34_max_3,
+                "level34_max_4": level34_max_4,
                 "urology_min": urology_min_val,
                 "urology_max": urology_max_val,
             }
@@ -582,9 +600,28 @@ def create_app():
         config = get_max_calls_config()
         config.setdefault("l2g1_1a", config.get("l2g1_1ab", 4))
         config.setdefault("l2g1_1a_total", 8)
+        config.setdefault("l2g4_max_2b", 1)
+        config.setdefault("l2g4_max_3", 10)
+        config.setdefault("level34_max_3", config.get("3", 10))
+        config.setdefault("level34_max_4", config.get("4", 10))
         config.setdefault("urology_min", 2)
         config.setdefault("urology_max", 6)
-        return render_template('config_max_calls.html', config=config)
+        all_surgeons = get_all_surgeons()
+        level34_ids = get_level34_subgroup_ids(all_surgeons)
+        level34_surgeons = sorted(
+            [s for s in all_surgeons if s.get("id") is not None and int(s["id"]) in level34_ids],
+            key=lambda s: (s.get("name", "") or "").lower(),
+        )
+        l2g4_surgeons = sorted(
+            [s for s in all_surgeons if get_level2_group(s) == 4],
+            key=lambda s: (s.get("name", "") or "").lower(),
+        )
+        return render_template(
+            'config_max_calls.html',
+            config=config,
+            level34_surgeons=level34_surgeons,
+            l2g4_surgeons=l2g4_surgeons,
+        )
 
     #############################################
     # Global Config for No Call Request Constraint Endpoint
@@ -642,7 +679,6 @@ def create_app():
                 "enable_force_1B_weekend": cb("enable_force_1B_weekend", "1"),
                 "enable_level2_supervision": cb("enable_level2_supervision", "1"),
                 "enable_group4_2B3_ban": cb("enable_group4_2B3_ban", "1"),
-                "enable_max_2B_group4": cb("enable_max_2B_group4", "1"),
                 "enable_max_calls_level1": cb("enable_max_calls_level1", "1"),
                 "enable_nlth_rules": cb("enable_nlth_rules", "1"),
                 "enable_weekend_balance": cb("enable_weekend_balance", "1"),
@@ -722,7 +758,6 @@ def create_app():
                 "enable_force_1B_weekend": cb("enable_force_1B_weekend"),
                 "enable_level2_supervision": cb("enable_level2_supervision"),
                 "enable_group4_2B3_ban": cb("enable_group4_2B3_ban"),
-                "enable_max_2B_group4": cb("enable_max_2B_group4"),
                 "enable_max_calls_level1": cb("enable_max_calls_level1"),
                 "enable_nlth_rules": cb("enable_nlth_rules"),
                 "enable_weekend_consecutive_penalty": cb("enable_weekend_consecutive_penalty"),
@@ -937,6 +972,14 @@ def create_app():
 
         candidates = {lvl: sorted(candidates_for(lvl), key=lambda s: s["name"]) for lvl in ["1A","1B","Urology","2A","2B","3","4"]}
         cohort_summary = build_half_year_cohort_summary(year_sel, month_sel, surgeons=surgeons)
+        from helper import get_horizon_prior_levels_and_credit
+        _horizon_prior = get_horizon_prior_levels_and_credit(year_sel, month_sel, surgeons=surgeons)
+        _raw_prior_levels = (_horizon_prior or {}).get("prior_levels", {}) or {}
+        horizon_prior_levels = {
+            lvl: {int(k): int(v) for k, v in (counts or {}).items()}
+            for lvl, counts in _raw_prior_levels.items()
+            if lvl in ("1A", "2A", "2B")
+        }
         solver_mode_used = None
 
         generate_flag = request.args.get('generate')
@@ -990,6 +1033,12 @@ def create_app():
         # ── 8) Render in both cases ──
         # load any saved prior-last-two for this (year, month)
         saved_prior = get_prior_last_two(year_sel, month_sel)
+        cohort_horizon_display = build_cohort_horizon_display(
+            year_sel,
+            month_sel,
+            schedule=sched if isinstance(sched, dict) else None,
+            surgeons=surgeons,
+        )
         return render_template(
             'new_schedule.html',
             schedule=sched,
@@ -1003,9 +1052,37 @@ def create_app():
             prev_day_minus_1=prev_day_minus_1,
             saved_prior=saved_prior,
             cohort_summary=cohort_summary,
+            cohort_horizon_display=cohort_horizon_display,
             surgeons_meta=surgeons,
             solver_mode_used=solver_mode_used,
+            enable_l2g1_primary_calls=_l2g1_primary,
+            horizon_prior_levels=horizon_prior_levels,
         )
+
+    @app.route('/cohort_horizon', methods=['POST'])
+    @admin_required
+    def cohort_horizon():
+        data = request.get_json(silent=True) or {}
+        try:
+            year = int(data.get('year'))
+            month = int(data.get('month'))
+        except (TypeError, ValueError):
+            return jsonify({"error": "Invalid year/month"}), 400
+
+        schedule = data.get('schedule')
+        if schedule is not None and not isinstance(schedule, dict):
+            schedule = {}
+
+        surgeons = get_all_surgeons()
+        apply_monthly_nlth(surgeons, year, month)
+        clean_sched = normalize_schedule_for_template(schedule) if schedule else {}
+        payload = build_cohort_horizon_display(
+            year,
+            month,
+            schedule=clean_sched if clean_sched else None,
+            surgeons=surgeons,
+        )
+        return jsonify(payload)
 
     @app.route('/save_schedule', methods=['POST'])
     @admin_required
@@ -2114,6 +2191,15 @@ def create_app():
 
         prior = get_prior_last_two(year, month)
 
+        from helper import get_horizon_prior_levels_and_credit
+        _horizon_prior = get_horizon_prior_levels_and_credit(year, month, surgeons=surgeons)
+        _raw_prior_levels = (_horizon_prior or {}).get("prior_levels", {}) or {}
+        horizon_prior_levels = {
+            lvl: {int(k): int(v) for k, v in (counts or {}).items()}
+            for lvl, counts in _raw_prior_levels.items()
+            if lvl in ("1A", "2A", "2B")
+        }
+
         hk_h = holidays.HK(years=[year])
         public_holidays_list = sorted(
             d.isoformat() for d in hk_h
@@ -2125,7 +2211,8 @@ def create_app():
             "availability": avail_map,
             "all_surgeons": all_surgeons_list,
             "prior_last_two": prior,
-            "public_holidays": public_holidays_list
+            "public_holidays": public_holidays_list,
+            "horizon_prior_levels": horizon_prior_levels,
         })
 
     #############################################

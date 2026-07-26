@@ -42,6 +42,13 @@
   .cohort-mini-name.at { background:#ffffff; color:#111827; border:1px solid #e5e7eb; }
   .cohort-mini-name.below { background:#dcfce7; color:#166534; }
   .cohort-mini-median td { font-weight:700; background:#f9fafb; }
+  .cohort-mini-section-sep td {
+    padding:4px 8px; font-size:10px; font-weight:700; text-transform:uppercase;
+    letter-spacing:.03em; color:#78909c; background:#eef1f5;
+    border-top:1px solid #d6dce3; border-bottom:1px solid #d6dce3; text-align:center;
+  }
+  .cohort-mini-dual-count { font-weight:600; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .cohort-mini-dual-count .sep { color:#9ca3af; padding:0 4px; font-weight:400; }
 
   /* Violations banner */
   .vb-container { margin-bottom:12px; border-radius:6px; overflow:hidden; border:1px solid #e0e0e0; }
@@ -83,14 +90,12 @@
   .sched-table td.cell-warning { outline:2px solid #e65100; outline-offset:-2px; }
   .sched-table td.cell-overridden { outline:2px dashed #ff9800; outline-offset:-2px; }
 
-  /* Expansion row */
-  .expanded-row > td { padding:0 !important; border-top:none !important; background:#f7f9fc; }
-  .expand-panel { display:flex; border-top:2px solid #1565c0; }
-  .expand-close-col { display:flex; align-items:flex-start; justify-content:center; padding:8px 4px; min-width:70px; }
+  /* Expansion row — one cell per column so dropdowns align with schedule columns */
+  .expanded-row > td { padding:0 !important; border-top:none !important; background:#f7f9fc; vertical-align:top; }
+  .expanded-row > td.expand-close-cell { padding:8px 4px !important; text-align:center; border-top:2px solid #1565c0 !important; background:#f7f9fc; }
   .expand-close-btn { background:none; border:1px solid #ccc; border-radius:4px; padding:3px 8px; cursor:pointer; font-size:11px; color:#555; }
   .expand-close-btn:hover { background:#eee; }
-  .expand-col { flex:1; border-right:1px solid #e0e0e0; min-width:0; }
-  .expand-col:last-child { border-right:none; }
+  .expand-level-cell { border-top:2px solid #1565c0 !important; min-width:0; }
   .expand-col-header { font-weight:700; font-size:11px; text-align:center; padding:6px 4px 4px; color:#1565c0; border-bottom:1px solid #e0e0e0; background:#eef3fb; }
   .expand-items { max-height:220px; overflow-y:auto; padding:2px 0; }
   .expand-item { padding:4px 8px; font-size:12px; cursor:pointer; border-radius:0; transition:background .1s; display:flex; align-items:center; gap:5px; }
@@ -261,6 +266,98 @@ document.addEventListener('DOMContentLoaded', () => {
     const mid = Math.floor(arr.length / 2);
     return arr.length % 2 === 1 ? arr[mid] : (arr[mid - 1] + arr[mid]) / 2;
   }
+
+  function priorLevelCount(level, sid) {
+    const prior = (monthData && monthData.horizon_prior_levels) || {};
+    const lvlMap = prior[level];
+    if (!lvlMap) return 0;
+    return Number(lvlMap[sid] ?? lvlMap[String(sid)] ?? 0);
+  }
+
+  function nameClassForDelta(delta) {
+    if (delta > 1) return 'above-hard';
+    if (delta === 1) return 'above-soft';
+    if (delta < 0) return 'below';
+    return 'at';
+  }
+
+  function formatDualCount(a, b) {
+    return `<span class="cohort-mini-dual-count">${a}<span class="sep">/</span>${b}</span>`;
+  }
+
+    function buildGroup2MiniCard(sol, g2OnlyMembers, g2RestMembers) {
+      const month2A = {}, month2B = {};
+      [...g2OnlyMembers, ...g2RestMembers].forEach(m => { month2A[m.id] = 0; month2B[m.id] = 0; });
+
+      for (const day of Object.keys(sol)) {
+        const rowRaw = (sol[day] && typeof sol[day] === 'object' && !Array.isArray(sol[day])) ? sol[day] : {};
+        const row = {};
+        for (const lvl of LEVELS) {
+          row[lvl] = (rowRaw[lvl] == null || rowRaw[lvl] === '') ? null : Number(rowRaw[lvl]);
+        }
+        [...g2OnlyMembers, ...g2RestMembers].forEach(m => {
+          if (row['2A'] === m.id) month2A[m.id] += 1;
+          if (row['2B'] === m.id) month2B[m.id] += 1;
+        });
+      }
+
+      function g2HorizonParts(m) {
+        const h2a = priorLevelCount('2A', m.id) + (month2A[m.id] || 0);
+        const h2b = priorLevelCount('2B', m.id) + (month2B[m.id] || 0);
+        return { h2a, h2b, horizon: h2a + h2b };
+      }
+
+      const onlyTotals = g2OnlyMembers.map(m => ({ m, ...g2HorizonParts(m) }));
+      const onlyMedian = computeMedian(onlyTotals.map(t => t.horizon));
+
+      const topRows = onlyTotals
+        .slice()
+        .sort((a, b) => String(a.m.name || '').localeCompare(String(b.m.name || '')))
+        .map(({ m, h2a, h2b, horizon }) => {
+          const cls = nameClassForDelta(horizon - onlyMedian);
+          return `<tr><td><span class="cohort-mini-name ${cls}">${escapeHtml(m.name || '(unnamed)')}</span></td><td style="text-align:right;">${formatDualCount(h2a, h2b)}</td></tr>`;
+        }).join('');
+
+      const med2a = computeMedian(onlyTotals.map(t => t.h2a));
+      const med2b = computeMedian(onlyTotals.map(t => t.h2b));
+
+      const restTotals = g2RestMembers.map(m => ({ m, ...g2HorizonParts(m) }));
+      const restMedian = computeMedian(restTotals.map(t => t.horizon));
+
+      const bottomRows = restTotals
+        .slice()
+        .sort((a, b) => String(a.m.name || '').localeCompare(String(b.m.name || '')))
+        .map(({ m, horizon }) => {
+          const cls = nameClassForDelta(horizon - restMedian);
+          return `<tr><td><span class="cohort-mini-name ${cls}">${escapeHtml(m.name || '(unnamed)')}</span></td><td style="text-align:right;font-weight:600;">${horizon}</td></tr>`;
+        }).join('');
+
+      const sep = '<tr class="cohort-mini-section-sep"><td colspan="2">2A + 2B supervisors</td></tr>';
+      const topMedianRow = onlyTotals.length
+        ? `<tr class="cohort-mini-median"><td>Median (2A+2B)</td><td style="text-align:right;">${formatDualCount(
+            Number.isInteger(med2a) ? med2a : med2a.toFixed(1),
+            Number.isInteger(med2b) ? med2b : med2b.toFixed(1)
+          )}</td></tr>`
+        : '';
+      const bottomMedianRow = restTotals.length
+        ? `<tr class="cohort-mini-median"><td>Median (2A+2B)</td><td style="text-align:right;">${Number.isInteger(restMedian) ? restMedian : restMedian.toFixed(1)}</td></tr>`
+        : '';
+
+    return `
+      <div class="cohort-mini-card">
+        <h4>Group 2 (2A+2B)</h4>
+        <table class="cohort-mini-table">
+          <tbody>
+            ${topRows || '<tr><td colspan="2" style="text-align:center;color:#6b7280;">No 2A-only surgeons</td></tr>'}
+            ${topMedianRow}
+            ${sep}
+            ${bottomRows || '<tr><td colspan="2" style="text-align:center;color:#6b7280;">No surgeons</td></tr>'}
+            ${bottomMedianRow}
+          </tbody>
+        </table>
+      </div>`;
+  }
+
   function formatDay(iso) {
     const d = new Date(iso + 'T00:00:00');
     return `${d.getDate()} ${DAY_NAMES[d.getDay()]}`;
@@ -557,49 +654,44 @@ document.addEventListener('DOMContentLoaded', () => {
     const group2Ids = new Set(nonNlth.filter(s => getLevel2Group(s) === 2).map(s => s.id));
     const group3Ids = new Set(nonNlth.filter(s => getLevel2Group(s) === 3).map(s => s.id));
     const group4Ids = new Set(nonNlth.filter(s => getLevel2Group(s) === 4).map(s => s.id));
+    const level34Ids = new Set(nonNlth.filter(s => hasLevel(s, '3') && hasLevel(s, '4')).map(s => s.id));
+    const g2OnlyMembers = nonNlth.filter(s => group1Ids.has(s.id));
+    const g2RestMembers = nonNlth.filter(s => group2Ids.has(s.id) || group3Ids.has(s.id));
+
     const cohorts = [
       {
         label: 'Group 1 (1A+1B)',
         members: nonNlth.filter(s => hasLevel(s, '1A') || hasLevel(s, '1B')),
-        // Same surgeon on both 1A and 1B the same day (e.g. urology mirror) counts once.
         countFn: (row, sid) => ((row['1A'] === sid || row['1B'] === sid) ? 1 : 0),
       },
       {
-        label: 'Group 2 (2A+2B)',
-        members: nonNlth.filter(s => group1Ids.has(s.id) || group2Ids.has(s.id) || group3Ids.has(s.id)),
-        countFn: (row, sid) => ((row['2A'] === sid) ? 1 : 0) + ((row['2B'] === sid) ? 1 : 0),
-      },
-      {
-        label: 'Group 3 (3 +2B grp4)',
+        label: 'Group 3 (3 +4 if 3+4, +2B grp4)',
         members: nonNlth.filter(s => hasLevel(s, '3') || group4Ids.has(s.id)),
-        countFn: (row, sid) => ((row['3'] === sid) ? 1 : 0) + ((group4Ids.has(sid) && row['2B'] === sid) ? 1 : 0),
+        countFn: (row, sid) => ((row['3'] === sid) ? 1 : 0) + ((group4Ids.has(sid) && row['2B'] === sid) ? 1 : 0) + ((level34Ids.has(sid) && row['4'] === sid) ? 1 : 0),
       },
       {
         label: 'Group 4 (4)',
-        members: nonNlth.filter(s => hasLevel(s, '4')),
+        members: nonNlth.filter(s => hasLevel(s, '4') && !level34Ids.has(s.id)),
         countFn: (row, sid) => ((row['4'] === sid) ? 1 : 0),
-      }
+      },
     ];
-    const cards = cohorts.map((cohort) => {
-      const counts = {};
-      cohort.members.forEach(m => { counts[m.id] = 0; });
+
+    const cardEls = cohorts.map((cohort) => {
+      const monthCounts = {};
+      cohort.members.forEach(m => { monthCounts[m.id] = 0; });
       for (const day of Object.keys(sol)) {
         const rowRaw = (sol[day] && typeof sol[day] === 'object' && !Array.isArray(sol[day])) ? sol[day] : {};
         const row = {};
         for (const lvl of LEVELS) {
           row[lvl] = (rowRaw[lvl] == null || rowRaw[lvl] === '') ? null : Number(rowRaw[lvl]);
         }
-        cohort.members.forEach(m => { counts[m.id] += cohort.countFn(row, m.id); });
+        cohort.members.forEach(m => { monthCounts[m.id] += cohort.countFn(row, m.id); });
       }
-      const vals = cohort.members.map(m => counts[m.id] || 0);
+      const vals = cohort.members.map(m => monthCounts[m.id] || 0);
       const median = computeMedian(vals);
       const rows = cohort.members.slice().sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''))).map((m) => {
-        const v = counts[m.id] || 0;
-        const delta = v - median;
-        let cls = 'at';
-        if (delta > 1) cls = 'above-hard';
-        else if (delta === 1) cls = 'above-soft';
-        else if (delta < 0) cls = 'below';
+        const v = monthCounts[m.id] || 0;
+        const cls = nameClassForDelta(v - median);
         return `<tr><td><span class="cohort-mini-name ${cls}">${escapeHtml(m.name || '(unnamed)')}</span></td><td style="text-align:right;font-weight:600;">${v}</td></tr>`;
       }).join('');
       return `
@@ -612,8 +704,16 @@ document.addEventListener('DOMContentLoaded', () => {
             </tbody>
           </table>
         </div>`;
-    }).join('');
-    host.innerHTML = `<div class="cohort-mini-grid">${cards}</div>`;
+    });
+
+    const orderedHtml = [
+      cardEls[0],
+      buildGroup2MiniCard(sol, g2OnlyMembers, g2RestMembers),
+      cardEls[1],
+      cardEls[2],
+    ].join('');
+
+    host.innerHTML = `<div class="cohort-mini-grid">${orderedHtml}</div>`;
   }
 
   // ── Update a single block's display ──
@@ -658,23 +758,30 @@ document.addEventListener('DOMContentLoaded', () => {
     const tr = document.createElement('tr');
     tr.className = 'expanded-row';
     tr.dataset.expandDay = day;
-    tr.innerHTML = `<td colspan="7">${buildExpansionHTML(day)}</td>`;
+    tr.innerHTML = buildExpansionCellsHTML(day);
     dayRow.after(tr);
     wireExpansionClicks(day);
   }
 
-  function buildExpansionHTML(day) {
-    let html = '<div class="expand-panel">';
-    html += '<div class="expand-close-col"><button class="expand-close-btn js-expand-close">Close</button></div>';
+  function buildExpansionCellsHTML(day) {
+    let html = '<td class="expand-close-cell"><button class="expand-close-btn js-expand-close">Close</button></td>';
     for (const lvl of LEVELS) {
       const opts = surgeonOptions(day, lvl);
       const curId = currentSchedule[day] ? currentSchedule[day][lvl] : null;
-      html += '<div class="expand-col">';
+      html += `<td class="expand-level-cell" data-level="${lvl}">`;
       html += `<div class="expand-col-header">${lvl}</div>`;
       html += '<div class="expand-items">';
       html += buildOptionItemsHTML(opts, lvl, curId);
-      html += '</div></div>';
+      html += '</div></td>';
     }
+    return html;
+  }
+
+  function buildExpansionColumnHTML(day, lvl) {
+    const opts = surgeonOptions(day, lvl);
+    const curId = currentSchedule[day] ? currentSchedule[day][lvl] : null;
+    let html = `<div class="expand-col-header">${lvl}</div><div class="expand-items">`;
+    html += buildOptionItemsHTML(opts, lvl, curId);
     html += '</div>';
     return html;
   }
@@ -704,16 +811,10 @@ document.addEventListener('DOMContentLoaded', () => {
   function refreshExpansionColumn(day, lvl) {
     const expRow = container.querySelector(`.expanded-row[data-expand-day="${day}"]`);
     if (!expRow) return;
-    const cols = expRow.querySelectorAll('.expand-col');
-    const idx = LEVELS.indexOf(lvl);
-    if (idx < 0 || !cols[idx]) return;
-    const opts = surgeonOptions(day, lvl);
-    const curId = currentSchedule[day] ? currentSchedule[day][lvl] : null;
-    let html = `<div class="expand-col-header">${lvl}</div><div class="expand-items">`;
-    html += buildOptionItemsHTML(opts, lvl, curId);
-    html += '</div>';
-    cols[idx].innerHTML = html;
-    cols[idx].querySelectorAll('.expand-item[data-sid]').forEach(item => {
+    const cell = expRow.querySelector(`td.expand-level-cell[data-level="${lvl}"]`);
+    if (!cell) return;
+    cell.innerHTML = buildExpansionColumnHTML(day, lvl);
+    cell.querySelectorAll('.expand-item[data-sid]').forEach(item => {
       item.addEventListener('click', () => {
         assignSurgeon(day, item.dataset.level, item.dataset.sid ? +item.dataset.sid : null);
       });

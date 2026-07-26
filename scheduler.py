@@ -79,6 +79,27 @@ def _unified_fairness_credit_calls(unavailability_credit_calls: int, surgeon: di
         base = 0
     return base + _manual_credit_calls_from_surgeon(surgeon or {})
 
+
+def _horizon_prior_overall_calls(sid: int, horizon_prior_counts: dict | None) -> int:
+    """Half-year prior total calls (1A/1B deduped per day + all other levels)."""
+    if not isinstance(horizon_prior_counts, dict):
+        return 0
+    try:
+        prior_level1_days = horizon_prior_counts.get("prior_level1_days")
+        if isinstance(prior_level1_days, dict):
+            prior_lvl1 = int(prior_level1_days.get(sid, 0))
+        else:
+            prior_levels = horizon_prior_counts.get("prior_levels", {})
+            prior_lvl1 = int(prior_levels.get("1A", {}).get(sid, 0)) + int(prior_levels.get("1B", {}).get(sid, 0))
+        prior_levels = horizon_prior_counts.get("prior_levels", {})
+        prior_other = sum(
+            int(prior_levels.get(lev, {}).get(sid, 0))
+            for lev in ("Urology", "2A", "2B", "3", "4")
+        )
+        return prior_lvl1 + prior_other
+    except Exception:
+        return 0
+
 def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=None, preassignments=None, time_limit_seconds: int = 30, allow_empty: bool = False, _diagnostic_run: bool = False, _relax_fairness_caps: bool = False, horizon_prior_counts=None):
 
     from helper import (
@@ -88,6 +109,7 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
         compute_unavailability_credit_by_surgeon,
         parse_call_levels,
         get_level2_group,
+        get_level34_subgroup_ids,
         get_team_day_prefs
     )
     def _parse_req_date(raw):
@@ -218,7 +240,6 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
     enable_force_1B_weekend           = is_enabled("enable_force_1B_weekend")
     enable_level2_supervision         = is_enabled("enable_level2_supervision")
     enable_group4_2B3_ban            = is_enabled("enable_group4_2B3_ban")
-    enable_max_2B_group4             = is_enabled("enable_max_2B_group4")
     enable_max_calls_level1          = is_enabled("enable_max_calls_level1")
     enable_nlth_rules                = is_enabled("enable_nlth_rules")
     enable_weekend_consecutive_pen   = is_enabled("enable_weekend_consecutive_penalty")
@@ -283,6 +304,7 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
     group2_ids = [s["id"] for s in surgeons if get_level2_group(s)==2]  # no supervision needed
     group3_ids = [s["id"] for s in surgeons if get_level2_group(s)==3]  # supervisors only
     group4_ids = [s["id"] for s in surgeons if get_level2_group(s)==4]  # supervisors who are also 3rd call
+    level34_ids = get_level34_subgroup_ids(surgeons)
 
     if enable_l2g1_primary_calls and group1_ids:
         raw_1a = [x for x in domain_1A if x != -1]
@@ -990,11 +1012,77 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
         _debug_log("scheduler.py:urology-constraints", "log-error", {"err": str(_e)}, hypothesis="H1,H3")
     # #endregion
 
-    # --- At most one 2B‐shift per Group 4 surgeon over the entire schedule ---
-    if enable_max_2B_group4:
-        for s in group4_ids:
-            add_named_constraint(f"Max 2B-shifts for Group4 surgeon {s}",
-                model.Add, sum(indicators[(d, "2B", s)] for d in range(num_days)) <= 1)
+    # --- Max 2B / level-3 calls per month for L2 Group 4 (2B+3 supervisors) ---
+    if group4_ids:
+        try:
+            max_l2g4_2b = int(max_config.get("l2g4_max_2b", 1))
+        except Exception:
+            max_l2g4_2b = 1
+        try:
+            max_l2g4_3 = int(max_config.get("l2g4_max_3", num_days))
+        except Exception:
+            max_l2g4_3 = num_days
+        max_l2g4_2b = max(0, min(max_l2g4_2b, num_days))
+        max_l2g4_3 = max(0, min(max_l2g4_3, num_days))
+        for s_id in group4_ids:
+            c2b = model.NewIntVar(0, num_days, f"l2g4_count_2b_{s_id}")
+            add_named_constraint(
+                f"L2 Group 4 level-2B count for surgeon {s_id}",
+                model.Add,
+                c2b == sum(indicators[(d, "2B", s_id)] for d in range(num_days)),
+            )
+            add_named_constraint(
+                f"Max level-2B calls for L2 Group 4 surgeon {s_id}",
+                model.Add,
+                c2b <= max_l2g4_2b,
+            )
+            c3 = model.NewIntVar(0, num_days, f"l2g4_count_3_{s_id}")
+            add_named_constraint(
+                f"L2 Group 4 level-3 count for surgeon {s_id}",
+                model.Add,
+                c3 == sum(indicators[(d, "3", s_id)] for d in range(num_days)),
+            )
+            add_named_constraint(
+                f"Max level-3 calls for L2 Group 4 surgeon {s_id}",
+                model.Add,
+                c3 <= max_l2g4_3,
+            )
+
+    # --- Max level-3 / level-4 calls per month for Level 3+4 subgroup ---
+    if level34_ids:
+        try:
+            max_lvl3 = int(max_config.get("level34_max_3", max_config.get("3", num_days)))
+        except Exception:
+            max_lvl3 = num_days
+        try:
+            max_lvl4 = int(max_config.get("level34_max_4", max_config.get("4", num_days)))
+        except Exception:
+            max_lvl4 = num_days
+        max_lvl3 = max(0, min(max_lvl3, num_days))
+        max_lvl4 = max(0, min(max_lvl4, num_days))
+        for s_id in level34_ids:
+            c3 = model.NewIntVar(0, num_days, f"level34_count_3_{s_id}")
+            add_named_constraint(
+                f"Level 3+4 subgroup level-3 count for surgeon {s_id}",
+                model.Add,
+                c3 == sum(indicators[(d, "3", s_id)] for d in range(num_days)),
+            )
+            add_named_constraint(
+                f"Max level-3 calls for Level 3+4 surgeon {s_id}",
+                model.Add,
+                c3 <= max_lvl3,
+            )
+            c4 = model.NewIntVar(0, num_days, f"level34_count_4_{s_id}")
+            add_named_constraint(
+                f"Level 3+4 subgroup level-4 count for surgeon {s_id}",
+                model.Add,
+                c4 == sum(indicators[(d, "4", s_id)] for d in range(num_days)),
+            )
+            add_named_constraint(
+                f"Max level-4 calls for Level 3+4 surgeon {s_id}",
+                model.Add,
+                c4 <= max_lvl4,
+            )
     
     call_count_overall = {}
     for s in all_surgeon_ids:
@@ -1217,34 +1305,39 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
         group_fairness_diffs.append(diff)
         _accumulate_l1_dispersion("lvl2_all", fairness_vars_lvl2_all)
 
-    # Group 3: include all surgeons with level 3, plus L2 subgroup 4; 
-    # counts include level 3 for everyone, and add 2B only for subgroup 4.
+    # Group 3: include all surgeons with level 3, plus L2 subgroup 4;
+    # counts include level 3 for everyone, level 4 for Level 3+4 subgroup, and 2B for subgroup 4.
     s3_union_ids = set([s["id"] for s in surgeons if "3" in parse_call_levels(s.get("call_levels",""))] + group4_ids)
     s3_ids = [sid for sid in s3_union_ids if sid not in nlth_ids]
     if len(s3_ids) > 1:
-        g3_counts = {s: model.NewIntVar(0, num_days * 2, f"lvl3_union_count_{s}") for s in s3_ids}
+        g3_counts = {s: model.NewIntVar(0, num_days * 3, f"lvl3_union_count_{s}") for s in s3_ids}
         for s in s3_ids:
             terms = [indicators[(d, "3", s)] for d in range(num_days)]
             if s in group4_ids:
                 terms += [indicators[(d, "2B", s)] for d in range(num_days)]
-            add_named_constraint(f"(3 [+2B if grp4]) count for surgeon {s}",
+            if s in level34_ids:
+                terms += [indicators[(d, "4", s)] for d in range(num_days)]
+            add_named_constraint(f"(3 [+4 if 3+4] [+2B if grp4]) count for surgeon {s}",
                 model.Add, g3_counts[s] == sum(terms))
         fairness_vars_g3 = []
         for s in s3_ids:
             prior_3 = 0
             prior_2b_if_grp4 = 0
+            prior_4_if_level34 = 0
             if isinstance(horizon_prior_counts, dict):
                 try:
                     prior_levels = horizon_prior_counts.get("prior_levels", {})
                     prior_3 = int(prior_levels.get("3", {}).get(s, 0))
                     if s in group4_ids:
                         prior_2b_if_grp4 = int(prior_levels.get("2B", {}).get(s, 0))
+                    if s in level34_ids:
+                        prior_4_if_level34 = int(prior_levels.get("4", {}).get(s, 0))
                 except Exception:
-                    prior_3 = prior_2b_if_grp4 = 0
-            prior_total = prior_3 + prior_2b_if_grp4
+                    prior_3 = prior_2b_if_grp4 = prior_4_if_level34 = 0
+            prior_total = prior_3 + prior_2b_if_grp4 + prior_4_if_level34
             cur_var = g3_counts[s]
             if cap_uses_credit:
-                cur_adj = model.NewIntVar(-num_days * 2, num_days * 2, f"lvl3_union_cur_adj_{s}")
+                cur_adj = model.NewIntVar(-num_days * 3, num_days * 3, f"lvl3_union_cur_adj_{s}")
                 add_named_constraint(f"lvl3 union current adj {s}", model.Add, cur_adj == cur_var + fairness_credit_calls_per_surgeon.get(s, 0))
                 cur_var = cur_adj
             prior_credit = prior_credit_calls_per_surgeon.get(s, 0) if cap_uses_credit else 0
@@ -1264,8 +1357,13 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
         group_fairness_diffs.append(diff)
         _accumulate_l1_dispersion("lvl3_union", fairness_vars_g3)
 
-    # Group 4: level 4 only
-    group4_level_ids = [s["id"] for s in surgeons if "4" in parse_call_levels(s.get("call_levels","")) and s["id"] not in nlth_ids]
+    # Group 4: level 4 only (exclude Level 3+4 subgroup; they balance via G3)
+    group4_level_ids = [
+        s["id"] for s in surgeons
+        if "4" in parse_call_levels(s.get("call_levels",""))
+        and s["id"] not in nlth_ids
+        and s["id"] not in level34_ids
+    ]
     if len(group4_level_ids) > 1:
         lvl4_counts = {s: model.NewIntVar(0, num_days, f"lvl4_count_{s}") for s in group4_level_ids}
         for s in group4_level_ids:
@@ -1301,7 +1399,67 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
             _add_cohort_cap_overflow("lvl4", diff)
         group_fairness_diffs.append(diff)
         _accumulate_l1_dispersion("lvl4", fairness_vars_lvl4)
-    
+
+    # Overall total-call fairness among surgeons with identical call-level eligibility.
+    # Enabled by default via enable_fairness_diff_all; keeps total calls within cap
+    # for peers who can cover the same levels (in addition to per-cohort caps).
+    if enable_fairness_diff_all:
+        from collections import defaultdict
+
+        peer_groups = defaultdict(list)
+        for s in surgeons:
+            sid = s.get("id")
+            if sid is None or sid in nlth_ids:
+                continue
+            levels_key = tuple(sorted(parse_call_levels(s.get("call_levels", ""))))
+            if not levels_key:
+                continue
+            peer_groups[levels_key].append(sid)
+        for peer_idx, (levels_key, peer_ids) in enumerate(sorted(peer_groups.items(), key=lambda x: x[0])):
+            if len(peer_ids) <= 1:
+                continue
+            tag = f"overall_peer_{peer_idx}"
+            fairness_vars_peer = []
+            for sid in peer_ids:
+                prior_total = _horizon_prior_overall_calls(sid, horizon_prior_counts)
+                cur_var = call_count_overall[sid]
+                if cap_uses_credit:
+                    cur_adj = model.NewIntVar(
+                        -num_days * len(all_levels),
+                        num_days * len(all_levels),
+                        f"{tag}_cur_adj_{sid}",
+                    )
+                    add_named_constraint(
+                        f"{tag} current adj {sid}",
+                        model.Add,
+                        cur_adj == cur_var + fairness_credit_calls_per_surgeon.get(sid, 0),
+                    )
+                    cur_var = cur_adj
+                prior_credit = prior_credit_calls_per_surgeon.get(sid, 0) if cap_uses_credit else 0
+                total = model.NewIntVar(-fairness_abs_bound, fairness_abs_bound, f"{tag}_total_{sid}")
+                add_named_constraint(
+                    f"{tag} horizon total {sid}",
+                    model.Add,
+                    total == cur_var + prior_total + prior_credit,
+                )
+                fairness_vars_peer.append(total)
+            gmax = model.NewIntVar(-fairness_abs_bound, fairness_abs_bound, f"{tag}_max")
+            gmin = model.NewIntVar(-fairness_abs_bound, fairness_abs_bound, f"{tag}_min")
+            add_named_constraint(f"Max {tag}", model.AddMaxEquality, gmax, fairness_vars_peer)
+            add_named_constraint(f"Min {tag}", model.AddMinEquality, gmin, fairness_vars_peer)
+            diff = model.NewIntVar(0, fairness_abs_bound * 2, f"{tag}_diff")
+            add_named_constraint(f"{tag} diff", model.Add, diff == gmax - gmin)
+            if use_hard_cap:
+                add_named_constraint(
+                    f"Fairness cap: {tag} range <= cap",
+                    model.Add,
+                    diff <= fairness_hard_cap_effective,
+                )
+            elif use_soft_cap:
+                _add_cohort_cap_overflow(tag, diff)
+            group_fairness_diffs.append(diff)
+            _accumulate_l1_dispersion(tag, fairness_vars_peer)
+
     # --- Then, create a per-surgeon, per-day “assigned” BoolVar ----
     assigned = {}
     for s in all_surgeon_ids:
@@ -2167,8 +2325,8 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                         sid: (
                             g1_raw.get(sid, 0)
                             + _prior_level1(sid)
-                            - (fairness_credit_calls_per_surgeon.get(sid, 0) if cap_uses_credit else 0)
-                            - (int(prior_credit.get(sid, 0)) if cap_uses_credit else 0)
+                            + (fairness_credit_calls_per_surgeon.get(sid, 0) if cap_uses_credit else 0)
+                            + (int(prior_credit.get(sid, 0)) if cap_uses_credit else 0)
                         )
                         for sid in g1_raw
                     }
@@ -2189,14 +2347,14 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                             g2_raw.get(sid, 0)
                             + int(prior_levels.get("2A", {}).get(sid, 0))
                             + int(prior_levels.get("2B", {}).get(sid, 0))
-                            - (fairness_credit_calls_per_surgeon.get(sid, 0) if cap_uses_credit else 0)
-                            - (int(prior_credit.get(sid, 0)) if cap_uses_credit else 0)
+                            + (fairness_credit_calls_per_surgeon.get(sid, 0) if cap_uses_credit else 0)
+                            + (int(prior_credit.get(sid, 0)) if cap_uses_credit else 0)
                         )
                         for sid in g2_raw
                     }
                     g2_union_range = range_from_counts(g2_counts_all)
 
-                    # Group 3: union 3 and subgroup 4 (count 3 for all; +2B if subgroup 4)
+                    # Group 3: union 3 and subgroup 4 (count 3 for all; +4 if 3+4; +2B if subgroup 4)
                     s3_union_ids = set([s["id"] for s in surgeons if "3" in parse_call_levels(s.get("call_levels",""))] + group4_ids)
                     s3_ids = [sid for sid in s3_union_ids if sid not in nlth_ids]
                     g3_raw = {sid: 0 for sid in s3_ids}
@@ -2211,20 +2369,31 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                             sid2b = name_to_id.get(n2b)
                             if sid2b in g3_raw and sid2b in group4_ids:
                                 g3_raw[sid2b] += 1
+                        n4 = assigns.get("4")
+                        if n4:
+                            sid4 = name_to_id.get(n4)
+                            if sid4 in g3_raw and sid4 in level34_ids:
+                                g3_raw[sid4] += 1
                     g3_counts = {
                         sid: (
                             g3_raw.get(sid, 0)
                             + int(prior_levels.get("3", {}).get(sid, 0))
                             + (int(prior_levels.get("2B", {}).get(sid, 0)) if sid in group4_ids else 0)
-                            - (fairness_credit_calls_per_surgeon.get(sid, 0) if cap_uses_credit else 0)
-                            - (int(prior_credit.get(sid, 0)) if cap_uses_credit else 0)
+                            + (int(prior_levels.get("4", {}).get(sid, 0)) if sid in level34_ids else 0)
+                            + (fairness_credit_calls_per_surgeon.get(sid, 0) if cap_uses_credit else 0)
+                            + (int(prior_credit.get(sid, 0)) if cap_uses_credit else 0)
                         )
                         for sid in g3_raw
                     }
                     g3_range = range_from_counts(g3_counts)
 
-                    # Group 4: level 4 only
-                    group4_level_ids = [s["id"] for s in surgeons if "4" in parse_call_levels(s.get("call_levels","")) and s["id"] not in nlth_ids]
+                    # Group 4: level 4 only (exclude Level 3+4 subgroup)
+                    group4_level_ids = [
+                        s["id"] for s in surgeons
+                        if "4" in parse_call_levels(s.get("call_levels",""))
+                        and s["id"] not in nlth_ids
+                        and s["id"] not in level34_ids
+                    ]
                     g4_raw = {sid: 0 for sid in group4_level_ids}
                     for assigns in diag_sched.values():
                         n4 = assigns.get("4")
@@ -2236,8 +2405,8 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                         sid: (
                             g4_raw.get(sid, 0)
                             + int(prior_levels.get("4", {}).get(sid, 0))
-                            - (fairness_credit_calls_per_surgeon.get(sid, 0) if cap_uses_credit else 0)
-                            - (int(prior_credit.get(sid, 0)) if cap_uses_credit else 0)
+                            + (fairness_credit_calls_per_surgeon.get(sid, 0) if cap_uses_credit else 0)
+                            + (int(prior_credit.get(sid, 0)) if cap_uses_credit else 0)
                         )
                         for sid in g4_raw
                     }
@@ -2250,7 +2419,7 @@ def solve_schedule_or_tools(days, surgeons, prev_schedule=None, public_holidays=
                     if g2_union_range > cap_val:
                         violating.append(f"Group 2 (L2 union 2A+2B) range={g2_union_range} > cap={cap_val}")
                     if g3_range > cap_val:
-                        violating.append(f"Group 3 (3 [+2B if subgroup 4]) range={g3_range} > cap={cap_val}")
+                        violating.append(f"Group 3 (3 [+4 if 3+4] [+2B if subgroup 4]) range={g3_range} > cap={cap_val}")
                     if g4_range > cap_val:
                         violating.append(f"Group 4 (level 4) range={g4_range} > cap={cap_val}")
                     if violating:

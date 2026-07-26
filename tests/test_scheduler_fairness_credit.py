@@ -55,7 +55,6 @@ def _base_config():
         "enable_force_1B_weekend": "0",
         "enable_level2_supervision": "1",
         "enable_group4_2B3_ban": "0",
-        "enable_max_2B_group4": "0",
         "enable_max_calls_level1": "0",
         "enable_nlth_rules": "0",
         "enable_weekend_consecutive_penalty": "0",
@@ -270,6 +269,46 @@ class SchedulerFairnessCreditTests(unittest.TestCase):
         self.assertEqual(scheduler._effective_fairness_cap(1), 1)
         self.assertEqual(scheduler._effective_fairness_cap(2), 1)
         self.assertEqual(scheduler._effective_fairness_cap(9), 1)
+
+    def test_horizon_prior_overall_dedupes_level1_per_day(self):
+        horizon = {
+            "prior_level1_days": {1: 3},
+            "prior_levels": {
+                "Urology": {1: 1},
+                "2A": {1: 2},
+                "2B": {1: 0},
+                "3": {1: 1},
+                "4": {1: 1},
+            },
+        }
+        self.assertEqual(scheduler._horizon_prior_overall_calls(1, horizon), 3 + 1 + 2 + 0 + 1 + 1)
+
+    def test_overall_fairness_keeps_peer_total_calls_within_cap(self):
+        days = ["2026-03-02", "2026-03-03", "2026-03-04", "2026-03-05"]
+        surgeons = [
+            {"id": 1, "name": "S1", "call_levels": "1A,1B", "nlth": False, "team": "Team 1"},
+            {"id": 2, "name": "S2", "call_levels": "1A,1B", "nlth": False, "team": "Team 1"},
+            {"id": 3, "name": "S3", "call_levels": "1A,1B", "nlth": False, "team": "Team 2"},
+        ]
+        cfg = _base_config()
+        cfg["enable_fairness_diff_all"] = "1"
+        cfg["fairness_fallback_policy"] = "no_fallback"
+        sched, _ = _run_solver_with_overrides(
+            days=days,
+            surgeons=surgeons,
+            preassignments={},
+            availability={},
+            config=cfg,
+        )
+        self.assertIsInstance(sched, dict)
+        self.assertNotIn("errors", sched)
+        counts = {1: 0, 2: 0, 3: 0}
+        for day in days:
+            row = sched.get(day, {})
+            for sid, name in [(1, "S1"), (2, "S2"), (3, "S3")]:
+                if row.get("1A") == name or row.get("1B") == name:
+                    counts[sid] += 1
+        self.assertLessEqual(max(counts.values()) - min(counts.values()), 1)
 
     def test_manual_more_less_credit_direction(self):
         self.assertEqual(
@@ -516,6 +555,214 @@ class HalfYearCohortSummaryTests(unittest.TestCase):
         self.assertEqual(by_name["Alice"]["count"], 2)
         # Bob: day2 (1A) -> 1.
         self.assertEqual(by_name["Bob"]["count"], 1)
+
+
+class Level34SubgroupTests(unittest.TestCase):
+    def test_get_level34_subgroup_ids(self):
+        surgeons = [
+            {"id": 1, "call_levels": "3,4"},
+            {"id": 2, "call_levels": "3"},
+            {"id": 3, "call_levels": "4"},
+            {"id": 4, "call_levels": "2B,3,4"},
+        ]
+        ids = helper.get_level34_subgroup_ids(surgeons)
+        self.assertEqual(ids, {1, 4})
+
+    def test_g3_balance_count_includes_level4_for_dual(self):
+        group4_l2_ids = {4}
+        level34_ids = {1, 4}
+        counts = {"3": 2, "4": 3, "2B": 1}
+        self.assertEqual(
+            helper.g3_balance_count_for_sid(1, counts, group4_l2_ids, level34_ids),
+            5,
+        )
+        self.assertEqual(
+            helper.g3_balance_count_for_sid(2, {"3": 2}, group4_l2_ids, level34_ids),
+            2,
+        )
+        self.assertEqual(
+            helper.g3_balance_count_for_sid(4, counts, group4_l2_ids, level34_ids),
+            6,
+        )
+
+    def test_level34_max_caps_enforced(self):
+        days = ["2026-06-01", "2026-06-02", "2026-06-03"]
+        surgeons = [
+            {"id": 1, "name": "Dual", "call_levels": "3,4", "nlth": False, "team": "Team 1"},
+            {"id": 2, "name": "Pure3", "call_levels": "3", "nlth": False, "team": "Team 2"},
+            {"id": 3, "name": "Pure4", "call_levels": "4", "nlth": False, "team": "Team 3"},
+            {"id": 4, "name": "L1", "call_levels": "1A,1B", "nlth": False, "team": "Team 4"},
+            {"id": 5, "name": "L2", "call_levels": "2A,2B", "nlth": False, "team": "Team 1"},
+        ]
+        preassignments = {
+            days[0]: {"3": 1},
+            days[1]: {"3": 1},
+            days[2]: {"3": 1},
+        }
+        cfg = _base_config()
+        cfg["enable_fairness_hard_cap"] = "0"
+        sched, _ = _run_solver_with_overrides(
+            days=days,
+            surgeons=surgeons,
+            preassignments=preassignments,
+            availability={},
+            config=cfg,
+            max_calls_config={
+                "1": 10, "2": 10, "level34_max_3": 2, "level34_max_4": 10,
+            },
+        )
+        self.assertIsInstance(sched, dict)
+        self.assertIn("errors", sched)
+
+    def test_g4_cohort_excludes_level34_dual(self):
+        surgeons = [
+            {"id": 1, "name": "Dual", "call_levels": "3,4"},
+            {"id": 2, "name": "Pure4", "call_levels": "4"},
+        ]
+        cohorts = helper.get_g1_g4_cohorts(surgeons=surgeons)
+        g4 = next(c for c in cohorts if c["key"] == "g4")
+        names = {m["name"] for m in g4["members"]}
+        self.assertEqual(names, {"Pure4"})
+
+    def test_level34_excluded_from_g4_fairness(self):
+        days = ["2026-06-01", "2026-06-02", "2026-06-03", "2026-06-04"]
+        surgeons = [
+            {"id": 1, "name": "Dual", "call_levels": "3,4", "nlth": False, "team": "Team 1"},
+            {"id": 2, "name": "Pure4A", "call_levels": "4", "nlth": False, "team": "Team 2"},
+            {"id": 3, "name": "Pure4B", "call_levels": "4", "nlth": False, "team": "Team 3"},
+            {"id": 4, "name": "L1A", "call_levels": "1A,1B", "nlth": False, "team": "Team 4"},
+            {"id": 5, "name": "L1B", "call_levels": "1A,1B", "nlth": False, "team": "Team 1"},
+            {"id": 6, "name": "L2A", "call_levels": "2A,2B", "nlth": False, "team": "Team 2"},
+            {"id": 7, "name": "L2B", "call_levels": "2A,2B", "nlth": False, "team": "Team 3"},
+            {"id": 8, "name": "L3", "call_levels": "3", "nlth": False, "team": "Team 4"},
+        ]
+        preassignments = {
+            days[0]: {"1A": 4, "1B": 5, "2A": 6, "2B": 7, "3": 8, "4": 2},
+            days[1]: {"1A": 5, "1B": 4, "2A": 7, "2B": 6, "3": 1, "4": 2},
+            days[2]: {"1A": 4, "1B": 5, "2A": 6, "2B": 7, "3": 8, "4": 2},
+            days[3]: {"1A": 5, "1B": 4, "2A": 7, "2B": 6, "3": 1, "4": 3},
+        }
+        cfg = _base_config()
+        cfg["fairness_fallback_policy"] = "no_fallback"
+        cfg["enable_level2_supervision"] = "0"
+        sched, _ = _run_solver_with_overrides(
+            days=days,
+            surgeons=surgeons,
+            preassignments=preassignments,
+            availability={},
+            config=cfg,
+            max_calls_config={
+                "1": 10, "2": 10, "level34_max_3": 10, "level34_max_4": 10,
+            },
+        )
+        self.assertIsInstance(sched, dict)
+        self.assertIn("errors", sched)
+        errors_text = " ".join(sched.get("errors", []))
+        self.assertTrue(
+            "Group 4" in errors_text or "Fairness hard cap" in errors_text,
+            f"Expected G4 fairness violation, got: {errors_text}",
+        )
+
+    def test_cohort_summary_g3_includes_level4_for_dual(self):
+        surgeons = [
+            {"id": 1, "name": "Dual", "call_levels": "3,4", "nlth": False, "team": "Team 1"},
+            {"id": 2, "name": "Pure3", "call_levels": "3", "nlth": False, "team": "Team 2"},
+            {"id": 3, "name": "Pure4", "call_levels": "4", "nlth": False, "team": "Team 3"},
+        ]
+        month7 = {
+            "2026-07-01": {"3": "Dual", "4": "Dual"},
+            "2026-07-02": {"3": "Pure3", "4": "Pure4"},
+        }
+
+        def fake_published(year, month):
+            if year == 2026 and month == 7:
+                return month7
+            return None
+
+        with patch.object(helper, "get_published_schedule_version", side_effect=fake_published):
+            summary = helper.build_half_year_cohort_summary(2026, 8, surgeons=surgeons)
+
+        g3 = next(g for g in summary["groups"] if g["key"] == "g3")
+        by_name = {m["name"]: m for m in g3["members"]}
+        self.assertEqual(by_name["Dual"]["count"], 2)
+        self.assertEqual(by_name["Pure3"]["count"], 1)
+
+        g4 = next(g for g in summary["groups"] if g["key"] == "g4")
+        g4_names = {m["name"] for m in g4["members"]}
+        self.assertEqual(g4_names, {"Pure4"})
+
+    def test_cohort_horizon_display_combines_prior_and_schedule(self):
+        surgeons = [
+            {"id": 1, "name": "Dual", "call_levels": "3,4", "nlth": False, "team": "Team 1"},
+            {"id": 2, "name": "G1", "call_levels": "1A,1B", "nlth": False, "team": "Team 2"},
+            {"id": 3, "name": "G2", "call_levels": "2A,2B", "nlth": False, "team": "Team 3"},
+        ]
+        published = {
+            "2026-07-01": {"3": "Dual", "4": "Dual", "1A": "G1", "1B": "G1", "2A": "G2", "2B": "G2"},
+        }
+        current = {
+            "2026-08-01": {"3": "Dual", "1A": "G1", "1B": "G1", "2A": "G2"},
+            "2026-08-02": {"4": "Dual", "1A": "G2", "2B": "G2"},
+        }
+
+        def fake_published(year, month):
+            if year == 2026 and month == 7:
+                return published
+            return None
+
+        with patch.object(helper, "get_published_schedule_version", side_effect=fake_published):
+            display = helper.build_cohort_horizon_display(2026, 8, schedule=current, surgeons=surgeons)
+
+        g1 = next(c for c in display["cards"] if c["key"] == "g1")
+        g1_by_name = {m["name"]: m for m in g1["members"]}
+        self.assertEqual(g1_by_name["G1"]["prior"], 1)
+        self.assertEqual(g1_by_name["G1"]["month"], 1)
+        self.assertEqual(g1_by_name["G1"]["horizon"], 2)
+
+        g3 = next(c for c in display["cards"] if c["key"] == "g3")
+        dual = next(m for m in g3["members"] if m["name"] == "Dual")
+        self.assertEqual(dual["prior"], 2)
+        self.assertEqual(dual["month"], 2)
+        self.assertEqual(dual["horizon"], 4)
+
+        g2 = next(c for c in display["cards"] if c["key"] == "g2")
+        g2_members = {m["name"]: m for s in g2["sections"] for m in s["members"]}
+        self.assertEqual(g2_members["G2"]["prior"], 2)
+        self.assertEqual(g2_members["G2"]["month"], 2)
+        self.assertEqual(g2_members["G2"]["horizon"], 4)
+
+
+class L2Group4MaxCallsTests(unittest.TestCase):
+    def test_l2g4_max_2b_and_3_caps_enforced(self):
+        days = ["2026-06-01", "2026-06-02"]
+        surgeons = [
+            {"id": 1, "name": "L2G4", "call_levels": "2B,3", "nlth": False, "team": "Team 1"},
+            {"id": 2, "name": "L1A", "call_levels": "1A,1B", "nlth": False, "team": "Team 2"},
+            {"id": 3, "name": "L1B", "call_levels": "1A,1B", "nlth": False, "team": "Team 3"},
+            {"id": 4, "name": "L2A", "call_levels": "2A,2B", "nlth": False, "team": "Team 4"},
+            {"id": 5, "name": "L3", "call_levels": "3", "nlth": False, "team": "Team 1"},
+            {"id": 6, "name": "L4", "call_levels": "4", "nlth": False, "team": "Team 2"},
+        ]
+        preassignments = {
+            days[0]: {"1A": 2, "1B": 3, "2A": 4, "2B": 1, "3": 5, "4": 6},
+            days[1]: {"1A": 3, "1B": 2, "2A": 4, "2B": 1, "3": 1, "4": 6},
+        }
+        cfg = _base_config()
+        cfg["enable_fairness_hard_cap"] = "0"
+        cfg["enable_level2_supervision"] = "0"
+        cfg["enable_group4_2B3_ban"] = "0"
+        sched, _ = _run_solver_with_overrides(
+            days=days,
+            surgeons=surgeons,
+            preassignments=preassignments,
+            availability={},
+            config=cfg,
+            max_calls_config={
+                "1": 10, "2": 10, "l2g4_max_2b": 1, "l2g4_max_3": 1,
+            },
+        )
+        self.assertIsInstance(sched, dict)
+        self.assertIn("errors", sched)
 
 
 if __name__ == "__main__":

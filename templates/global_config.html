@@ -76,7 +76,7 @@
         <input type="number" min="0" id="gamma_l2g1_primary_2a_same_day" name="gamma_l2g1_primary_2a_same_day" class="gc-number" value="{{ config.get('gamma_l2g1_primary_2a_same_day','30') }}">
       </div>
       <label class="gc-check"><input type="checkbox" name="enable_group4_2B3_ban" value="1" {% if config.get('enable_group4_2B3_ban','1') != '0' %}checked{% endif %}> Ban Group-4 on both 2B and 3 same day</label>
-      <label class="gc-check"><input type="checkbox" name="enable_max_2B_group4" value="1" {% if config.get('enable_max_2B_group4','1') != '0' %}checked{% endif %}> Limit Group-4 to at most one 2B</label>
+      <div class="gc-desc" style="margin-left:22px;">Monthly max level-2B and level-3 calls for Level-2 Group 4 surgeons are configured on Configure Maximum Calls.</div>
       <label class="gc-check"><input type="checkbox" name="enable_max_calls_level1" value="1" {% if config.get('enable_max_calls_level1','1') != '0' %}checked{% endif %}> Limit 1A+1B per surgeon</label>
       <div class="gc-inline" style="margin-left: 22px;">
         <label for="max_calls_level1">Max 1A+1B calls:</label>
