@@ -1350,7 +1350,14 @@ def create_app():
             l2_union_names = sorted({s['name'] for s in surgeons_list if get_level2_group(s) in (1,2,3)})
             group4_level_names = sorted({s['name'] for s in surgeons_list if has_level(s,'4')})
             group4_l2_names = sorted({s['name'] for s in surgeons_list if get_level2_group(s) == 4})
-            s3_union_names = sorted({s['name'] for s in surgeons_list if has_level(s,'3') or s['name'] in group4_l2_names})
+            level34_names = sorted({
+                s['name'] for s in surgeons_list
+                if has_level(s, '3') and has_level(s, '4')
+            })
+            s3_union_names = sorted({
+                s['name'] for s in surgeons_list
+                if (has_level(s,'3') or s['name'] in group4_l2_names) and s['name'] not in level34_names
+            })
 
             # Per-surgeon half-year totals per fairness group
             g1_total = {}
@@ -1360,10 +1367,10 @@ def create_app():
             for nm, lc in hy_level_counts.items():
                 g1_total[nm] = int(hy_level1_days.get(nm, 0))
                 g2_total[nm] = int(lc.get('2A',0) + lc.get('2B',0))
-                # group 3: level 3 for all; plus 2B only for grp4 surgeons
                 g3_extra_2b = lc.get('2B',0) if nm in group4_l2_names else 0
                 g3_total[nm] = int(lc.get('3',0) + g3_extra_2b)
-                g4_total[nm] = int(lc.get('4',0))
+                g4_extra_3 = lc.get('3',0) if nm in level34_names else 0
+                g4_total[nm] = int(lc.get('4',0) + g4_extra_3)
 
             # Group averages (consider only cohort members)
             def avg(vals):
@@ -1387,7 +1394,7 @@ def create_app():
             add_group("G1 (1A+1B)", group1_names, lambda nm: g1_total.get(nm,0), avg_g1)
             add_group("G2 (2A+2B)", l2_union_names, lambda nm: g2_total.get(nm,0), avg_g2)
             add_group("G3 (3 + 2B if grp4)", s3_union_names, lambda nm: g3_total.get(nm,0), avg_g3)
-            add_group("G4 (4)", group4_level_names, lambda nm: g4_total.get(nm,0), avg_g4)
+            add_group("G4 (4 +3 if 3+4)", group4_level_names, lambda nm: g4_total.get(nm,0), avg_g4)
 
             import pandas as _pd
             df_hy_stats = _pd.DataFrame(rows)
@@ -1469,7 +1476,7 @@ def create_app():
                     'G1 (1A+1B)': avg_g1 if 'avg_g1' in locals() else 0.0,
                     'G2 (2A+2B)': avg_g2 if 'avg_g2' in locals() else 0.0,
                     'G3 (3 + 2B if grp4)': avg_g3 if 'avg_g3' in locals() else 0.0,
-                    'G4 (4)': avg_g4 if 'avg_g4' in locals() else 0.0,
+                    'G4 (4 +3 if 3+4)': avg_g4 if 'avg_g4' in locals() else 0.0,
                 }
                 green_fill = PatternFill(start_color='C6EFCE', end_color='C6EFCE', fill_type='solid')
                 red_fill = PatternFill(start_color='FFC7CE', end_color='FFC7CE', fill_type='solid')
@@ -1516,7 +1523,7 @@ def create_app():
                     ('G1 (1A+1B)', avg_g1 if 'avg_g1' in locals() else 0.0),
                     ('G2 (2A+2B)', avg_g2 if 'avg_g2' in locals() else 0.0),
                     ('G3 (3 + 2B if grp4)', avg_g3 if 'avg_g3' in locals() else 0.0),
-                    ('G4 (4)', avg_g4 if 'avg_g4' in locals() else 0.0),
+                    ('G4 (4 +3 if 3+4)', avg_g4 if 'avg_g4' in locals() else 0.0),
                 ]
                 to_insert = [(group_last_row[g], g, a) for g, a in groups_in_order if g in group_last_row]
                 to_insert.sort(key=lambda x: x[0], reverse=True)

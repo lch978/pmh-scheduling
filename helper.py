@@ -439,12 +439,17 @@ def get_level34_subgroup_ids(surgeons):
     }
 
 
-def g3_balance_count_for_sid(sid, counts_by_level, group4_l2_ids, level34_ids):
+def g3_balance_count_for_sid(sid, counts_by_level, group4_l2_ids):
     total = counts_by_level.get("3", 0)
     if sid in group4_l2_ids:
         total += counts_by_level.get("2B", 0)
+    return total
+
+
+def g4_balance_count_for_sid(sid, counts_by_level, level34_ids):
+    total = counts_by_level.get("4", 0)
     if sid in level34_ids:
-        total += counts_by_level.get("4", 0)
+        total += counts_by_level.get("3", 0)
     return total
 
 
@@ -513,9 +518,9 @@ def cohort_balance_count_for_sid(key, sid, counts_by_sid, level1_days_by_sid, gr
         level_counts = counts_by_sid.get(sid, {})
         return int(level_counts.get("2A", 0) + level_counts.get("2B", 0))
     if key == "g3":
-        return int(g3_balance_count_for_sid(sid, counts_by_sid.get(sid, {}), group4_l2_ids, level34_ids))
+        return int(g3_balance_count_for_sid(sid, counts_by_sid.get(sid, {}), group4_l2_ids))
     if key == "g4":
-        return int(counts_by_sid.get(sid, {}).get("4", 0))
+        return int(g4_balance_count_for_sid(sid, counts_by_sid.get(sid, {}), level34_ids))
     return 0
 
 
@@ -596,8 +601,8 @@ def build_cohort_horizon_display(year: int, month: int, schedule=None, surgeons:
                 },
             ],
         },
-        {"key": "g3", "label": "Group 3 (3 +4 if 3+4, +2B grp4)", "members": _member_rows("g3")},
-        {"key": "g4", "label": "Group 4 (4)", "members": _member_rows("g4")},
+        {"key": "g3", "label": "Group 3 (3 +2B grp4)", "members": _member_rows("g3")},
+        {"key": "g4", "label": "Group 4 (4 +3 if 3+4)", "members": _member_rows("g4")},
     ]
 
     return {
@@ -879,17 +884,16 @@ def get_g1_g4_cohorts(surgeons: list | None = None):
         [
             s
             for s in surgeons
-            if has_level(s, "3")
-            or (s.get("id") is not None and int(s["id"]) in group4_l2_ids)
+            if (
+                has_level(s, "3")
+                or (s.get("id") is not None and int(s["id"]) in group4_l2_ids)
+            )
+            and (s.get("id") is None or int(s["id"]) not in level34_ids)
         ],
         key=lambda s: (s.get("name", "") or "").lower(),
     )
     group4_members = sorted(
-        [
-            s for s in surgeons
-            if has_level(s, "4")
-            and (s.get("id") is None or int(s["id"]) not in level34_ids)
-        ],
+        [s for s in surgeons if has_level(s, "4")],
         key=lambda s: (s.get("name", "") or "").lower(),
     )
 
@@ -910,8 +914,8 @@ def get_g1_g4_cohorts(surgeons: list | None = None):
     return [
         {"key": "g1", "label": "G1 (1A+1B)", "members": normalize_members(group1_members)},
         {"key": "g2", "label": "G2 (2A+2B)", "members": normalize_members(group2_members)},
-        {"key": "g3", "label": "G3 (3 +4 if 3+4, +2B if grp4)", "members": normalize_members(group3_members)},
-        {"key": "g4", "label": "G4 (4)", "members": normalize_members(group4_members)},
+        {"key": "g3", "label": "G3 (3 +2B if grp4)", "members": normalize_members(group3_members)},
+        {"key": "g4", "label": "G4 (4 +3 if 3+4)", "members": normalize_members(group4_members)},
     ]
 
 
@@ -1240,26 +1244,32 @@ def build_half_year_cohort_summary(year: int, month: int, surgeons: list | None 
     group4_l2_ids = {int(s["id"]) for s in surgeons if s.get("id") is not None and get_level2_group(s) == 4}
     level34_ids = get_level34_subgroup_ids(surgeons)
     group3_members = sorted(
-        [s for s in surgeons if has_level(s, "3") or (s.get("id") is not None and int(s["id"]) in group4_l2_ids)],
-        key=lambda s: s.get("name", ""),
-    )
-    group4_members = sorted(
         [
             s for s in surgeons
-            if has_level(s, "4")
+            if (
+                has_level(s, "3")
+                or (s.get("id") is not None and int(s["id"]) in group4_l2_ids)
+            )
             and (s.get("id") is None or int(s["id"]) not in level34_ids)
         ],
         key=lambda s: s.get("name", ""),
     )
+    group4_members = sorted(
+        [s for s in surgeons if has_level(s, "4")],
+        key=lambda s: s.get("name", ""),
+    )
 
     def g3_count(sid):
-        return g3_balance_count_for_sid(sid, counts_by_sid.get(sid, {}), group4_l2_ids, level34_ids)
+        return g3_balance_count_for_sid(sid, counts_by_sid.get(sid, {}), group4_l2_ids)
+
+    def g4_count(sid):
+        return g4_balance_count_for_sid(sid, counts_by_sid.get(sid, {}), level34_ids)
 
     group_definitions = [
         ("g1", "G1 (1A+1B)", group1_members, lambda sid: level1_days_by_sid.get(sid, 0)),
         ("g2", "G2 (2A+2B)", group2_members, lambda sid: counts_by_sid.get(sid, {}).get("2A", 0) + counts_by_sid.get(sid, {}).get("2B", 0)),
-        ("g3", "G3 (3 +4 if 3+4, +2B if grp4)", group3_members, g3_count),
-        ("g4", "G4 (4)", group4_members, lambda sid: counts_by_sid.get(sid, {}).get("4", 0)),
+        ("g3", "G3 (3 +2B if grp4)", group3_members, g3_count),
+        ("g4", "G4 (4 +3 if 3+4)", group4_members, g4_count),
     ]
 
     groups = []

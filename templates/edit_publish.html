@@ -164,7 +164,13 @@
     <div class="ep-main">
       <div id="errors" style="color:#b00020;text-align:center;margin:8px 0;"></div>
       <div id="tableContainer"></div>
-      <div id="cohortMiniSummary" class="cohort-mini-summary"></div>
+      <div id="cohortMiniSummary" class="cohort-mini-summary">
+        <div style="font-size:13px;font-weight:600;margin-bottom:4px;">Cohort balance (this schedule)</div>
+        <div style="font-size:11px;color:#6b7280;margin-bottom:8px;">
+          Calls in the current month schedule using cohort rules (not raw per-level column totals). Hover a name for half-year horizon.
+        </div>
+        <div id="cohortMiniSummaryGrid"></div>
+      </div>
 
       <div class="ep-actions">
         <form id="fallbackSaveForm" method="post" action="{{ url_for('save_schedule_version_form') }}" style="display:none;">
@@ -267,13 +273,6 @@ document.addEventListener('DOMContentLoaded', () => {
     return arr.length % 2 === 1 ? arr[mid] : (arr[mid - 1] + arr[mid]) / 2;
   }
 
-  function priorLevelCount(level, sid) {
-    const prior = (monthData && monthData.horizon_prior_levels) || {};
-    const lvlMap = prior[level];
-    if (!lvlMap) return 0;
-    return Number(lvlMap[sid] ?? lvlMap[String(sid)] ?? 0);
-  }
-
   function nameClassForDelta(delta) {
     if (delta > 1) return 'above-hard';
     if (delta === 1) return 'above-soft';
@@ -281,78 +280,97 @@ document.addEventListener('DOMContentLoaded', () => {
     return 'at';
   }
 
-  function formatDualCount(a, b) {
-    return `<span class="cohort-mini-dual-count">${a}<span class="sep">/</span>${b}</span>`;
+  // Cached half-year prior totals from /cohort_horizon (key -> sid -> prior).
+  // This-month counts are computed live client-side so edits update instantly.
+  let cohortPriorByKey = {};
+  let cohortPriorReqId = 0;
+
+  function scheduleIdsToNames(sol) {
+    const out = {};
+    for (const [day, assigns] of Object.entries(sol || {})) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) continue;
+      if (!assigns || typeof assigns !== 'object' || Array.isArray(assigns)) continue;
+      const row = {};
+      for (const lvl of LEVELS) {
+        const sid = assigns[lvl];
+        if (sid == null || sid === '') continue;
+        const name = byId[+sid] || byId[sid];
+        if (name) row[lvl] = name;
+      }
+      out[day] = row;
+    }
+    return out;
   }
 
-    function buildGroup2MiniCard(sol, g2OnlyMembers, g2RestMembers) {
-      const month2A = {}, month2B = {};
-      [...g2OnlyMembers, ...g2RestMembers].forEach(m => { month2A[m.id] = 0; month2B[m.id] = 0; });
-
-      for (const day of Object.keys(sol)) {
-        const rowRaw = (sol[day] && typeof sol[day] === 'object' && !Array.isArray(sol[day])) ? sol[day] : {};
-        const row = {};
-        for (const lvl of LEVELS) {
-          row[lvl] = (rowRaw[lvl] == null || rowRaw[lvl] === '') ? null : Number(rowRaw[lvl]);
+  function cachePriorsFromPayload(payload) {
+    const next = {};
+    for (const card of (payload && payload.cards) || []) {
+      if (card.key === 'g2' && Array.isArray(card.sections)) {
+        next.g2 = {};
+        for (const section of card.sections) {
+          for (const m of section.members || []) {
+            next.g2[m.surgeon_id] = Number(m.prior || 0);
+          }
         }
-        [...g2OnlyMembers, ...g2RestMembers].forEach(m => {
-          if (row['2A'] === m.id) month2A[m.id] += 1;
-          if (row['2B'] === m.id) month2B[m.id] += 1;
-        });
+      } else if (card.key) {
+        next[card.key] = {};
+        for (const m of card.members || []) {
+          next[card.key][m.surgeon_id] = Number(m.prior || 0);
+        }
       }
+    }
+    cohortPriorByKey = next;
+  }
 
-      function g2HorizonParts(m) {
-        const h2a = priorLevelCount('2A', m.id) + (month2A[m.id] || 0);
-        const h2b = priorLevelCount('2B', m.id) + (month2B[m.id] || 0);
-        return { h2a, h2b, horizon: h2a + h2b };
-      }
+  async function refreshCohortPriors(sol) {
+    const { year: y, month: m } = currentYM();
+    const reqId = ++cohortPriorReqId;
+    try {
+      const res = await fetch('/cohort_horizon', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRFToken': csrfToken()
+        },
+        body: JSON.stringify({ year: y, month: m, schedule: scheduleIdsToNames(sol || {}) })
+      });
+      if (!res.ok) return;
+      const payload = await res.json();
+      if (reqId !== cohortPriorReqId) return;
+      cachePriorsFromPayload(payload);
+      // Re-render so hover tooltips pick up priors without changing this-month counts.
+      if (sol && Object.keys(sol).length) renderCohortMiniSummary(sol);
+    } catch (err) {
+      console.error(err);
+    }
+  }
 
-      const onlyTotals = g2OnlyMembers.map(m => ({ m, ...g2HorizonParts(m) }));
-      const onlyMedian = computeMedian(onlyTotals.map(t => t.horizon));
+  function priorFor(key, sid) {
+    const map = cohortPriorByKey[key] || {};
+    return Number(map[sid] ?? map[String(sid)] ?? 0);
+  }
 
-      const topRows = onlyTotals
-        .slice()
-        .sort((a, b) => String(a.m.name || '').localeCompare(String(b.m.name || '')))
-        .map(({ m, h2a, h2b, horizon }) => {
-          const cls = nameClassForDelta(horizon - onlyMedian);
-          return `<tr><td><span class="cohort-mini-name ${cls}">${escapeHtml(m.name || '(unnamed)')}</span></td><td style="text-align:right;">${formatDualCount(h2a, h2b)}</td></tr>`;
-        }).join('');
-
-      const med2a = computeMedian(onlyTotals.map(t => t.h2a));
-      const med2b = computeMedian(onlyTotals.map(t => t.h2b));
-
-      const restTotals = g2RestMembers.map(m => ({ m, ...g2HorizonParts(m) }));
-      const restMedian = computeMedian(restTotals.map(t => t.horizon));
-
-      const bottomRows = restTotals
-        .slice()
-        .sort((a, b) => String(a.m.name || '').localeCompare(String(b.m.name || '')))
-        .map(({ m, horizon }) => {
-          const cls = nameClassForDelta(horizon - restMedian);
-          return `<tr><td><span class="cohort-mini-name ${cls}">${escapeHtml(m.name || '(unnamed)')}</span></td><td style="text-align:right;font-weight:600;">${horizon}</td></tr>`;
-        }).join('');
-
-      const sep = '<tr class="cohort-mini-section-sep"><td colspan="2">2A + 2B supervisors</td></tr>';
-      const topMedianRow = onlyTotals.length
-        ? `<tr class="cohort-mini-median"><td>Median (2A+2B)</td><td style="text-align:right;">${formatDualCount(
-            Number.isInteger(med2a) ? med2a : med2a.toFixed(1),
-            Number.isInteger(med2b) ? med2b : med2b.toFixed(1)
-          )}</td></tr>`
-        : '';
-      const bottomMedianRow = restTotals.length
-        ? `<tr class="cohort-mini-median"><td>Median (2A+2B)</td><td style="text-align:right;">${Number.isInteger(restMedian) ? restMedian : restMedian.toFixed(1)}</td></tr>`
-        : '';
-
+  function renderMonthCard(label, members) {
+    const vals = (members || []).map(m => Number(m.this_month || 0));
+    const median = computeMedian(vals);
+    const rows = (members || [])
+      .slice()
+      .sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')))
+      .map((m) => {
+        const thisMonth = Number(m.this_month || 0);
+        const prior = Number(m.prior || 0);
+        const horizon = prior + thisMonth;
+        const cls = nameClassForDelta(thisMonth - median);
+        const title = `This month: ${thisMonth}. Half-year horizon: ${horizon} (prior ${prior} + this month ${thisMonth})`;
+        return `<tr title="${escapeHtml(title)}"><td><span class="cohort-mini-name ${cls}">${escapeHtml(m.name || '')}</span></td><td style="text-align:right;font-weight:600;">${thisMonth}</td></tr>`;
+      }).join('');
     return `
       <div class="cohort-mini-card">
-        <h4>Group 2 (2A+2B)</h4>
+        <h4>${escapeHtml(label)}</h4>
         <table class="cohort-mini-table">
           <tbody>
-            ${topRows || '<tr><td colspan="2" style="text-align:center;color:#6b7280;">No 2A-only surgeons</td></tr>'}
-            ${topMedianRow}
-            ${sep}
-            ${bottomRows || '<tr><td colspan="2" style="text-align:center;color:#6b7280;">No surgeons</td></tr>'}
-            ${bottomMedianRow}
+            ${rows || '<tr><td colspan="2" style="text-align:center;color:#6b7280;">No surgeons</td></tr>'}
+            <tr class="cohort-mini-median"><td>Median (this month)</td><td style="text-align:right;">${Number.isInteger(median) ? median : median.toFixed(1)}</td></tr>
           </tbody>
         </table>
       </div>`;
@@ -381,7 +399,8 @@ document.addEventListener('DOMContentLoaded', () => {
   function resetView() {
     renderVersions();
     container.innerHTML = '';
-    const host = document.getElementById('cohortMiniSummary');
+    cohortPriorByKey = {};
+    const host = document.getElementById('cohortMiniSummaryGrid');
     if (host) host.innerHTML = '<div style="font-size:12px;color:#6b7280;">Load a schedule version to see cohort call counts.</div>';
     errBox.textContent = '';
     hideViolations();
@@ -543,6 +562,7 @@ document.addEventListener('DOMContentLoaded', () => {
       scheduleLoaded = true;
       renderTable();
       validateSchedule();
+      refreshCohortPriors(currentSchedule);
     } catch (e) {
       errBox.textContent = e.message || 'Failed to load schedule';
     }
@@ -638,82 +658,101 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function renderCohortMiniSummary(sol) {
-    const host = document.getElementById('cohortMiniSummary');
+    const host = document.getElementById('cohortMiniSummaryGrid');
     if (!host) return;
     if (!monthData || !Array.isArray(monthData.all_surgeons) || monthData.all_surgeons.length === 0) {
       host.innerHTML = '<div style="font-size:12px;color:#6b7280;">Load a schedule version to see cohort call counts.</div>';
       return;
     }
     if (!sol || typeof sol !== 'object' || Array.isArray(sol) || Object.keys(sol).length === 0) {
-      host.innerHTML = '<div style="font-size:12px;color:#6b7280;">No schedule loaded.</div>';
+      host.innerHTML = '<div style="font-size:12px;color:#6b7280;">Load a schedule version to see cohort call counts.</div>';
       return;
     }
+
     const hasLevel = (surgeon, lvl) => parseLevels(surgeon.call_levels).includes(lvl);
     const nonNlth = monthData.all_surgeons.filter(s => !s.nlth);
-    const group1Ids = new Set(nonNlth.filter(s => getLevel2Group(s) === 1).map(s => s.id));
-    const group2Ids = new Set(nonNlth.filter(s => getLevel2Group(s) === 2).map(s => s.id));
-    const group3Ids = new Set(nonNlth.filter(s => getLevel2Group(s) === 3).map(s => s.id));
     const group4Ids = new Set(nonNlth.filter(s => getLevel2Group(s) === 4).map(s => s.id));
     const level34Ids = new Set(nonNlth.filter(s => hasLevel(s, '3') && hasLevel(s, '4')).map(s => s.id));
-    const g2OnlyMembers = nonNlth.filter(s => group1Ids.has(s.id));
-    const g2RestMembers = nonNlth.filter(s => group2Ids.has(s.id) || group3Ids.has(s.id));
 
-    const cohorts = [
-      {
-        label: 'Group 1 (1A+1B)',
-        members: nonNlth.filter(s => hasLevel(s, '1A') || hasLevel(s, '1B')),
-        countFn: (row, sid) => ((row['1A'] === sid || row['1B'] === sid) ? 1 : 0),
-      },
-      {
-        label: 'Group 3 (3 +4 if 3+4, +2B grp4)',
-        members: nonNlth.filter(s => hasLevel(s, '3') || group4Ids.has(s.id)),
-        countFn: (row, sid) => ((row['3'] === sid) ? 1 : 0) + ((group4Ids.has(sid) && row['2B'] === sid) ? 1 : 0) + ((level34Ids.has(sid) && row['4'] === sid) ? 1 : 0),
-      },
-      {
-        label: 'Group 4 (4)',
-        members: nonNlth.filter(s => hasLevel(s, '4') && !level34Ids.has(s.id)),
-        countFn: (row, sid) => ((row['4'] === sid) ? 1 : 0),
-      },
-    ];
-
-    const cardEls = cohorts.map((cohort) => {
-      const monthCounts = {};
-      cohort.members.forEach(m => { monthCounts[m.id] = 0; });
-      for (const day of Object.keys(sol)) {
-        const rowRaw = (sol[day] && typeof sol[day] === 'object' && !Array.isArray(sol[day])) ? sol[day] : {};
-        const row = {};
-        for (const lvl of LEVELS) {
-          row[lvl] = (rowRaw[lvl] == null || rowRaw[lvl] === '') ? null : Number(rowRaw[lvl]);
-        }
-        cohort.members.forEach(m => { monthCounts[m.id] += cohort.countFn(row, m.id); });
-      }
-      const vals = cohort.members.map(m => monthCounts[m.id] || 0);
-      const median = computeMedian(vals);
-      const rows = cohort.members.slice().sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''))).map((m) => {
-        const v = monthCounts[m.id] || 0;
-        const cls = nameClassForDelta(v - median);
-        return `<tr><td><span class="cohort-mini-name ${cls}">${escapeHtml(m.name || '(unnamed)')}</span></td><td style="text-align:right;font-weight:600;">${v}</td></tr>`;
-      }).join('');
-      return `
-        <div class="cohort-mini-card">
-          <h4>${escapeHtml(cohort.label)}</h4>
-          <table class="cohort-mini-table">
-            <tbody>
-              ${rows || '<tr><td colspan="2" style="text-align:center;color:#6b7280;">No surgeons</td></tr>'}
-              <tr class="cohort-mini-median"><td>Median</td><td style="text-align:right;">${Number.isInteger(median) ? median : median.toFixed(1)}</td></tr>
-            </tbody>
-          </table>
-        </div>`;
+    // Raw per-level counts + G1 once-per-day (matches server accumulate_name_schedule_counts).
+    const levelCounts = {};
+    const level1Days = {};
+    nonNlth.forEach(s => {
+      levelCounts[s.id] = { '1A': 0, '1B': 0, '2A': 0, '2B': 0, '3': 0, '4': 0 };
+      level1Days[s.id] = 0;
     });
+    for (const day of Object.keys(sol)) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) continue;
+      const rowRaw = (sol[day] && typeof sol[day] === 'object' && !Array.isArray(sol[day])) ? sol[day] : {};
+      const row = {};
+      for (const lvl of LEVELS) {
+        const v = rowRaw[lvl];
+        row[lvl] = (v == null || v === '') ? null : Number(v);
+      }
+      for (const lvl of ['1A', '1B', '2A', '2B', '3', '4']) {
+        const sid = row[lvl];
+        if (sid != null && levelCounts[sid]) levelCounts[sid][lvl] += 1;
+      }
+      const lvl1Today = new Set();
+      for (const lvl of ['1A', '1B']) {
+        const sid = row[lvl];
+        if (sid != null && level1Days[sid] != null) lvl1Today.add(sid);
+      }
+      lvl1Today.forEach(sid => { level1Days[sid] += 1; });
+    }
 
-    const orderedHtml = [
-      cardEls[0],
-      buildGroup2MiniCard(sol, g2OnlyMembers, g2RestMembers),
-      cardEls[1],
-      cardEls[2],
+    function memberRow(key, s, thisMonth) {
+      const prior = priorFor(key, s.id);
+      return { surgeon_id: s.id, name: s.name, prior, this_month: thisMonth, horizon: prior + thisMonth };
+    }
+
+    const g1Members = nonNlth
+      .filter(s => hasLevel(s, '1A') || hasLevel(s, '1B'))
+      .map(s => memberRow('g1', s, level1Days[s.id] || 0));
+
+    const g2Supervised = nonNlth
+      .filter(s => getLevel2Group(s) === 1)
+      .map(s => {
+        const lc = levelCounts[s.id] || {};
+        return memberRow('g2', s, (lc['2A'] || 0) + (lc['2B'] || 0));
+      });
+    const g2Supervisors = nonNlth
+      .filter(s => {
+        const g = getLevel2Group(s);
+        return g === 2 || g === 3;
+      })
+      .map(s => {
+        const lc = levelCounts[s.id] || {};
+        return memberRow('g2', s, (lc['2A'] || 0) + (lc['2B'] || 0));
+      });
+
+    const g3Members = nonNlth
+      .filter(s => (hasLevel(s, '3') || group4Ids.has(s.id)) && !level34Ids.has(s.id))
+      .map(s => {
+        const lc = levelCounts[s.id] || {};
+        let total = lc['3'] || 0;
+        if (group4Ids.has(s.id)) total += lc['2B'] || 0;
+        return memberRow('g3', s, total);
+      });
+
+    const g4Members = nonNlth
+      .filter(s => hasLevel(s, '4'))
+      .map(s => {
+        const lc = levelCounts[s.id] || {};
+        let total = lc['4'] || 0;
+        if (level34Ids.has(s.id)) total += lc['3'] || 0;
+        return memberRow('g4', s, total);
+      });
+
+    const html = [
+      renderMonthCard('Group 1 (1A+1B)', g1Members),
+      renderMonthCard('Group 2 (2A+2B) — Supervised 2A', g2Supervised),
+      renderMonthCard('Group 2 (2A+2B) — 2A + 2B supervisors', g2Supervisors),
+      renderMonthCard('Group 3 (3 +2B grp4)', g3Members),
+      renderMonthCard('Group 4 (4 +3 if 3+4)', g4Members),
     ].join('');
 
-    host.innerHTML = `<div class="cohort-mini-grid">${orderedHtml}</div>`;
+    host.innerHTML = `<div class="cohort-mini-grid">${html}</div>`;
   }
 
   // ── Update a single block's display ──

@@ -568,21 +568,37 @@ class Level34SubgroupTests(unittest.TestCase):
         ids = helper.get_level34_subgroup_ids(surgeons)
         self.assertEqual(ids, {1, 4})
 
-    def test_g3_balance_count_includes_level4_for_dual(self):
+    def test_g3_balance_count_excludes_level4_for_dual(self):
         group4_l2_ids = {4}
         level34_ids = {1, 4}
         counts = {"3": 2, "4": 3, "2B": 1}
         self.assertEqual(
-            helper.g3_balance_count_for_sid(1, counts, group4_l2_ids, level34_ids),
-            5,
-        )
-        self.assertEqual(
-            helper.g3_balance_count_for_sid(2, {"3": 2}, group4_l2_ids, level34_ids),
+            helper.g3_balance_count_for_sid(1, counts, group4_l2_ids),
             2,
         )
         self.assertEqual(
-            helper.g3_balance_count_for_sid(4, counts, group4_l2_ids, level34_ids),
-            6,
+            helper.g3_balance_count_for_sid(2, {"3": 2}, group4_l2_ids),
+            2,
+        )
+        self.assertEqual(
+            helper.g3_balance_count_for_sid(4, counts, group4_l2_ids),
+            3,
+        )
+
+    def test_g4_balance_count_includes_level3_for_dual(self):
+        level34_ids = {1, 4}
+        counts = {"3": 2, "4": 3, "2B": 1}
+        self.assertEqual(
+            helper.g4_balance_count_for_sid(1, counts, level34_ids),
+            5,
+        )
+        self.assertEqual(
+            helper.g4_balance_count_for_sid(2, {"4": 2}, level34_ids),
+            2,
+        )
+        self.assertEqual(
+            helper.g4_balance_count_for_sid(4, counts, level34_ids),
+            5,
         )
 
     def test_level34_max_caps_enforced(self):
@@ -614,17 +630,20 @@ class Level34SubgroupTests(unittest.TestCase):
         self.assertIsInstance(sched, dict)
         self.assertIn("errors", sched)
 
-    def test_g4_cohort_excludes_level34_dual(self):
+    def test_g4_cohort_includes_level34_dual(self):
         surgeons = [
             {"id": 1, "name": "Dual", "call_levels": "3,4"},
             {"id": 2, "name": "Pure4", "call_levels": "4"},
         ]
         cohorts = helper.get_g1_g4_cohorts(surgeons=surgeons)
+        g3 = next(c for c in cohorts if c["key"] == "g3")
+        g3_names = {m["name"] for m in g3["members"]}
+        self.assertEqual(g3_names, set())
         g4 = next(c for c in cohorts if c["key"] == "g4")
         names = {m["name"] for m in g4["members"]}
-        self.assertEqual(names, {"Pure4"})
+        self.assertEqual(names, {"Dual", "Pure4"})
 
-    def test_level34_excluded_from_g4_fairness(self):
+    def test_level34_included_in_g4_fairness(self):
         days = ["2026-06-01", "2026-06-02", "2026-06-03", "2026-06-04"]
         surgeons = [
             {"id": 1, "name": "Dual", "call_levels": "3,4", "nlth": False, "team": "Team 1"},
@@ -663,7 +682,7 @@ class Level34SubgroupTests(unittest.TestCase):
             f"Expected G4 fairness violation, got: {errors_text}",
         )
 
-    def test_cohort_summary_g3_includes_level4_for_dual(self):
+    def test_cohort_summary_g4_includes_level3_for_dual(self):
         surgeons = [
             {"id": 1, "name": "Dual", "call_levels": "3,4", "nlth": False, "team": "Team 1"},
             {"id": 2, "name": "Pure3", "call_levels": "3", "nlth": False, "team": "Team 2"},
@@ -684,12 +703,13 @@ class Level34SubgroupTests(unittest.TestCase):
 
         g3 = next(g for g in summary["groups"] if g["key"] == "g3")
         by_name = {m["name"]: m for m in g3["members"]}
-        self.assertEqual(by_name["Dual"]["count"], 2)
+        self.assertNotIn("Dual", by_name)
         self.assertEqual(by_name["Pure3"]["count"], 1)
 
         g4 = next(g for g in summary["groups"] if g["key"] == "g4")
-        g4_names = {m["name"] for m in g4["members"]}
-        self.assertEqual(g4_names, {"Pure4"})
+        g4_by_name = {m["name"]: m for m in g4["members"]}
+        self.assertEqual(g4_by_name["Dual"]["count"], 2)
+        self.assertEqual(g4_by_name["Pure4"]["count"], 1)
 
     def test_cohort_horizon_display_combines_prior_and_schedule(self):
         surgeons = [
@@ -720,7 +740,11 @@ class Level34SubgroupTests(unittest.TestCase):
         self.assertEqual(g1_by_name["G1"]["horizon"], 2)
 
         g3 = next(c for c in display["cards"] if c["key"] == "g3")
-        dual = next(m for m in g3["members"] if m["name"] == "Dual")
+        g3_names = {m["name"] for m in g3["members"]}
+        self.assertNotIn("Dual", g3_names)
+
+        g4 = next(c for c in display["cards"] if c["key"] == "g4")
+        dual = next(m for m in g4["members"] if m["name"] == "Dual")
         self.assertEqual(dual["prior"], 2)
         self.assertEqual(dual["month"], 2)
         self.assertEqual(dual["horizon"], 4)
