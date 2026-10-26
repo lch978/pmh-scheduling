@@ -133,7 +133,7 @@ Status vocabulary: **Proposed**, **Approved**, **In progress**, **Blocked: decis
 
 | Record | Status / progress | Branch / PR | Actual verification | Outstanding / next action |
 | --- | --- | --- | --- | --- |
-| PLAN-00: roadmap | Awaiting client approval; D01/D02 recorded; independent Architecture and QA document reviews completed | `codex/upgrade-roadmap`; PR pending preparation | `git diff --check` and direct new-file whitespace checks passed; all 28 inventory IDs verified. No application tests rerun for this documentation-only change. | Prepare documentation PR and request D03. |
+| PLAN-00: roadmap | Awaiting client approval; D01/D02 recorded; independent Architecture and QA document reviews completed | `codex/upgrade-roadmap`; [draft PR #2](https://github.com/lch978/pmh-scheduling/pull/2) | `git diff --check` and direct new-file whitespace checks passed; all 28 inventory IDs verified. No application tests rerun for this documentation-only change. | Await D03; keep the PR unmerged and substantial application implementation on hold. |
 | U01-U28 | Proposed; no application implementation started | No implementation branches or PRs yet | No implementation verification yet. Audit evidence below is the starting point, not proof of a fix. | On D03, create one execution row per active item with its owner, branch/PR, exact commands/results, review findings, blockers and next action. |
 
 Prior audit evidence (executed in that audit, **not rerun for this planning change**):
